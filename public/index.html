@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PropCall AI</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="app-layout">
+
+  <!-- HEADER -->
+  <header class="app-header">
+    <div class="logo">
+      <div class="logo-icon">📞</div>
+      <div class="logo-text">Prop<span>Call</span> AI</div>
+    </div>
+    <div class="header-center">
+      <div class="call-timer" id="callTimer">00:00</div>
+      <div class="call-status">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Hazır</span>
+      </div>
+    </div>
+    <div class="header-actions">
+      <button class="btn-secondary" id="btnToggleApts">📅 Randevular</button>
+    </div>
+  </header>
+
+  <!-- LEFT PANEL -->
+  <aside class="left-panel">
+    <div class="panel-section">
+      <div class="section-title">Müşteri Bilgileri</div>
+      <div class="form-group">
+        <label>Ad Soyad</label>
+        <input type="text" id="customerName" placeholder="Ahmet Yılmaz" />
+      </div>
+      <div class="form-group">
+        <label>Telefon <span class="label-hint">uluslararası</span></label>
+        <input type="text" id="customerPhone" placeholder="+905321234567" />
+      </div>
+      <div class="form-group">
+        <label>Bölge <span class="label-hint">opsiyonel</span></label>
+        <input type="text" id="customerRegion" placeholder="Kadıköy, İstanbul" />
+      </div>
+      <div class="form-group">
+        <label>Notlar <span class="label-hint">opsiyonel</span></label>
+        <textarea id="customerNotes" placeholder="Referans, önceki görüşme..."></textarea>
+      </div>
+    </div>
+    <div class="panel-section">
+      <div class="info-box">
+        <div class="info-box-title">🤖 Asistan Akışı</div>
+        <ul class="info-list">
+          <li>Kendini tanıtır, vakit sorar</li>
+          <li>Gayrimenkul niyetini keşfeder</li>
+          <li>Bölge · Bütçe · Zaman alır</li>
+          <li>Çevredeki potansiyeli sorar</li>
+          <li>Max 3-4 dakika · Özet otomatik</li>
+        </ul>
+      </div>
+    </div>
+    <div class="panel-section">
+      <button class="btn-start" id="btnStartCall">📞 Aramayı Başlat</button>
+      <button class="btn-end" id="btnEndCall">⏹ Aramayı Sonlandır</button>
+    </div>
+  </aside>
+
+  <!-- RIGHT PANEL -->
+  <main class="right-panel">
+
+    <!-- Tab Bar -->
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="live">
+        <span class="live-dot" id="liveDotBtn"></span>Canlı Görüşme
+      </button>
+      <button class="tab-btn" data-tab="history">Geçmiş Aramalar</button>
+      <button class="tab-btn" data-tab="stats">İstatistikler</button>
+    </div>
+
+    <!-- ── TAB 1: CANLI ──────────────────────────────────── -->
+    <div class="tab-content active" id="tabLive">
+
+      <!-- Arama bilgi çubuğu -->
+      <div class="live-call-bar" id="liveCallBar" style="display:none">
+        <div class="live-bar-left">
+          <div class="call-pulse" id="callPulse"></div>
+          <div>
+            <div class="live-name" id="liveName">—</div>
+            <div class="live-phone" id="livePhone">—</div>
+          </div>
+        </div>
+        <div class="live-bar-mid">
+          <span class="status-badge" id="callStatusBadge">Çalıyor</span>
+        </div>
+        <div class="live-bar-right">
+          <div class="cost-chip" id="costVapi">Vapi<br/><b>$0.0000</b></div>
+          <div class="cost-chip" id="costLLM">LLM<br/><b>$0.0000</b></div>
+          <div class="cost-chip" id="costTTS">TTS<br/><b>$0.0000</b></div>
+          <div class="cost-chip" id="costSTT">STT<br/><b>$0.0000</b></div>
+          <div class="cost-chip total" id="costTotal">Toplam<br/><b>$0.0000</b></div>
+        </div>
+      </div>
+
+      <!-- Transcript -->
+      <div class="transcript-area" id="transcriptArea">
+        <div class="welcome-screen" id="welcomeScreen">
+          <div class="welcome-icon">🏠</div>
+          <h2>Gayrimenkul Araştırma Asistanı</h2>
+          <p>Müşteri bilgilerini doldurun ve "Aramayı Başlat"a basın.<br/>
+             Vapi gerçek telefon araması yapar · transcript burada canlı akar.</p>
+          <div class="welcome-badges">
+            <span class="badge">🤖 Vapi AI Araması</span>
+            <span class="badge">📝 Canlı Transcript</span>
+            <span class="badge">📊 Niyet Analizi</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ── TAB 2: GEÇMİŞ ─────────────────────────────────── -->
+    <div class="tab-content" id="tabHistory">
+
+      <div class="filter-bar">
+        <div class="filter-group">
+          <label>Başlangıç</label>
+          <input type="date" id="filterDateFrom" />
+        </div>
+        <div class="filter-group">
+          <label>Bitiş</label>
+          <input type="date" id="filterDateTo" />
+        </div>
+        <div class="filter-group">
+          <label>Sıcaklık</label>
+          <div class="range-row">
+            <input type="number" id="filterMinScore" placeholder="0"   min="0" max="100" />
+            <span>—</span>
+            <input type="number" id="filterMaxScore" placeholder="100" min="0" max="100" />
+          </div>
+        </div>
+        <div class="filter-group">
+          <label>Niyet</label>
+          <select id="filterNiyet">
+            <option value="">Tümü</option>
+            <option value="alım">Alım</option>
+            <option value="satım">Satım</option>
+            <option value="kiralama">Kiralama</option>
+            <option value="yatırım">Yatırım</option>
+            <option value="yok">Yok</option>
+            <option value="belirsiz">Belirsiz</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label>Aksiyon</label>
+          <select id="filterAksiyon">
+            <option value="">Tümü</option>
+            <option value="Ara">Ara</option>
+            <option value="Bekleme listesine al">Beklemede</option>
+            <option value="Çevre takibi">Çevre</option>
+            <option value="Uğraşma">Uğraşma</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label>Durum</label>
+          <select id="filterStatus">
+            <option value="">Tümü</option>
+            <option value="completed">Tamamlandı</option>
+            <option value="no-answer">Cevapsız</option>
+            <option value="busy">Meşgul</option>
+            <option value="failed">Başarısız</option>
+          </select>
+        </div>
+        <div class="filter-actions">
+          <button class="btn-filter" id="btnApplyFilter">Filtrele</button>
+          <button class="btn-filter-clear" id="btnClearFilter">✕</button>
+          <button class="btn-export" id="btnExport">⬇ CSV</button>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table class="calls-table">
+          <thead>
+            <tr>
+              <th>Tarih/Saat</th>
+              <th>Müşteri</th>
+              <th>Telefon</th>
+              <th>Süre</th>
+              <th>Sıcaklık</th>
+              <th>Niyet</th>
+              <th>Bölge</th>
+              <th>Bütçe</th>
+              <th>Aksiyon</th>
+              <th>Maliyet</th>
+              <th>Durum</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="callsTableBody">
+            <tr><td colspan="12" class="table-empty">Yükleniyor...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+
+    <!-- ── TAB 3: İSTATİSTİKLER ─────────────────────────── -->
+    <div class="tab-content" id="tabStats">
+      <div class="stats-scroll">
+
+        <div class="stat-cards">
+          <div class="stat-card">
+            <div class="stat-label">Toplam Arama</div>
+            <div class="stat-value" id="statTotal">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Ort. Süre</div>
+            <div class="stat-value" id="statAvgDur">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Ort. Sıcaklık</div>
+            <div class="stat-value" id="statAvgHeat">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Toplam Maliyet</div>
+            <div class="stat-value" id="statCost">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Dönüşüm (≥60)</div>
+            <div class="stat-value" id="statConv">—</div>
+          </div>
+        </div>
+
+        <div class="charts-grid">
+          <div class="chart-card span2">
+            <div class="chart-title">Günlük Arama Sayısı — Son 30 Gün</div>
+            <canvas id="chartDailyCalls"></canvas>
+          </div>
+          <div class="chart-card span2">
+            <div class="chart-title">Maliyet Trendi — Son 30 Gün ($)</div>
+            <canvas id="chartCostTrend"></canvas>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Sıcaklık Dağılımı</div>
+            <canvas id="chartHeatDist"></canvas>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Niyet Dağılımı</div>
+            <canvas id="chartIntentDist"></canvas>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- DRAWER OVERLAY -->
+<div class="drawer-overlay" id="drawerOverlay"></div>
+
+<!-- CALL DETAIL DRAWER -->
+<div class="drawer" id="callDrawer">
+  <div class="drawer-header">
+    <div>
+      <div class="drawer-title" id="drawerTitle">Arama Detayı</div>
+      <div class="drawer-sub"  id="drawerSub"></div>
+    </div>
+    <button class="drawer-close" id="drawerClose">✕</button>
+  </div>
+  <div class="drawer-body" id="drawerBody"></div>
+</div>
+
+<!-- RANDEVU PANELİ -->
+<div class="appointments-panel" id="appointmentsPanel">
+  <div class="apt-panel-header">
+    <div class="apt-panel-title">📅 Randevular</div>
+    <button class="btn-close-apt" id="btnCloseApts">✕</button>
+  </div>
+  <div class="apt-list" id="aptList"><div class="apt-empty">Henüz randevu yok</div></div>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
