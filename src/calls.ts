@@ -10,6 +10,8 @@ import {
 const CALLS_DIR = path.join(__dirname, '..', 'data', 'calls');
 const OLD_FILE  = path.join(__dirname, '..', 'data', 'calls.json');
 
+let _migrated = false;
+
 function ensureDir(): void {
   if (!fs.existsSync(CALLS_DIR)) fs.mkdirSync(CALLS_DIR, { recursive: true });
 }
@@ -32,6 +34,8 @@ function writeCall(record: CallRecord): void {
 
 // Eski calls.json'u bireysel dosyalara taşı
 function migrateOldCalls(): void {
+  if (_migrated) return;
+  _migrated = true;
   if (!fs.existsSync(OLD_FILE)) return;
   try {
     const old = JSON.parse(fs.readFileSync(OLD_FILE, 'utf-8')) as Record<string, unknown>[];
@@ -94,8 +98,14 @@ export function getAllCalls(filters?: CallFilters): CallRecord[] {
   }).filter(Boolean) as CallRecord[];
 
   if (filters) {
-    if (filters.dateFrom)    calls = calls.filter(c => c.startTime >= filters.dateFrom!);
-    if (filters.dateTo)      calls = calls.filter(c => c.startTime <= filters.dateTo! + 'T23:59:59');
+    if (filters.dateFrom) {
+      const from = new Date(filters.dateFrom + 'T00:00:00').getTime();
+      calls = calls.filter(c => c.startTime && new Date(c.startTime).getTime() >= from);
+    }
+    if (filters.dateTo) {
+      const to = new Date(filters.dateTo + 'T23:59:59').getTime();
+      calls = calls.filter(c => c.startTime && new Date(c.startTime).getTime() <= to);
+    }
     if (filters.minScore !== undefined)
       calls = calls.filter(c => (c.summary?.sicaklik_skoru ?? 0) >= filters.minScore!);
     if (filters.maxScore !== undefined)

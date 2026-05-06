@@ -23,22 +23,22 @@ export interface VapiCallResponse {
 }
 
 // Vapi üzerinden outbound arama başlat
-export async function createVapiCall(customer: CustomerInfo): Promise<VapiCallResponse> {
+export async function createVapiCall(customer: CustomerInfo, serverUrl?: string): Promise<VapiCallResponse> {
   const phoneNumberId = process.env.VAPI_PHONE_NUMBER_ID;
   const assistantId = process.env.VAPI_ASSISTANT_ID;
 
   if (!phoneNumberId) throw new Error('VAPI_PHONE_NUMBER_ID tanımlanmamış');
   if (!assistantId) throw new Error('VAPI_ASSISTANT_ID tanımlanmamış');
 
-  const body = {
+  const body: Record<string, unknown> = {
     phoneNumberId,
     assistantId,
     customer: {
       number: customer.phone,
       name: customer.name,
     },
-    // Müşteri bilgilerini asistan değişkenlerine geç
     assistantOverrides: {
+      ...(serverUrl ? { serverUrl } : {}),
       variableValues: {
         customerName: customer.name,
         customerRegion: customer.region || 'belirtilmemiş',
@@ -59,6 +59,15 @@ export async function createVapiCall(customer: CustomerInfo): Promise<VapiCallRe
   }
 
   return response.json() as Promise<VapiCallResponse>;
+}
+
+// Vapi'den arama detaylarını çek
+export async function fetchVapiCall(vapiCallId: string): Promise<any> {
+  const response = await fetch(`${VAPI_BASE_URL}/call/${vapiCallId}`, {
+    headers: getHeaders(),
+  });
+  if (!response.ok) return null;
+  return response.json();
 }
 
 // Aktif aramayı sonlandır

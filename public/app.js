@@ -79,7 +79,6 @@ document.addEventListener('DOMContentLoaded', () => {
   initDrawer();
   initAppointments();
   connectSSE();
-  loadHistory();
 });
 
 // ─── TABS ─────────────────────────────────────────────────────────────────────
@@ -359,18 +358,28 @@ function initFilterBar() {
   DOM.btnExport.addEventListener('click', exportCSV);
 }
 
+let _historyAbort = null;
+
 async function loadHistory() {
+  if (_historyAbort) _historyAbort.abort();
+  _historyAbort = new AbortController();
+  const signal = _historyAbort.signal;
+
   const params = buildFilterParams();
   state.currentFilters = params;
   DOM.callsTableBody.innerHTML = '<tr><td colspan="12" class="table-empty">Yükleniyor...</td></tr>';
+  DOM.btnApplyFilter.disabled = true;
   try {
     const qs   = new URLSearchParams(params).toString();
-    const resp = await fetch('/api/calls' + (qs ? '?' + qs : ''));
+    const resp = await fetch('/api/calls' + (qs ? '?' + qs : ''), { signal });
     const json = await resp.json();
     if (!json.success) throw new Error(json.error);
     renderTable(json.data);
   } catch (err) {
+    if (err.name === 'AbortError') return;
     DOM.callsTableBody.innerHTML = '<tr><td colspan="12" class="table-empty">Hata: ' + err.message + '</td></tr>';
+  } finally {
+    DOM.btnApplyFilter.disabled = false;
   }
 }
 
@@ -691,7 +700,8 @@ function buildOrUpdateChart(id, type, data, options) {
   const canvas = $(id);
   if (!canvas) return;
   if (state.charts[id]) {
-    state.charts[id].data = data;
+    state.charts[id].data.labels = data.labels;
+    state.charts[id].data.datasets = data.datasets;
     state.charts[id].update();
     return;
   }
