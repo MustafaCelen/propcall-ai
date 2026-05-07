@@ -106,13 +106,10 @@ export function getAllCalls(filters?: CallFilters): CallRecord[] {
       const to = new Date(filters.dateTo + 'T23:59:59').getTime();
       calls = calls.filter(c => c.startTime && new Date(c.startTime).getTime() <= to);
     }
-    if (filters.minScore !== undefined)
-      calls = calls.filter(c => (c.summary?.sicaklik_skoru ?? 0) >= filters.minScore!);
-    if (filters.maxScore !== undefined)
-      calls = calls.filter(c => (c.summary?.sicaklik_skoru ?? 100) <= filters.maxScore!);
-    if (filters.niyet)   calls = calls.filter(c => c.summary?.niyet === filters.niyet);
-    if (filters.aksiyon) calls = calls.filter(c => c.summary?.tavsiye_edilen_aksiyon === filters.aksiyon);
-    if (filters.status)  calls = calls.filter(c => c.status === filters.status);
+    if (filters.randevu === 'evet') calls = calls.filter(c => c.summary?.randevu_alindi === true);
+    if (filters.randevu === 'hayir') calls = calls.filter(c => c.summary?.randevu_alindi === false);
+    if (filters.ilgi)   calls = calls.filter(c => c.summary?.ilgi_seviyesi === filters.ilgi);
+    if (filters.status) calls = calls.filter(c => c.status === filters.status);
   }
 
   return calls.sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
@@ -164,72 +161,58 @@ export function saveCallSummary(vapiCallId: string, summary: CallSummary): void 
 }
 
 export function getStats(): StatsData {
-  const calls     = getAllCalls();
-  const finished  = calls.filter(c => c.status !== 'in-progress');
-  const withScore = finished.filter(c => c.summary?.sicaklik_skoru !== undefined);
+  const calls    = getAllCalls();
+  const finished = calls.filter(c => c.status !== 'in-progress');
+  const withSummary = finished.filter(c => c.summary !== undefined);
 
-  const totalCalls   = calls.length;
-  const avgDuration  = finished.length
+  const totalCalls      = calls.length;
+  const avgDuration     = finished.length
     ? Math.round(finished.reduce((s, c) => s + (c.duration || 0), 0) / finished.length) : 0;
-  const avgHeatScore = withScore.length
-    ? Math.round(withScore.reduce((s, c) => s + c.summary!.sicaklik_skoru, 0) / withScore.length) : 0;
-  const totalCost    = Math.round(calls.reduce((s, c) => s + (c.costs?.total || 0), 0) * 10000) / 10000;
-  const conversionRate = withScore.length
-    ? Math.round(withScore.filter(c => c.summary!.sicaklik_skoru >= 60).length / withScore.length * 100) : 0;
+  const totalCost       = Math.round(calls.reduce((s, c) => s + (c.costs?.total || 0), 0) * 10000) / 10000;
+  const appointmentCount = withSummary.filter(c => c.summary!.randevu_alindi === true).length;
+  const appointmentRate  = withSummary.length
+    ? Math.round(appointmentCount / withSummary.length * 100) : 0;
 
   // Günlük veriler — son 30 gün
-  const dailyCalls: Record<string, number> = {};
-  const dailyCost:  Record<string, number> = {};
+  const dailyCalls:        Record<string, number> = {};
+  const dailyAppointments: Record<string, number> = {};
+  const dailyCost:         Record<string, number> = {};
   for (let i = 29; i >= 0; i--) {
     const d = new Date(); d.setDate(d.getDate() - i);
     const k = d.toISOString().slice(0, 10);
     dailyCalls[k] = 0;
+    dailyAppointments[k] = 0;
     dailyCost[k]  = 0;
   }
   calls.forEach(c => {
     const k = c.startTime.slice(0, 10);
     if (k in dailyCalls) {
       dailyCalls[k]++;
+      if (c.summary?.randevu_alindi) dailyAppointments[k]++;
       dailyCost[k] = Math.round((dailyCost[k] + (c.costs?.total || 0)) * 10000) / 10000;
     }
   });
 
-  // Sıcaklık dağılımı
-  const heatBuckets = ['0-20', '20-40', '40-60', '60-80', '80-100'];
-  const heatDistribution = heatBuckets.map(range => {
-    const [min, max] = range.split('-').map(Number);
-    return { range, count: withScore.filter(c => c.summary!.sicaklik_skoru >= min && c.summary!.sicaklik_skoru <= max).length };
-  });
-
-  // Niyet dağılımı
-  const niyetMap: Record<string, number> = {};
-  finished.forEach(c => {
-    const n = c.summary?.niyet || 'belirsiz';
-    niyetMap[n] = (niyetMap[n] || 0) + 1;
-  });
-
   return {
-    totalCalls, avgDuration, avgHeatScore, totalCost, conversionRate,
-    dailyCalls:       Object.entries(dailyCalls).map(([date, count]) => ({ date, count })),
-    heatDistribution,
-    intentDistribution: Object.entries(niyetMap).map(([niyet, count]) => ({ niyet, count })),
-    costTrend:        Object.entries(dailyCost).map(([date, cost]) => ({ date, cost })),
+    totalCalls, avgDuration, totalCost, appointmentCount, appointmentRate,
+    dailyCalls:        Object.entries(dailyCalls).map(([date, count]) => ({ date, count })),
+    dailyAppointments: Object.entries(dailyAppointments).map(([date, count]) => ({ date, count })),
+    costTrend:         Object.entries(dailyCost).map(([date, cost]) => ({ date, cost })),
   };
 }
 
 export function exportCSV(filters?: CallFilters): string {
   const calls = getAllCalls(filters);
-  const headers = ['Tarih','Ad','Telefon','Süre','Sıcaklık','Niyet','Bölge','Bütçe','Zaman','Aksiyon','Maliyet','Durum','Notlar'];
+  const headers = ['Tarih','Ad','Telefon','Süre','Randevu','İlgi','Mülk Tipi','Ret Nedeni','Özet','Maliyet','Durum','Notlar'];
   const rows = calls.map(c => [
     new Date(c.startTime).toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' }),
     c.customerName, c.customerPhone,
     c.duration ? `${Math.floor(c.duration/60)}:${String(c.duration%60).padStart(2,'0')}` : '',
-    c.summary?.sicaklik_skoru ?? '',
-    c.summary?.niyet ?? '',
-    c.summary?.bolge ?? '',
-    c.summary?.butce ?? '',
-    c.summary?.zaman_cercevesi ?? '',
-    c.summary?.tavsiye_edilen_aksiyon ?? '',
+    c.summary?.randevu_alindi === true ? 'Evet' : c.summary?.randevu_alindi === false ? 'Hayır' : '',
+    c.summary?.ilgi_seviyesi ?? '',
+    c.summary?.mulk_tipi ?? '',
+    c.summary?.ret_nedeni ?? '',
+    c.summary?.ozet ?? '',
     c.costs?.total ?? 0,
     c.status,
     (c.notes || '').replace(/\n/g, ' '),

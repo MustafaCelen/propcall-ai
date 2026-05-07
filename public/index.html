@@ -52,11 +52,10 @@
       <div class="info-box">
         <div class="info-box-title">🤖 Asistan Akışı</div>
         <ul class="info-list">
-          <li>Kendini tanıtır, vakit sorar</li>
-          <li>Gayrimenkul niyetini keşfeder</li>
-          <li>Bölge · Bütçe · Zaman alır</li>
-          <li>Çevredeki potansiyeli sorar</li>
-          <li>Max 3-4 dakika · Özet otomatik</li>
+          <li>KW Quantum Team olarak tanıtır</li>
+          <li>Ücretsiz Gayrimenkul Röntgeni sunar</li>
+          <li>Randevu almayı hedefler</li>
+          <li>Max 2 dakika · Özet otomatik</li>
         </ul>
       </div>
     </div>
@@ -132,33 +131,21 @@
           <input type="date" id="filterDateTo" />
         </div>
         <div class="filter-group">
-          <label>Sıcaklık</label>
-          <div class="range-row">
-            <input type="number" id="filterMinScore" placeholder="0"   min="0" max="100" />
-            <span>—</span>
-            <input type="number" id="filterMaxScore" placeholder="100" min="0" max="100" />
-          </div>
-        </div>
-        <div class="filter-group">
-          <label>Niyet</label>
-          <select id="filterNiyet">
+          <label>Randevu</label>
+          <select id="filterRandevu">
             <option value="">Tümü</option>
-            <option value="alım">Alım</option>
-            <option value="satım">Satım</option>
-            <option value="kiralama">Kiralama</option>
-            <option value="yatırım">Yatırım</option>
-            <option value="yok">Yok</option>
-            <option value="belirsiz">Belirsiz</option>
+            <option value="evet">Alındı</option>
+            <option value="hayir">Reddetti</option>
           </select>
         </div>
         <div class="filter-group">
-          <label>Aksiyon</label>
-          <select id="filterAksiyon">
+          <label>İlgi Seviyesi</label>
+          <select id="filterIlgi">
             <option value="">Tümü</option>
-            <option value="Ara">Ara</option>
-            <option value="Bekleme listesine al">Beklemede</option>
-            <option value="Çevre takibi">Çevre</option>
-            <option value="Uğraşma">Uğraşma</option>
+            <option value="yüksek">Yüksek</option>
+            <option value="orta">Orta</option>
+            <option value="düşük">Düşük</option>
+            <option value="yok">Yok</option>
           </select>
         </div>
         <div class="filter-group">
@@ -186,18 +173,15 @@
               <th>Müşteri</th>
               <th>Telefon</th>
               <th>Süre</th>
-              <th>Sıcaklık</th>
-              <th>Niyet</th>
-              <th>Bölge</th>
-              <th>Bütçe</th>
-              <th>Aksiyon</th>
-              <th>Maliyet</th>
+              <th>Randevu</th>
+              <th>İlgi</th>
+              <th>Özet</th>
               <th>Durum</th>
               <th></th>
             </tr>
           </thead>
           <tbody id="callsTableBody">
-            <tr><td colspan="12" class="table-empty">Yükleniyor...</td></tr>
+            <tr><td colspan="9" class="table-empty">Yükleniyor...</td></tr>
           </tbody>
         </table>
       </div>
@@ -218,16 +202,16 @@
             <div class="stat-value" id="statAvgDur">—</div>
           </div>
           <div class="stat-card">
-            <div class="stat-label">Ort. Sıcaklık</div>
-            <div class="stat-value" id="statAvgHeat">—</div>
+            <div class="stat-label">Randevu Alınan</div>
+            <div class="stat-value" id="statAppCount">—</div>
           </div>
           <div class="stat-card">
             <div class="stat-label">Toplam Maliyet</div>
             <div class="stat-value" id="statCost">—</div>
           </div>
           <div class="stat-card">
-            <div class="stat-label">Dönüşüm (≥60)</div>
-            <div class="stat-value" id="statConv">—</div>
+            <div class="stat-label">Randevu Oranı</div>
+            <div class="stat-value" id="statAppRate">—</div>
           </div>
         </div>
 
@@ -240,13 +224,9 @@
             <div class="chart-title">Maliyet Trendi — Son 30 Gün ($)</div>
             <canvas id="chartCostTrend"></canvas>
           </div>
-          <div class="chart-card">
-            <div class="chart-title">Sıcaklık Dağılımı</div>
-            <canvas id="chartHeatDist"></canvas>
-          </div>
-          <div class="chart-card">
-            <div class="chart-title">Niyet Dağılımı</div>
-            <canvas id="chartIntentDist"></canvas>
+          <div class="chart-card span2">
+            <div class="chart-title">Randevu Dönüşüm Oranı</div>
+            <canvas id="chartAppointmentRate"></canvas>
           </div>
         </div>
 

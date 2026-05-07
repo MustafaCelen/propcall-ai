@@ -23,15 +23,11 @@ export interface VapiTranscriptEntry {
 }
 
 export interface CallSummary {
-  sicaklik_skoru: number;
-  niyet: 'alım' | 'satım' | 'kiralama' | 'yatırım' | 'yok' | 'belirsiz';
-  mulk_tipi: 'konut' | 'arsa' | 'işyeri' | 'belirsiz';
-  bolge: string | null;
-  butce: string | null;
-  zaman_cercevesi: 'acil' | '3ay' | '6ay' | 'belirsiz' | 'yok';
-  cevredeki_potansiyel: boolean;
+  randevu_alindi: boolean;
+  ret_nedeni: string | null;
+  ilgi_seviyesi: 'yüksek' | 'orta' | 'düşük' | 'yok';
+  mulk_tipi: string | null;
   ozet: string;
-  tavsiye_edilen_aksiyon: 'Ara' | 'Bekleme listesine al' | 'Çevre takibi' | 'Uğraşma';
 }
 
 export interface CallRecord {
@@ -105,22 +101,19 @@ export interface VapiWebhookPayload {
 export interface StatsData {
   totalCalls: number;
   avgDuration: number;
-  avgHeatScore: number;
   totalCost: number;
-  conversionRate: number;
+  appointmentCount: number;
+  appointmentRate: number;
   dailyCalls: Array<{ date: string; count: number }>;
-  heatDistribution: Array<{ range: string; count: number }>;
-  intentDistribution: Array<{ niyet: string; count: number }>;
+  dailyAppointments: Array<{ date: string; count: number }>;
   costTrend: Array<{ date: string; cost: number }>;
 }
 
 export interface CallFilters {
   dateFrom?: string;
   dateTo?: string;
-  minScore?: number;
-  maxScore?: number;
-  niyet?: string;
-  aksiyon?: string;
+  randevu?: string;
+  ilgi?: string;
   status?: string;
 }
 

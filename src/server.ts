@@ -238,12 +238,8 @@ async function generateSummaryForCall(vapiCallId: string): Promise<void> {
 
 app.get('/api/calls', (req: Request, res: Response) => {
   try {
-    const { dateFrom, dateTo, minScore, maxScore, niyet, aksiyon, status } = req.query as Record<string, string>;
-    const filters: CallFilters = {
-      dateFrom, dateTo, niyet, aksiyon, status,
-      minScore: minScore !== undefined ? Number(minScore) : undefined,
-      maxScore: maxScore !== undefined ? Number(maxScore) : undefined,
-    };
+    const { dateFrom, dateTo, randevu, ilgi, status } = req.query as Record<string, string>;
+    const filters: CallFilters = { dateFrom, dateTo, randevu, ilgi, status };
     return res.json({ success: true, data: getAllCalls(filters) });
   } catch (err) {
     return res.status(500).json({ success: false, error: String(err) });
@@ -298,12 +294,8 @@ app.get('/api/stats', (_req: Request, res: Response) => {
 
 app.get('/api/export', (req: Request, res: Response) => {
   try {
-    const { dateFrom, dateTo, minScore, maxScore, niyet, aksiyon, status } = req.query as Record<string, string>;
-    const filters: CallFilters = {
-      dateFrom, dateTo, niyet, aksiyon, status,
-      minScore: minScore !== undefined ? Number(minScore) : undefined,
-      maxScore: maxScore !== undefined ? Number(maxScore) : undefined,
-    };
+    const { dateFrom, dateTo, randevu, ilgi, status } = req.query as Record<string, string>;
+    const filters: CallFilters = { dateFrom, dateTo, randevu, ilgi, status };
     const csv = exportCSV(filters);
     res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="propcall-export.csv"' });
     return res.send('﻿' + csv); // BOM for Excel

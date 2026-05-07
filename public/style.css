@@ -276,6 +276,15 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 
 /* ── TAG (generic) ── */
 .tag{display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;white-space:nowrap}
+.tag.randevu-evet{background:#064e3b;color:#6ee7b7}
+.tag.randevu-hayir{background:#4c1d1d;color:#fca5a5}
+.tag.ilgi-yuksek{background:#1e3a5f;color:#93c5fd}
+.tag.ilgi-orta{background:#3b2f00;color:#fcd34d}
+.tag.ilgi-dusuk{background:#2d2d2d;color:#9ca3af}
+.tag.ilgi-yok{background:#1c1c1c;color:#6b7280}
+.pill.randevu-evet{background:#064e3b;color:#6ee7b7}
+.pill.randevu-hayir{background:#4c1d1d;color:#fca5a5}
+.ozet-cell{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--tx2)}
 .call-row{cursor:pointer}
 
 /* ── DRAWER VISIBLE OVERLAY ── */

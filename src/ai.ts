@@ -24,8 +24,8 @@ Sana verilen telefon görüşmesi transcript'ini analiz edecek ve SADECE geçerl
     messages: [
       {
         role: 'user',
-        content: `Aşağıdaki soğuk arama görüşmesini analiz et.
-Asistan, müşterinin gayrimenkul niyetini keşfetmeye çalışmıştır (satış yapmamış, bilgi toplamıştır).
+        content: `Aşağıdaki telefon görüşmesini analiz et.
+Asistan, Keller Williams Quantum Team adına ücretsiz gayrimenkul değerleme (Gayrimenkul Röntgeni) randevusu almaya çalışmıştır.
 
 Müşteri: ${customer.name} | Tel: ${customer.phone}${customer.region ? ` | Bölge: ${customer.region}` : ''}
 
@@ -34,23 +34,15 @@ ${conversationText || '(Transcript mevcut değil)'}
 
 SADECE bu JSON formatında döndür:
 {
-  "sicaklik_skoru": 0-100,
-  "niyet": "alım|satım|kiralama|yatırım|yok|belirsiz",
-  "mulk_tipi": "konut|arsa|işyeri|belirsiz",
-  "bolge": "string veya null",
-  "butce": "string veya null",
-  "zaman_cercevesi": "acil|3ay|6ay|belirsiz|yok",
-  "cevredeki_potansiyel": true|false,
-  "ozet": "2-3 cümle emlakçı için özet",
-  "tavsiye_edilen_aksiyon": "Ara|Bekleme listesine al|Çevre takibi|Uğraşma"
+  "randevu_alindi": true|false,
+  "ret_nedeni": "string veya null (reddettiyse kısa sebep)",
+  "ilgi_seviyesi": "yüksek|orta|düşük|yok",
+  "mulk_tipi": "string veya null (konut/arsa/daire vb. bahsettiyse)",
+  "ozet": "1-2 cümle özet"
 }
 
-Sıcaklık skoru kriterleri:
-- 80-100: Aktif arıyor, bütçesi ve bölgesi net
-- 60-79: İlgili ama henüz karar vermemiş
-- 40-59: Belirsiz niyet, takip değer
-- 20-39: Şu an değil ama gelecekte olabilir
-- 0-19: İlgisiz veya transcript yok`,
+randevu_alindi: Müşteri randevuyu kabul ettiyse true, reddettiyse veya ulaşılamadıysa false.
+ilgi_seviyesi: Genel olarak hizmete ilgi gösterdi mi?`,
       },
     ],
   });
