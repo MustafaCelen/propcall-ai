@@ -124,21 +124,20 @@ app.post('/webhook', (req: Request, res: Response) => {
       // Varsa mevcut transcript'i silerek artifact'tan yeniden yaz.
       if (msg.artifact?.messages?.length) {
         updateCall(vapiCallId, { transcript: [] } as any);
-        msg.artifact.messages.forEach(m => {
-          if (m.role === 'assistant' || m.role === 'user') {
-            appendTranscript(vapiCallId, {
-              role: m.role as 'assistant' | 'user',
-              text: m.message,
-              timestamp: new Date(m.time).toISOString(),
-            });
-          }
+        msg.artifact.messages.forEach((m: any) => {
+          if (m.role !== 'assistant' && m.role !== 'user') return;
+          // Vapi farklı versiyonlarda message, content veya text kullanabilir
+          const text: string = m.message || m.content || m.text || '';
+          if (!text.trim()) return;
+          appendTranscript(vapiCallId, {
+            role: m.role as 'assistant' | 'user',
+            text,
+            timestamp: new Date(m.time || m.timestamp || Date.now()).toISOString(),
+          });
         });
+        console.log(`[Webhook] ${vapiCallId} transcript artifact'tan yazıldı: ${msg.artifact.messages.filter((m:any) => m.role==='assistant'||m.role==='user').length} mesaj`);
       } else {
-        // artifact yoksa en azından mevcut (sadece user) transcript kalsın
-        const record = readCall(vapiCallId);
-        if (record && !record.transcript.length) {
-          console.warn(`[Webhook] ${vapiCallId} için transcript yok`);
-        }
+        console.warn(`[Webhook] ${vapiCallId} artifact.messages yok`);
       }
 
       updateCall(vapiCallId, {
@@ -153,12 +152,19 @@ app.post('/webhook', (req: Request, res: Response) => {
       break;
     }
 
-    case 'call-ended':
+    case 'call-ended': {
       if (!vapiCallId) break;
-      const s = endedReasonToStatus(msg.call?.endedReason);
-      updateCall(vapiCallId, { status: s, endTime: new Date().toISOString() } as any);
-      broadcast('call-ended', { vapiCallId, endedReason: msg.call?.endedReason, status: s });
+      const existing  = readCall(vapiCallId);
+      // end-of-call-report zaten 'completed' set ettiyse call-ended ile ezme
+      const alreadyDone = existing?.status && existing.status !== 'in-progress';
+      const newReason   = msg.call?.endedReason;
+      const s2 = newReason
+        ? endedReasonToStatus(newReason)
+        : alreadyDone ? existing!.status : 'failed';
+      updateCall(vapiCallId, { status: s2, endTime: new Date().toISOString() } as any);
+      broadcast('call-ended', { vapiCallId, endedReason: newReason, status: s2 });
       break;
+    }
   }
 });
 

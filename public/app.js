@@ -1364,9 +1364,13 @@ function resolveCampaignCall(vapiCallId, status, duration) {
   const cStatus = (status === 'completed') ? 'tamamlandı' :
                   (status === 'no-answer') ? 'cevapsız'   :
                   (status === 'busy')      ? 'meşgul'     : 'başarısız';
-  campaign.contacts[idx].status   = cStatus;
+  const current = campaign.contacts[idx].status;
+  // Don't downgrade a successfully completed call to başarısız
+  if (current === 'tamamlandı' && cStatus === 'başarısız') return;
+  campaign.contacts[idx].status = cStatus;
   if (duration) campaign.contacts[idx].duration = duration;
+  const shouldFill = current === 'arıyor' && cStatus !== 'arıyor';
   renderCampaignRow(idx);
   updateCampaignProgress();
-  if (campaign.running && !campaign.paused) campaignFillQueue();
+  if (shouldFill && campaign.running && !campaign.paused) campaignFillQueue();
 }
