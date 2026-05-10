@@ -165,14 +165,22 @@ textarea{resize:vertical;min-height:60px}
 
 /* ── STATS ── */
 .stats-scroll{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:20px}
-.stat-cards{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
-.stat-card{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:16px;text-align:center}
-.stat-label{font-size:11px;color:var(--txm);margin-bottom:6px}
-.stat-value{font-size:24px;font-weight:700;font-family:'JetBrains Mono',monospace;color:var(--primary)}
+.stat-cards{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}
+.stat-card{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:14px 16px;display:flex;align-items:flex-start;gap:12px;transition:border-color .2s}
+.stat-card:hover{border-color:rgba(255,255,255,.12)}
+.stat-icon{font-size:20px;line-height:1;margin-top:2px;flex-shrink:0}
+.stat-body{display:flex;flex-direction:column;gap:2px;min-width:0}
+.stat-label{font-size:10px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;color:var(--txm)}
+.stat-value{font-size:22px;font-weight:700;font-family:'JetBrains Mono',monospace;color:var(--tx);line-height:1.2}
+.stat-sub{font-size:10px;color:var(--txm);margin-top:2px}
+.stat-card-highlight .stat-value{color:var(--orange)}
+.stat-card-highlight .stat-sub{color:rgba(255,159,64,.6)}
 .charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .chart-card{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:16px}
 .chart-card.span2{grid-column:1/-1}
-.chart-title{font-size:12px;font-weight:600;color:var(--tx2);margin-bottom:12px}
+.chart-title{font-size:11px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;color:var(--txm);margin-bottom:12px}
+.chart-wrap{position:relative;height:180px}
+.chart-card.span2 .chart-wrap{height:160px}
 
 /* ── DRAWER ── */
 .drawer-overlay{position:fixed;inset:0;background:rgba(10,12,16,.6);z-index:30;display:none;backdrop-filter:blur(2px)}
@@ -370,9 +378,7 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 /* ── RANDEVU BADGE ── */
 .randevu-yes{font-size:14px}.randevu-no{font-size:14px;opacity:.5}
 
-/* ── STAT CARD HIGHLIGHT ── */
-.stat-cards{grid-template-columns:repeat(6,1fr)}
-.stat-card-highlight .stat-value{color:var(--orange)}
+/* ── STAT CARD HIGHLIGHT ── (defined above, kept for specificity) */
 
 /* ── CAMPAIGN TAB ── */
 .campaign-layout{display:flex;flex-direction:column;height:100%;overflow:hidden}
@@ -416,3 +422,20 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 .ct-miss{background:rgba(255,159,64,.12);color:var(--orange)}
 .ct-busy{background:rgba(255,208,96,.12);color:var(--yellow)}
 .ct-fail{background:rgba(255,83,112,.12);color:var(--red)}
+
+/* ── TRANSCRIPT FULL VIEW ── */
+.tr-count{font-size:11px;color:var(--txm);font-weight:400;margin-left:4px}
+.btn-copy-tr{margin-left:auto;background:transparent;border:1px solid var(--border);border-radius:var(--rs);color:var(--tx2);font-size:11px;padding:2px 8px;cursor:pointer;transition:all .2s}
+.btn-copy-tr:hover{border-color:var(--primary);color:var(--primary)}
+.tr-empty{font-size:12px;color:var(--txm);padding:12px 0;font-style:italic}
+.drawer-transcript-full{display:flex;flex-direction:column;gap:10px;margin-top:4px;max-height:420px;overflow-y:auto;padding-right:4px}
+.dtf-row{display:flex;flex-direction:column;gap:3px}
+.dtf-row.agent{align-items:flex-start}
+.dtf-row.user{align-items:flex-end}
+.dtf-who{font-size:10px;font-weight:600;color:var(--txm);padding:0 4px}
+.dtf-row.agent .dtf-who{color:var(--primary)}
+.dtf-row.user .dtf-who{color:var(--blue)}
+.dtf-bubble{max-width:85%;padding:9px 13px;border-radius:10px;font-size:13px;line-height:1.55;word-break:break-word}
+.dtf-row.agent .dtf-bubble{background:var(--s2);border:1px solid var(--border);border-bottom-left-radius:2px}
+.dtf-row.user .dtf-bubble{background:var(--blue-d);border:1px solid rgba(74,158,255,.2);border-bottom-right-radius:2px}
+.dtf-time{font-size:10px;color:var(--txm);padding:0 4px}

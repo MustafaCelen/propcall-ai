@@ -171,7 +171,10 @@ export function getStats(): StatsData {
   const totalCost    = Math.round(calls.reduce((s, c) => s + (c.costs?.total || 0), 0) * 10000) / 10000;
   const conversionRate = withScore.length
     ? Math.round(withScore.filter(c => c.summary!.sicaklik_skoru >= 60).length / withScore.length * 100) : 0;
-  const randevuCount = finished.filter(c => c.summary?.randevu_alindi === true).length;
+  const completedCalls = calls.filter(c => c.status === 'completed').length;
+  const answerRate     = totalCalls ? Math.round(completedCalls / totalCalls * 100) : 0;
+  const randevuCount   = finished.filter(c => c.summary?.randevu_alindi === true).length;
+  const randevuRate    = completedCalls ? Math.round(randevuCount / completedCalls * 100) : 0;
 
   // Günlük veriler — son 30 gün
   const dailyCalls: Record<string, number> = {};
@@ -204,12 +207,38 @@ export function getStats(): StatsData {
     niyetMap[n] = (niyetMap[n] || 0) + 1;
   });
 
+  // Aksiyon dağılımı
+  const actionMap: Record<string, number> = {};
+  finished.forEach(c => {
+    const a = c.summary?.tavsiye_edilen_aksiyon || 'Belirsiz';
+    actionMap[a] = (actionMap[a] || 0) + 1;
+  });
+
+  // Saatlik dağılım
+  const hourMap: Record<number, number> = {};
+  for (let h = 0; h < 24; h++) hourMap[h] = 0;
+  calls.forEach(c => {
+    const h = new Date(c.startTime).getHours();
+    hourMap[h] = (hourMap[h] || 0) + 1;
+  });
+
+  // Durum dağılımı
+  const statusMap: Record<string, number> = {};
+  calls.forEach(c => {
+    statusMap[c.status] = (statusMap[c.status] || 0) + 1;
+  });
+
   return {
-    totalCalls, avgDuration, avgHeatScore, totalCost, conversionRate, randevuCount,
+    totalCalls, completedCalls, answerRate,
+    avgDuration, avgHeatScore, totalCost, conversionRate,
+    randevuCount, randevuRate,
     dailyCalls:       Object.entries(dailyCalls).map(([date, count]) => ({ date, count })),
     heatDistribution,
-    intentDistribution: Object.entries(niyetMap).map(([niyet, count]) => ({ niyet, count })),
-    costTrend:        Object.entries(dailyCost).map(([date, cost]) => ({ date, cost })),
+    intentDistribution:  Object.entries(niyetMap).map(([niyet, count]) => ({ niyet, count })),
+    actionDistribution:  Object.entries(actionMap).map(([action, count]) => ({ action, count })),
+    costTrend:           Object.entries(dailyCost).map(([date, cost]) => ({ date, cost })),
+    hourlyDistribution:  Object.entries(hourMap).map(([hour, count]) => ({ hour: Number(hour), count })).sort((a, b) => a.hour - b.hour),
+    statusBreakdown:     Object.entries(statusMap).map(([status, count]) => ({ status, count })),
   };
 }
 

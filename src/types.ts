@@ -116,15 +116,21 @@ export interface VapiWebhookPayload {
 
 export interface StatsData {
   totalCalls: number;
+  completedCalls: number;
+  answerRate: number;
   avgDuration: number;
   avgHeatScore: number;
   totalCost: number;
   conversionRate: number;
   randevuCount: number;
+  randevuRate: number;
   dailyCalls: Array<{ date: string; count: number }>;
   heatDistribution: Array<{ range: string; count: number }>;
   intentDistribution: Array<{ niyet: string; count: number }>;
+  actionDistribution: Array<{ action: string; count: number }>;
   costTrend: Array<{ date: string; cost: number }>;
+  hourlyDistribution: Array<{ hour: number; count: number }>;
+  statusBreakdown: Array<{ status: string; count: number }>;
 }
 
 export interface CallFilters {

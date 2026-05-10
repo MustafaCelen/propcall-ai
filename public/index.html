@@ -238,47 +238,77 @@
 
         <div class="stat-cards">
           <div class="stat-card">
-            <div class="stat-label">Toplam Arama</div>
-            <div class="stat-value" id="statTotal">—</div>
+            <div class="stat-icon">📞</div>
+            <div class="stat-body">
+              <div class="stat-label">Toplam Arama</div>
+              <div class="stat-value" id="statTotal">—</div>
+            </div>
           </div>
           <div class="stat-card">
-            <div class="stat-label">Ort. Süre</div>
-            <div class="stat-value" id="statAvgDur">—</div>
+            <div class="stat-icon">✅</div>
+            <div class="stat-body">
+              <div class="stat-label">Cevaplanan</div>
+              <div class="stat-value" id="statCompleted">—</div>
+              <div class="stat-sub" id="statAnswerRate">— cevap oranı</div>
+            </div>
           </div>
           <div class="stat-card">
-            <div class="stat-label">Ort. Sıcaklık</div>
-            <div class="stat-value" id="statAvgHeat">—</div>
+            <div class="stat-icon">⏱</div>
+            <div class="stat-body">
+              <div class="stat-label">Ort. Süre</div>
+              <div class="stat-value" id="statAvgDur">—</div>
+            </div>
           </div>
           <div class="stat-card">
-            <div class="stat-label">Toplam Maliyet</div>
-            <div class="stat-value" id="statCost">—</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">Dönüşüm (≥60)</div>
-            <div class="stat-value" id="statConv">—</div>
+            <div class="stat-icon">🌡</div>
+            <div class="stat-body">
+              <div class="stat-label">Ort. Sıcaklık</div>
+              <div class="stat-value" id="statAvgHeat">—</div>
+              <div class="stat-sub" id="statConvSub">— dönüşüm (≥60)</div>
+            </div>
           </div>
           <div class="stat-card stat-card-highlight">
-            <div class="stat-label">Randevu Alınan</div>
-            <div class="stat-value" id="statRandevu">—</div>
+            <div class="stat-icon">📅</div>
+            <div class="stat-body">
+              <div class="stat-label">Randevu</div>
+              <div class="stat-value" id="statRandevu">—</div>
+              <div class="stat-sub" id="statRandevuRate">— randevu oranı</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">💰</div>
+            <div class="stat-body">
+              <div class="stat-label">Toplam Maliyet</div>
+              <div class="stat-value" id="statCost">—</div>
+              <div class="stat-sub" id="statCostPer">— / arama</div>
+            </div>
           </div>
         </div>
 
         <div class="charts-grid">
           <div class="chart-card span2">
             <div class="chart-title">Günlük Arama Sayısı — Son 30 Gün</div>
-            <canvas id="chartDailyCalls"></canvas>
+            <div class="chart-wrap"><canvas id="chartDailyCalls"></canvas></div>
           </div>
           <div class="chart-card span2">
             <div class="chart-title">Maliyet Trendi — Son 30 Gün ($)</div>
-            <canvas id="chartCostTrend"></canvas>
+            <div class="chart-wrap"><canvas id="chartCostTrend"></canvas></div>
           </div>
           <div class="chart-card">
             <div class="chart-title">Sıcaklık Dağılımı</div>
-            <canvas id="chartHeatDist"></canvas>
+            <div class="chart-wrap"><canvas id="chartHeatDist"></canvas></div>
           </div>
           <div class="chart-card">
             <div class="chart-title">Niyet Dağılımı</div>
-            <canvas id="chartIntentDist"></canvas>
+            <div class="chart-wrap"><canvas id="chartIntentDist"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Aksiyon Dağılımı</div>
+            <div class="chart-wrap"><canvas id="chartActionDist"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Saatlik Arama Dağılımı</div>
+            <div class="chart-wrap"><canvas id="chartHourly"></canvas></div>
           </div>
         </div>
 

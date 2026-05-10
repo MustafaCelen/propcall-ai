@@ -6,6 +6,7 @@ const state = {
   activeCallId: null,
   callStartTs:  null,
   timerInterval: null,
+  pollInterval:  null,
   charts: {},
   currentFilters: {},
   sseSource: null,
@@ -14,6 +15,7 @@ const state = {
 const campaign = {
   contacts: [],        // { name, phone, region, notes, status, vapiCallId, result }
   callMap: new Map(),  // vapiCallId → contactIndex
+  pollMap: new Map(),  // vapiCallId → intervalId
   maxConcurrent: 1,
   running: false,
   paused: false,
@@ -63,11 +65,15 @@ const DOM = {
   btnExport:        $('btnExport'),
   callsTableBody:   $('callsTableBody'),
   statTotal:        $('statTotal'),
+  statCompleted:    $('statCompleted'),
+  statAnswerRate:   $('statAnswerRate'),
   statAvgDur:       $('statAvgDur'),
   statAvgHeat:      $('statAvgHeat'),
+  statConvSub:      $('statConvSub'),
   statCost:         $('statCost'),
-  statConv:         $('statConv'),
+  statCostPer:      $('statCostPer'),
   statRandevu:      $('statRandevu'),
+  statRandevuRate:  $('statRandevuRate'),
   drawerOverlay:    $('drawerOverlay'),
   callDrawer:       $('callDrawer'),
   drawerTitle:      $('drawerTitle'),
@@ -151,17 +157,12 @@ function connectSSE() {
 
     // Campaign call ended
     if (campaign.callMap.has(vapiCallId)) {
-      const idx = campaign.callMap.get(vapiCallId);
-      const cStatus = (status === 'completed') ? 'tamamlandı' :
-                      (status === 'no-answer') ? 'cevapsız'   :
-                      (status === 'busy')      ? 'meşgul'     : 'başarısız';
-      campaign.contacts[idx].status = cStatus;
-      renderCampaignRow(idx);
-      updateCampaignProgress();
-      if (campaign.running && !campaign.paused) campaignFillQueue();
+      campaignStopPoll(vapiCallId);
+      resolveCampaignCall(vapiCallId, status);
     }
 
     if (vapiCallId !== state.activeCallId) return;
+    stopPollFallback();
     stopTimer();
     const label = statusLabel(status);
     updateStatus(label, status);
@@ -170,6 +171,7 @@ function connectSSE() {
     DOM.liveDotBtn.classList.remove('active');
     DOM.btnStartCall.disabled = false;
     DOM.btnEndCall.disabled   = true;
+    state.activeCallId = null;
     toast('Arama sona erdi: ' + (endedReason || status), 'info');
   });
 
@@ -210,7 +212,8 @@ function initCallButtons() {
 
 async function startCall() {
   const name  = DOM.customerName.value.trim();
-  const phone = DOM.customerPhone.value.trim();
+  const rawPhone = DOM.customerPhone.value.trim();
+  const phone = rawPhone && !rawPhone.startsWith('+') ? '+' + rawPhone : rawPhone;
   if (!name || !phone) {
     toast('Ad ve telefon zorunlu', 'error');
     return;
@@ -250,6 +253,7 @@ async function startCall() {
     const json = await resp.json();
     if (!json.success) throw new Error(json.error);
     state.activeCallId = json.data.callId;
+    startPollFallback(json.data.callId);
     toast('Arama başlatıldı', 'success');
   } catch (err) {
     toast('Arama başlatılamadı: ' + err.message, 'error');
@@ -263,11 +267,47 @@ async function startCall() {
 async function endCall() {
   if (!state.activeCallId) return;
   DOM.btnEndCall.disabled = true;
+  stopPollFallback();
   try {
     await fetch('/api/call/' + state.activeCallId, { method: 'DELETE' });
     toast('Arama sonlandırıldı', 'info');
   } catch (err) {
     toast('Sonlandırma hatası: ' + err.message, 'error');
+  }
+}
+
+function startPollFallback(vapiCallId) {
+  stopPollFallback();
+  state.pollInterval = setInterval(async () => {
+    if (!state.activeCallId) { stopPollFallback(); return; }
+    try {
+      const r = await fetch('/api/calls/' + vapiCallId);
+      const j = await r.json();
+      if (!j.success) return;
+      const call = j.data;
+      if (call.status !== 'in-progress') {
+        stopPollFallback();
+        // Webhook missed — recover UI
+        stopTimer();
+        const label = statusLabel(call.status);
+        updateStatus(label, call.status);
+        setBadge(label);
+        DOM.callPulse.classList.remove('active');
+        DOM.liveDotBtn.classList.remove('active');
+        DOM.btnStartCall.disabled = false;
+        DOM.btnEndCall.disabled   = true;
+        state.activeCallId = null;
+        if (call.summary) renderInlineSummary(call.summary);
+        toast('Arama tamamlandı (webhook yok — polling ile tespit edildi)', 'info');
+      }
+    } catch(e) {}
+  }, 10000);
+}
+
+function stopPollFallback() {
+  if (state.pollInterval) {
+    clearInterval(state.pollInterval);
+    state.pollInterval = null;
   }
 }
 
@@ -551,23 +591,38 @@ function renderDrawer(call) {
       '</div>';
   }
 
-  let transcriptHtml = '';
+  const recLink = call.recordingUrl
+    ? ' <a class="recording-link" href="' + call.recordingUrl + '" target="_blank">🎧 Dinle</a>'
+    : '';
+
+  let transcriptHtml;
   if (call.transcript && call.transcript.length) {
-    const recLink = call.recordingUrl
-      ? ' <a class="recording-link" href="' + call.recordingUrl + '" target="_blank">🎧 Dinle</a>'
-      : '';
+    const plainText = call.transcript
+      .map(t => (t.role === 'assistant' ? 'Asistan' : 'Müşteri') + ': ' + t.text)
+      .join('\n');
+    transcriptHtml =
+      '<div class="drawer-section">' +
+        '<div class="drawer-section-title">' +
+          '💬 Transkript <span class="tr-count">(' + call.transcript.length + ' mesaj)</span>' +
+          recLink +
+          '<button class="btn-copy-tr" data-text="' + encodeURIComponent(plainText) + '">📋 Kopyala</button>' +
+        '</div>' +
+        '<div class="drawer-transcript-full">' +
+          call.transcript.map(t => {
+            const isAgent = t.role === 'assistant';
+            return '<div class="dtf-row ' + (isAgent ? 'agent' : 'user') + '">' +
+              '<div class="dtf-who">' + (isAgent ? '🤖 Asistan' : '👤 Müşteri') + '</div>' +
+              '<div class="dtf-bubble">' + esc(t.text) + '</div>' +
+              '<div class="dtf-time">' + fmtTime(t.timestamp) + '</div>' +
+            '</div>';
+          }).join('') +
+        '</div>' +
+      '</div>';
+  } else {
     transcriptHtml =
       '<div class="drawer-section">' +
         '<div class="drawer-section-title">💬 Transkript' + recLink + '</div>' +
-        '<div class="drawer-transcript">' +
-          call.transcript.map(t =>
-            '<div class="dt-msg ' + t.role + '">' +
-              '<span class="dt-label">' + (t.role === 'assistant' ? '🤖' : '👤') + '</span>' +
-              '<div><div class="dt-text">' + esc(t.text) + '</div>' +
-              '<div class="dt-time">' + fmtTime(t.timestamp) + '</div></div>' +
-            '</div>'
-          ).join('') +
-        '</div>' +
+        '<div class="tr-empty">Transkript bulunamadı — webhook olayları alınamadı veya arama çok kısa sürdü.</div>' +
       '</div>';
   }
 
@@ -614,6 +669,15 @@ function renderDrawer(call) {
     }
   });
 
+  const copyBtn = DOM.drawerBody.querySelector('.btn-copy-tr');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', function() {
+      navigator.clipboard.writeText(decodeURIComponent(this.dataset.text))
+        .then(() => toast('Transkript kopyalandı', 'success'))
+        .catch(() => toast('Kopyalama başarısız', 'error'));
+    });
+  }
+
   const genBtn = DOM.drawerBody.querySelector('.btn-gen-summary');
   if (genBtn) {
     genBtn.addEventListener('click', async function() {
@@ -653,94 +717,119 @@ async function loadStats() {
 }
 
 function renderStats(d) {
-  DOM.statTotal.textContent   = d.totalCalls;
-  DOM.statAvgDur.textContent  = d.avgDuration ? fmtDuration(d.avgDuration) : '—';
-  DOM.statAvgHeat.textContent = d.avgHeatScore || '—';
-  DOM.statCost.textContent    = '$' + d.totalCost.toFixed(4);
-  DOM.statConv.textContent    = d.conversionRate + '%';
-  DOM.statRandevu.textContent = d.randevuCount || '0';
+  // Stat cards
+  DOM.statTotal.textContent      = d.totalCalls;
+  DOM.statCompleted.textContent  = d.completedCalls;
+  DOM.statAnswerRate.textContent = d.answerRate + '% cevap oranı';
+  DOM.statAvgDur.textContent     = d.avgDuration ? fmtDuration(d.avgDuration) : '—';
+  DOM.statAvgHeat.textContent    = d.avgHeatScore || '—';
+  DOM.statConvSub.textContent    = d.conversionRate + '% dönüşüm (≥60)';
+  DOM.statCost.textContent       = '$' + d.totalCost.toFixed(4);
+  DOM.statCostPer.textContent    = d.totalCalls
+    ? '$' + (d.totalCost / d.totalCalls).toFixed(4) + ' / arama' : '— / arama';
+  DOM.statRandevu.textContent    = d.randevuCount;
+  DOM.statRandevuRate.textContent = d.randevuRate + '% randevu oranı';
 
-  const labels30    = d.dailyCalls.map(x => x.date.slice(5));
-  const tickColor   = '#64748b';
-  const gridColor   = '#1e293b';
-  const legendColor = '#94a3b8';
-  const baseScales  = {
-    x: { ticks: { color: tickColor, maxTicksLimit: 10 }, grid: { color: gridColor } },
-    y: { ticks: { color: tickColor }, grid: { color: gridColor } },
+  const labels30      = d.dailyCalls.map(x => x.date.slice(5));
+  const tickColor     = '#4A5068';
+  const gridColor     = 'rgba(255,255,255,0.04)';
+  const legendColor   = '#8B92A9';
+  const baseScales    = {
+    x: { ticks: { color: tickColor, maxTicksLimit: 10, font: { size: 11 } }, grid: { color: gridColor } },
+    y: { ticks: { color: tickColor, font: { size: 11 } }, grid: { color: gridColor }, beginAtZero: true },
   };
-  const baseLegendLabels = { color: legendColor, font: { size: 11 } };
+  const baseLegend    = { color: legendColor, font: { size: 11 } };
+  const baseOpts      = { responsive: true, maintainAspectRatio: false, animation: { duration: 400 } };
 
   buildOrUpdateChart('chartDailyCalls', 'bar', {
     labels: labels30,
     datasets: [{
       label: 'Arama',
       data: d.dailyCalls.map(x => x.count),
-      backgroundColor: 'rgba(99,102,241,0.7)',
-      borderColor: '#6366f1',
+      backgroundColor: 'rgba(0,200,150,0.25)',
+      borderColor: '#00C896',
       borderWidth: 1,
-      borderRadius: 4,
+      borderRadius: 3,
     }],
-  }, {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: { legend: { labels: baseLegendLabels } },
-    scales: baseScales,
-  });
+  }, { ...baseOpts, plugins: { legend: { labels: baseLegend } }, scales: baseScales });
 
   buildOrUpdateChart('chartCostTrend', 'line', {
     labels: labels30,
     datasets: [{
       label: 'Maliyet ($)',
       data: d.costTrend.map(x => x.cost),
-      borderColor: '#10b981',
-      backgroundColor: 'rgba(16,185,129,0.1)',
+      borderColor: '#4A9EFF',
+      backgroundColor: 'rgba(74,158,255,0.08)',
       fill: true,
-      tension: 0.3,
+      tension: 0.35,
       pointRadius: 2,
+      pointBackgroundColor: '#4A9EFF',
     }],
-  }, {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: { legend: { labels: baseLegendLabels } },
-    scales: baseScales,
-  });
+  }, { ...baseOpts, plugins: { legend: { labels: baseLegend } }, scales: baseScales });
 
   buildOrUpdateChart('chartHeatDist', 'bar', {
     labels: d.heatDistribution.map(x => x.range),
     datasets: [{
       label: 'Müşteri',
       data: d.heatDistribution.map(x => x.count),
-      backgroundColor: ['#ef4444','#f97316','#eab308','#22c55e','#10b981'],
+      backgroundColor: ['rgba(255,83,112,0.7)','rgba(255,159,64,0.7)','rgba(255,208,96,0.7)','rgba(0,200,150,0.5)','rgba(0,200,150,0.85)'],
+      borderColor:     ['#FF5370','#FF9F40','#FFD060','#00C896','#00C896'],
+      borderWidth: 1,
       borderRadius: 4,
     }],
-  }, {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: { legend: { display: false } },
-    scales: baseScales,
-  });
+  }, { ...baseOpts, plugins: { legend: { display: false } }, scales: baseScales });
 
   buildOrUpdateChart('chartIntentDist', 'doughnut', {
     labels: d.intentDistribution.map(x => x.niyet),
     datasets: [{
       data: d.intentDistribution.map(x => x.count),
-      backgroundColor: ['#6366f1','#f59e0b','#10b981','#3b82f6','#94a3b8','#6b7280'],
+      backgroundColor: ['rgba(0,200,150,0.75)','rgba(74,158,255,0.75)','rgba(255,159,64,0.75)','rgba(180,100,255,0.75)','rgba(255,208,96,0.75)','rgba(74,80,104,0.75)'],
+      borderColor: '#12151C',
       borderWidth: 2,
-      borderColor: '#0f172a',
+      hoverOffset: 6,
+    }],
+  }, { ...baseOpts, plugins: { legend: { position: 'bottom', labels: { ...baseLegend, padding: 12, boxWidth: 12 } } } });
+
+  const actionColors = ['rgba(0,200,150,0.75)','rgba(74,158,255,0.75)','rgba(255,208,96,0.75)','rgba(255,83,112,0.75)'];
+  buildOrUpdateChart('chartActionDist', 'bar', {
+    labels: d.actionDistribution.map(x => x.action),
+    datasets: [{
+      label: 'Aksiyon',
+      data: d.actionDistribution.map(x => x.count),
+      backgroundColor: d.actionDistribution.map((_, i) => actionColors[i % actionColors.length]),
+      borderRadius: 4,
+      borderSkipped: false,
     }],
   }, {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: { legend: { position: 'bottom', labels: baseLegendLabels } },
+    ...baseOpts,
+    indexAxis: 'y',
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { ticks: { color: tickColor, font: { size: 11 } }, grid: { color: gridColor }, beginAtZero: true },
+      y: { ticks: { color: legendColor, font: { size: 11 } }, grid: { color: gridColor } },
+    },
   });
+
+  buildOrUpdateChart('chartHourly', 'bar', {
+    labels: d.hourlyDistribution.map(x => x.hour + ':00'),
+    datasets: [{
+      label: 'Arama',
+      data: d.hourlyDistribution.map(x => x.count),
+      backgroundColor: 'rgba(180,100,255,0.35)',
+      borderColor: '#b464ff',
+      borderWidth: 1,
+      borderRadius: 3,
+    }],
+  }, { ...baseOpts, plugins: { legend: { display: false } }, scales: { ...baseScales, x: { ...baseScales.x, maxTicksLimit: 12 } } });
 }
 
 function buildOrUpdateChart(id, type, data, options) {
   const canvas = $(id);
   if (!canvas) return;
   if (state.charts[id]) {
-    state.charts[id].data = data;
-    state.charts[id].update();
+    state.charts[id].data    = data;
+    state.charts[id].options = options;
+    state.charts[id].update('none');
     return;
   }
   state.charts[id] = new Chart(canvas.getContext('2d'), { type, data, options });
@@ -913,15 +1002,18 @@ function parseContacts(rows) {
     if (colNotes < 0) colNotes = -1;
   }
 
+  campaign.pollMap.forEach((id) => clearInterval(id));
   campaign.contacts = [];
   campaign.callMap  = new Map();
+  campaign.pollMap  = new Map();
   campaign.running  = false;
   campaign.paused   = false;
 
   for (let i = dataStart; i < rows.length; i++) {
     const row   = rows[i];
-    const phone = String(row[colPhone] || '').trim();
-    const name  = String(row[colName]  || '').trim() || ('Kişi ' + (i - dataStart + 1));
+    const rawPhone = String(row[colPhone] || '').trim();
+    const phone    = rawPhone && !rawPhone.startsWith('+') ? '+' + rawPhone : rawPhone;
+    const name     = String(row[colName]  || '').trim() || ('Kişi ' + (i - dataStart + 1));
     if (!phone) continue;
     campaign.contacts.push({
       name,
@@ -1031,6 +1123,10 @@ function campaignPause() {
 function campaignStop() {
   campaign.running = false;
   campaign.paused  = false;
+  // Clear all active polls
+  campaign.pollMap.forEach((id) => clearInterval(id));
+  campaign.pollMap.clear();
+  campaign.callMap.clear();
   // Mark remaining pending as stopped
   campaign.contacts.forEach(c => { if (c.status === 'bekliyor') c.status = 'başarısız'; });
   renderCampaignTable();
@@ -1228,6 +1324,7 @@ async function campaignCallContact(idx) {
     if (!json.success) throw new Error(json.error);
     c.vapiCallId = json.data.callId;
     campaign.callMap.set(c.vapiCallId, idx);
+    campaignStartPoll(c.vapiCallId, idx);
   } catch(err) {
     c.status = 'başarısız';
     renderCampaignRow(idx);
@@ -1235,4 +1332,40 @@ async function campaignCallContact(idx) {
     if (campaign.running && !campaign.paused) campaignFillQueue();
     toast(c.name + ': Arama başlatılamadı', 'error');
   }
+}
+
+function campaignStartPoll(vapiCallId, idx) {
+  const intervalId = setInterval(async () => {
+    try {
+      const r = await fetch('/api/calls/' + vapiCallId);
+      const j = await r.json();
+      if (!j.success) return;
+      const call = j.data;
+      if (call.status !== 'in-progress') {
+        campaignStopPoll(vapiCallId);
+        resolveCampaignCall(vapiCallId, call.status);
+      }
+    } catch(e) {}
+  }, 10000);
+  campaign.pollMap.set(vapiCallId, intervalId);
+}
+
+function campaignStopPoll(vapiCallId) {
+  if (campaign.pollMap.has(vapiCallId)) {
+    clearInterval(campaign.pollMap.get(vapiCallId));
+    campaign.pollMap.delete(vapiCallId);
+  }
+}
+
+function resolveCampaignCall(vapiCallId, status) {
+  if (!campaign.callMap.has(vapiCallId)) return;
+  const idx = campaign.callMap.get(vapiCallId);
+  campaign.callMap.delete(vapiCallId);
+  const cStatus = (status === 'completed') ? 'tamamlandı' :
+                  (status === 'no-answer') ? 'cevapsız'   :
+                  (status === 'busy')      ? 'meşgul'     : 'başarısız';
+  campaign.contacts[idx].status = cStatus;
+  renderCampaignRow(idx);
+  updateCampaignProgress();
+  if (campaign.running && !campaign.paused) campaignFillQueue();
 }
