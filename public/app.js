@@ -11,6 +11,14 @@ const state = {
   sseSource: null,
 };
 
+const campaign = {
+  contacts: [],        // { name, phone, region, notes, status, vapiCallId, result }
+  callMap: new Map(),  // vapiCallId → contactIndex
+  maxConcurrent: 1,
+  running: false,
+  paused: false,
+};
+
 // ─── DOM REFS ─────────────────────────────────────────────────────────────────
 
 const $ = id => document.getElementById(id);
@@ -48,6 +56,8 @@ const DOM = {
   filterNiyet:      $('filterNiyet'),
   filterAksiyon:    $('filterAksiyon'),
   filterStatus:     $('filterStatus'),
+  filterRandevu:    $('filterRandevu'),
+  filterScenario:   $('filterScenario'),
   btnApplyFilter:   $('btnApplyFilter'),
   btnClearFilter:   $('btnClearFilter'),
   btnExport:        $('btnExport'),
@@ -57,6 +67,7 @@ const DOM = {
   statAvgHeat:      $('statAvgHeat'),
   statCost:         $('statCost'),
   statConv:         $('statConv'),
+  statRandevu:      $('statRandevu'),
   drawerOverlay:    $('drawerOverlay'),
   callDrawer:       $('callDrawer'),
   drawerTitle:      $('drawerTitle'),
@@ -78,6 +89,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initFilterBar();
   initDrawer();
   initAppointments();
+  initCampaign();
+  initScenarios();
   connectSSE();
   loadHistory();
 });
@@ -93,9 +106,10 @@ function initTabs() {
 function switchTab(name) {
   DOM.tabBtns.forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   DOM.tabContents.forEach(c => {
-    const match = (name === 'live' && c.id === 'tabLive') ||
-                  (name === 'history' && c.id === 'tabHistory') ||
-                  (name === 'stats' && c.id === 'tabStats');
+    const match = (name === 'live'     && c.id === 'tabLive')     ||
+                  (name === 'history'  && c.id === 'tabHistory')  ||
+                  (name === 'stats'    && c.id === 'tabStats')    ||
+                  (name === 'campaign' && c.id === 'tabCampaign');
     c.classList.toggle('active', match);
   });
   if (name === 'history') loadHistory();
@@ -134,6 +148,19 @@ function connectSSE() {
 
   src.addEventListener('call-ended', e => {
     const { vapiCallId, status, endedReason } = JSON.parse(e.data);
+
+    // Campaign call ended
+    if (campaign.callMap.has(vapiCallId)) {
+      const idx = campaign.callMap.get(vapiCallId);
+      const cStatus = (status === 'completed') ? 'tamamlandı' :
+                      (status === 'no-answer') ? 'cevapsız'   :
+                      (status === 'busy')      ? 'meşgul'     : 'başarısız';
+      campaign.contacts[idx].status = cStatus;
+      renderCampaignRow(idx);
+      updateCampaignProgress();
+      if (campaign.running && !campaign.paused) campaignFillQueue();
+    }
+
     if (vapiCallId !== state.activeCallId) return;
     stopTimer();
     const label = statusLabel(status);
@@ -148,6 +175,15 @@ function connectSSE() {
 
   src.addEventListener('summary-ready', e => {
     const { vapiCallId, summary } = JSON.parse(e.data);
+
+    // Campaign: update contact result
+    if (campaign.callMap.has(vapiCallId)) {
+      const idx = campaign.callMap.get(vapiCallId);
+      campaign.contacts[idx].result = summary;
+      renderCampaignRow(idx);
+      updateCampaignProgress();
+    }
+
     if (vapiCallId !== state.activeCallId) return;
     renderInlineSummary(summary);
     toast('Özet hazırlandı', 'success');
@@ -197,6 +233,7 @@ async function startCall() {
   startTimer();
 
   try {
+    const scenarioId = $('scenarioSelect') ? $('scenarioSelect').value || undefined : undefined;
     const resp = await fetch('/api/call', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -207,6 +244,7 @@ async function startCall() {
           region: DOM.customerRegion.value.trim(),
           notes:  DOM.customerNotes.value.trim(),
         },
+        scenarioId,
       }),
     });
     const json = await resp.json();
@@ -353,6 +391,8 @@ function initFilterBar() {
     DOM.filterNiyet.value     = '';
     DOM.filterAksiyon.value   = '';
     DOM.filterStatus.value    = '';
+    DOM.filterRandevu.value   = '';
+    DOM.filterScenario.value  = '';
     state.currentFilters = {};
     loadHistory();
   });
@@ -362,7 +402,7 @@ function initFilterBar() {
 async function loadHistory() {
   const params = buildFilterParams();
   state.currentFilters = params;
-  DOM.callsTableBody.innerHTML = '<tr><td colspan="12" class="table-empty">Yükleniyor...</td></tr>';
+  DOM.callsTableBody.innerHTML = '<tr><td colspan="14" class="table-empty">Yükleniyor...</td></tr>';
   try {
     const qs   = new URLSearchParams(params).toString();
     const resp = await fetch('/api/calls' + (qs ? '?' + qs : ''));
@@ -370,7 +410,7 @@ async function loadHistory() {
     if (!json.success) throw new Error(json.error);
     renderTable(json.data);
   } catch (err) {
-    DOM.callsTableBody.innerHTML = '<tr><td colspan="12" class="table-empty">Hata: ' + err.message + '</td></tr>';
+    DOM.callsTableBody.innerHTML = '<tr><td colspan="14" class="table-empty">Hata: ' + err.message + '</td></tr>';
   }
 }
 
@@ -383,12 +423,14 @@ function buildFilterParams() {
   if (DOM.filterNiyet.value)     p.niyet     = DOM.filterNiyet.value;
   if (DOM.filterAksiyon.value)   p.aksiyon   = DOM.filterAksiyon.value;
   if (DOM.filterStatus.value)    p.status    = DOM.filterStatus.value;
+  if (DOM.filterRandevu.value)   p.randevu    = DOM.filterRandevu.value;
+  if (DOM.filterScenario.value)  p.scenarioId = DOM.filterScenario.value;
   return p;
 }
 
 function renderTable(calls) {
   if (!calls.length) {
-    DOM.callsTableBody.innerHTML = '<tr><td colspan="12" class="table-empty">Kayıt bulunamadı</td></tr>';
+    DOM.callsTableBody.innerHTML = '<tr><td colspan="14" class="table-empty">Kayıt bulunamadı</td></tr>';
     return;
   }
   DOM.callsTableBody.innerHTML = calls.map(c => {
@@ -406,6 +448,8 @@ function renderTable(calls) {
       '<td>' + (s && s.niyet ? '<span class="tag n-' + s.niyet + '">' + esc(s.niyet) + '</span>' : '—') + '</td>' +
       '<td>' + esc((s && s.bolge) || '—') + '</td>' +
       '<td>' + esc((s && s.butce) || '—') + '</td>' +
+      '<td>' + (c.scenarioName ? '<span class="tag sc-tag">' + esc(c.scenarioName) + '</span>' : '<span class="tag sc-default">Varsayılan</span>') + '</td>' +
+      '<td>' + randevuBadge(s) + '</td>' +
       '<td>' + (s && s.tavsiye_edilen_aksiyon
         ? '<span class="tag a-' + actionClass(s.tavsiye_edilen_aksiyon) + '">' + esc(s.tavsiye_edilen_aksiyon) + '</span>'
         : '—') + '</td>' +
@@ -463,7 +507,8 @@ function closeDrawer() {
 
 function renderDrawer(call) {
   DOM.drawerTitle.textContent = call.customerName;
-  DOM.drawerSub.textContent   = call.customerPhone + ' · ' + fmtDateTime(call.startTime);
+  const scLabel = call.scenarioName ? ' · 🎭 ' + call.scenarioName : '';
+  DOM.drawerSub.textContent   = call.customerPhone + ' · ' + fmtDateTime(call.startTime) + scLabel;
 
   const s    = call.summary;
   const cost = call.costs || {};
@@ -488,6 +533,8 @@ function renderDrawer(call) {
             '<span class="sg-val">' + esc(s.zaman_cercevesi) + '</span></div>' +
           '<div class="sg-item"><span class="sg-label">Çevre Potansiyeli</span>' +
             '<span class="sg-val">' + (s.cevredeki_potansiyel ? '✅ Evet' : '❌ Hayır') + '</span></div>' +
+          '<div class="sg-item"><span class="sg-label">Randevu</span>' +
+            '<span class="sg-val">' + (s.randevu_alindi ? '✅ Alındı' : '❌ Alınmadı') + '</span></div>' +
           '<div class="sg-item"><span class="sg-label">Aksiyon</span>' +
             '<span class="sg-val"><span class="tag a-' + actionClass(s.tavsiye_edilen_aksiyon) + '">' +
             esc(s.tavsiye_edilen_aksiyon) + '</span></span></div>' +
@@ -611,6 +658,7 @@ function renderStats(d) {
   DOM.statAvgHeat.textContent = d.avgHeatScore || '—';
   DOM.statCost.textContent    = '$' + d.totalCost.toFixed(4);
   DOM.statConv.textContent    = d.conversionRate + '%';
+  DOM.statRandevu.textContent = d.randevuCount || '0';
 
   const labels30    = d.dailyCalls.map(x => x.date.slice(5));
   const tickColor   = '#64748b';
@@ -807,4 +855,384 @@ function actionClass(action) {
   if (action === 'Çevre takibi')         return 'cevre';
   if (action === 'Uğraşma')             return 'ugrasma';
   return '';
+}
+
+function randevuBadge(summary) {
+  if (!summary || summary.randevu_alindi == null) return '—';
+  return summary.randevu_alindi ? '<span class="randevu-yes">✅</span>' : '<span class="randevu-no">❌</span>';
+}
+
+// ─── CAMPAIGN ────────────────────────────────────────────────────────────────
+
+function initCampaign() {
+  $('btnUpload').addEventListener('click', () => $('campaignFile').click());
+  $('campaignFile').addEventListener('change', onFileSelected);
+  $('btnCampaignStart').addEventListener('click', campaignStart);
+  $('btnCampaignPause').addEventListener('click', campaignPause);
+  $('btnCampaignStop').addEventListener('click', campaignStop);
+  $('campaignConcurrency').addEventListener('change', function() {
+    campaign.maxConcurrent = parseInt(this.value, 10);
+  });
+}
+
+function onFileSelected(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(ev) {
+    try {
+      const wb   = XLSX.read(ev.target.result, { type: 'binary' });
+      const ws   = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+      parseContacts(rows);
+    } catch(err) {
+      toast('Dosya okunamadı: ' + err.message, 'error');
+    }
+  };
+  reader.readAsBinaryString(file);
+  e.target.value = '';
+}
+
+function parseContacts(rows) {
+  if (!rows.length) { toast('Dosya boş', 'error'); return; }
+
+  // Detect header row — look for phone-like column
+  let dataStart = 0;
+  let colName = 0, colPhone = 1, colRegion = 2, colNotes = 3;
+
+  const first = rows[0].map(c => String(c).toLowerCase().trim());
+  const phoneIdx = first.findIndex(h => h.includes('telefon') || h.includes('phone') || h.includes('tel'));
+  if (phoneIdx >= 0) {
+    dataStart = 1;
+    colPhone  = phoneIdx;
+    colName   = first.findIndex(h => h.includes('ad') || h.includes('isim') || h.includes('name'));
+    if (colName < 0) colName = phoneIdx === 0 ? 1 : 0;
+    colRegion = first.findIndex(h => h.includes('bölge') || h.includes('bolge') || h.includes('region'));
+    if (colRegion < 0) colRegion = -1;
+    colNotes  = first.findIndex(h => h.includes('not') || h.includes('note'));
+    if (colNotes < 0) colNotes = -1;
+  }
+
+  campaign.contacts = [];
+  campaign.callMap  = new Map();
+  campaign.running  = false;
+  campaign.paused   = false;
+
+  for (let i = dataStart; i < rows.length; i++) {
+    const row   = rows[i];
+    const phone = String(row[colPhone] || '').trim();
+    const name  = String(row[colName]  || '').trim() || ('Kişi ' + (i - dataStart + 1));
+    if (!phone) continue;
+    campaign.contacts.push({
+      name,
+      phone,
+      region: colRegion >= 0 ? String(row[colRegion] || '').trim() : '',
+      notes:  colNotes  >= 0 ? String(row[colNotes]  || '').trim() : '',
+      status: 'bekliyor',
+      vapiCallId: null,
+      result: null,
+    });
+  }
+
+  if (!campaign.contacts.length) { toast('Geçerli telefon bulunamadı', 'error'); return; }
+
+  toast(campaign.contacts.length + ' kişi yüklendi', 'success');
+  $('btnCampaignStart').disabled = false;
+  $('campaignProgressBar').style.display = 'none';
+  renderCampaignTable();
+}
+
+function renderCampaignTable() {
+  const tbody = $('campaignTableBody');
+  if (!campaign.contacts.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Excel veya CSV dosyası yükleyin</td></tr>';
+    return;
+  }
+  tbody.innerHTML = campaign.contacts.map((c, i) => campaignRowHtml(c, i)).join('');
+}
+
+function campaignRowHtml(c, i) {
+  const statusTag = {
+    bekliyor:    '<span class="ctag ct-wait">Bekliyor</span>',
+    arıyor:      '<span class="ctag ct-calling">📞 Arıyor</span>',
+    tamamlandı:  '<span class="ctag ct-done">Tamamlandı</span>',
+    cevapsız:    '<span class="ctag ct-miss">Cevapsız</span>',
+    meşgul:      '<span class="ctag ct-busy">Meşgul</span>',
+    başarısız:   '<span class="ctag ct-fail">Başarısız</span>',
+  }[c.status] || '<span class="ctag ct-wait">' + esc(c.status) + '</span>';
+
+  const heat = c.result ? c.result.sicaklik_skoru : '—';
+  const rdv  = c.result ? (c.result.randevu_alindi ? '✅' : '❌') : '—';
+
+  return '<tr id="crow-' + i + '">' +
+    '<td>' + (i + 1) + '</td>' +
+    '<td>' + esc(c.name) + '</td>' +
+    '<td>' + esc(c.phone) + '</td>' +
+    '<td>' + esc(c.region || '—') + '</td>' +
+    '<td>' + statusTag + '</td>' +
+    '<td>' + heat + '</td>' +
+    '<td>' + rdv + '</td>' +
+    '<td>' + (c.duration ? fmtDuration(c.duration) : '—') + '</td>' +
+    '</tr>';
+}
+
+function renderCampaignRow(idx) {
+  const row = $('crow-' + idx);
+  if (!row) return;
+  const c = campaign.contacts[idx];
+  row.outerHTML = campaignRowHtml(c, idx);
+}
+
+function updateCampaignProgress() {
+  const total    = campaign.contacts.length;
+  const done     = campaign.contacts.filter(c => c.status !== 'bekliyor' && c.status !== 'arıyor').length;
+  const randevu  = campaign.contacts.filter(c => c.result && c.result.randevu_alindi).length;
+  const fail     = campaign.contacts.filter(c => ['cevapsız','meşgul','başarısız'].includes(c.status)).length;
+  const active   = campaign.contacts.filter(c => c.status === 'arıyor').length;
+  const pct      = total ? Math.round(done / total * 100) : 0;
+
+  $('progressText').textContent = done + ' / ' + total;
+  $('progressPct').textContent  = pct + '%';
+  $('progressFill').style.width = pct + '%';
+  $('psDone').textContent    = '✅ ' + (done - fail) + ' Tamamlandı';
+  $('psRandevu').textContent = '📅 ' + randevu + ' Randevu';
+  $('psFail').textContent    = '❌ ' + fail + ' Başarısız';
+  $('psActive').textContent  = '📞 ' + active + ' Aktif';
+
+  if (done === total && total > 0 && campaign.running) {
+    campaign.running = false;
+    $('btnCampaignStart').disabled = true;
+    $('btnCampaignPause').disabled = true;
+    $('btnCampaignStop').disabled  = true;
+    toast('Kampanya tamamlandı! ' + randevu + ' randevu alındı.', 'success');
+  }
+}
+
+function campaignStart() {
+  if (!campaign.contacts.length) return;
+  campaign.running  = true;
+  campaign.paused   = false;
+  campaign.maxConcurrent = parseInt($('campaignConcurrency').value, 10) || 1;
+  $('btnCampaignStart').disabled = true;
+  $('btnCampaignPause').disabled = false;
+  $('btnCampaignStop').disabled  = false;
+  $('campaignProgressBar').style.display = 'block';
+  updateCampaignProgress();
+  campaignFillQueue();
+}
+
+function campaignPause() {
+  campaign.paused = !campaign.paused;
+  $('btnCampaignPause').textContent = campaign.paused ? '▶ Devam Et' : '⏸ Duraklat';
+  toast(campaign.paused ? 'Kampanya duraklatıldı' : 'Kampanya devam ediyor', 'info');
+  if (!campaign.paused) campaignFillQueue();
+}
+
+function campaignStop() {
+  campaign.running = false;
+  campaign.paused  = false;
+  // Mark remaining pending as stopped
+  campaign.contacts.forEach(c => { if (c.status === 'bekliyor') c.status = 'başarısız'; });
+  renderCampaignTable();
+  updateCampaignProgress();
+  $('btnCampaignStart').disabled = false;
+  $('btnCampaignPause').disabled = true;
+  $('btnCampaignStop').disabled  = true;
+  $('btnCampaignPause').textContent = '⏸ Duraklat';
+  toast('Kampanya durduruldu', 'info');
+}
+
+function campaignFillQueue() {
+  if (!campaign.running || campaign.paused) return;
+  const activeCount = campaign.contacts.filter(c => c.status === 'arıyor').length;
+  const slots = campaign.maxConcurrent - activeCount;
+  if (slots <= 0) return;
+
+  let started = 0;
+  for (let i = 0; i < campaign.contacts.length && started < slots; i++) {
+    if (campaign.contacts[i].status === 'bekliyor') {
+      campaignCallContact(i);
+      started++;
+    }
+  }
+}
+
+// ─── SCENARIOS ───────────────────────────────────────────────────────────────
+
+let scenariosCache = [];
+
+function initScenarios() {
+  $('btnManageScenarios').addEventListener('click', openScenarioModal);
+  $('scenarioModalClose').addEventListener('click', closeScenarioModal);
+  $('scenarioModalOverlay').addEventListener('click', closeScenarioModal);
+  $('btnScenarioSave').addEventListener('click', saveScenario);
+  $('btnScenarioCancel').addEventListener('click', () => {
+    $('scenarioForm').style.display = 'none';
+    $('scenarioEditId').value = '';
+  });
+  loadScenarios();
+}
+
+async function loadScenarios() {
+  try {
+    const resp = await fetch('/api/scenarios');
+    const json = await resp.json();
+    if (!json.success) return;
+    scenariosCache = json.data;
+    refreshScenarioSelects();
+  } catch(e) {}
+}
+
+function refreshScenarioSelects() {
+  // Left panel selector
+  const sel = $('scenarioSelect');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">— Varsayılan prompt —</option>';
+  scenariosCache.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s.id;
+    opt.textContent = s.name;
+    if (s.id === cur) opt.selected = true;
+    sel.appendChild(opt);
+  });
+
+  // History filter selector
+  const fsel = DOM.filterScenario;
+  if (fsel) {
+    const fcur = fsel.value;
+    fsel.innerHTML = '<option value="">Tümü</option>';
+    scenariosCache.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      opt.textContent = s.name;
+      if (s.id === fcur) opt.selected = true;
+      fsel.appendChild(opt);
+    });
+  }
+}
+
+function openScenarioModal() {
+  $('scenarioModal').classList.add('open');
+  $('scenarioModalOverlay').classList.add('visible');
+  $('scenarioForm').style.display = 'none';
+  renderScenarioList();
+}
+
+function closeScenarioModal() {
+  $('scenarioModal').classList.remove('open');
+  $('scenarioModalOverlay').classList.remove('visible');
+}
+
+function renderScenarioList() {
+  const list = $('scenarioList');
+  if (!scenariosCache.length) {
+    list.innerHTML = '<div class="sc-empty">Henüz senaryo yok. Yeni ekleyin.</div>' +
+      '<button class="btn-sc-new">+ Yeni Senaryo</button>';
+    list.querySelector('.btn-sc-new').addEventListener('click', showNewScenarioForm);
+    return;
+  }
+  list.innerHTML =
+    '<button class="btn-sc-new">+ Yeni Senaryo</button>' +
+    scenariosCache.map(s =>
+      '<div class="sc-item" data-id="' + s.id + '">' +
+        '<div class="sc-item-name">' + esc(s.name) + '</div>' +
+        '<div class="sc-item-actions">' +
+          '<button class="btn-sc-edit" data-id="' + s.id + '">Düzenle</button>' +
+          '<button class="btn-sc-del"  data-id="' + s.id + '">Sil</button>' +
+        '</div>' +
+      '</div>'
+    ).join('');
+
+  list.querySelector('.btn-sc-new').addEventListener('click', showNewScenarioForm);
+  list.querySelectorAll('.btn-sc-edit').forEach(btn => {
+    btn.addEventListener('click', () => showEditScenarioForm(btn.dataset.id));
+  });
+  list.querySelectorAll('.btn-sc-del').forEach(btn => {
+    btn.addEventListener('click', () => deleteScenarioUI(btn.dataset.id));
+  });
+}
+
+function showNewScenarioForm() {
+  $('scenarioEditId').value = '';
+  $('scenarioName').value   = '';
+  $('scenarioPrompt').value = '';
+  $('scenarioForm').style.display = 'block';
+  $('scenarioName').focus();
+}
+
+function showEditScenarioForm(id) {
+  const s = scenariosCache.find(x => x.id === id);
+  if (!s) return;
+  $('scenarioEditId').value = s.id;
+  $('scenarioName').value   = s.name;
+  $('scenarioPrompt').value = s.systemPrompt;
+  $('scenarioForm').style.display = 'block';
+  $('scenarioName').focus();
+}
+
+async function saveScenario() {
+  const id     = $('scenarioEditId').value;
+  const name   = $('scenarioName').value.trim();
+  const prompt = $('scenarioPrompt').value.trim();
+  if (!name || !prompt) { toast('Ad ve prompt zorunlu', 'error'); return; }
+
+  try {
+    const method = id ? 'PUT' : 'POST';
+    const url    = id ? '/api/scenarios/' + id : '/api/scenarios';
+    const r = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, systemPrompt: prompt }),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    toast(id ? 'Senaryo güncellendi' : 'Senaryo eklendi', 'success');
+    $('scenarioForm').style.display = 'none';
+    await loadScenarios();
+    renderScenarioList();
+  } catch(err) {
+    toast('Hata: ' + err.message, 'error');
+  }
+}
+
+async function deleteScenarioUI(id) {
+  const s = scenariosCache.find(x => x.id === id);
+  if (!s) return;
+  if (!confirm('"' + s.name + '" silinsin mi?')) return;
+  try {
+    const r = await fetch('/api/scenarios/' + id, { method: 'DELETE' });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    toast('Senaryo silindi', 'info');
+    await loadScenarios();
+    renderScenarioList();
+  } catch(err) {
+    toast('Hata: ' + err.message, 'error');
+  }
+}
+
+async function campaignCallContact(idx) {
+  const c = campaign.contacts[idx];
+  c.status = 'arıyor';
+  c.callStartTs = Date.now();
+  renderCampaignRow(idx);
+
+  try {
+    const campaignScenarioId = $('scenarioSelect') ? ($('scenarioSelect').value || undefined) : undefined;
+    const resp = await fetch('/api/call', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customer: { name: c.name, phone: c.phone, region: c.region, notes: c.notes }, scenarioId: campaignScenarioId }),
+    });
+    const json = await resp.json();
+    if (!json.success) throw new Error(json.error);
+    c.vapiCallId = json.data.callId;
+    campaign.callMap.set(c.vapiCallId, idx);
+  } catch(err) {
+    c.status = 'başarısız';
+    renderCampaignRow(idx);
+    updateCampaignProgress();
+    if (campaign.running && !campaign.paused) campaignFillQueue();
+    toast(c.name + ': Arama başlatılamadı', 'error');
+  }
 }

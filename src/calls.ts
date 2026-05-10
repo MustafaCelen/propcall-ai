@@ -103,12 +103,15 @@ export function getAllCalls(filters?: CallFilters): CallRecord[] {
     if (filters.niyet)   calls = calls.filter(c => c.summary?.niyet === filters.niyet);
     if (filters.aksiyon) calls = calls.filter(c => c.summary?.tavsiye_edilen_aksiyon === filters.aksiyon);
     if (filters.status)  calls = calls.filter(c => c.status === filters.status);
+    if (filters.randevu === 'evet') calls = calls.filter(c => c.summary?.randevu_alindi === true);
+    if (filters.randevu === 'hayir') calls = calls.filter(c => c.summary?.randevu_alindi === false);
+    if (filters.scenarioId) calls = calls.filter(c => c.scenarioId === filters.scenarioId);
   }
 
   return calls.sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
 }
 
-export function createCall(vapiCallId: string, customer: CustomerInfo): CallRecord {
+export function createCall(vapiCallId: string, customer: CustomerInfo, scenarioId?: string, scenarioName?: string): CallRecord {
   ensureDir();
   const record: CallRecord = {
     callId:       `call_${Date.now()}`,
@@ -122,6 +125,8 @@ export function createCall(vapiCallId: string, customer: CustomerInfo): CallReco
     status:       'in-progress',
     followUp:     false,
     createdAt:    new Date().toISOString(),
+    scenarioId,
+    scenarioName,
   };
   writeCall(record);
   return record;
@@ -166,6 +171,7 @@ export function getStats(): StatsData {
   const totalCost    = Math.round(calls.reduce((s, c) => s + (c.costs?.total || 0), 0) * 10000) / 10000;
   const conversionRate = withScore.length
     ? Math.round(withScore.filter(c => c.summary!.sicaklik_skoru >= 60).length / withScore.length * 100) : 0;
+  const randevuCount = finished.filter(c => c.summary?.randevu_alindi === true).length;
 
   // Günlük veriler — son 30 gün
   const dailyCalls: Record<string, number> = {};
@@ -199,7 +205,7 @@ export function getStats(): StatsData {
   });
 
   return {
-    totalCalls, avgDuration, avgHeatScore, totalCost, conversionRate,
+    totalCalls, avgDuration, avgHeatScore, totalCost, conversionRate, randevuCount,
     dailyCalls:       Object.entries(dailyCalls).map(([date, count]) => ({ date, count })),
     heatDistribution,
     intentDistribution: Object.entries(niyetMap).map(([niyet, count]) => ({ niyet, count })),
@@ -209,7 +215,7 @@ export function getStats(): StatsData {
 
 export function exportCSV(filters?: CallFilters): string {
   const calls = getAllCalls(filters);
-  const headers = ['Tarih','Ad','Telefon','Süre','Sıcaklık','Niyet','Bölge','Bütçe','Zaman','Aksiyon','Maliyet','Durum','Notlar'];
+  const headers = ['Tarih','Ad','Telefon','Süre','Sıcaklık','Niyet','Bölge','Bütçe','Zaman','Randevu','Aksiyon','Maliyet','Durum','Notlar'];
   const rows = calls.map(c => [
     new Date(c.startTime).toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' }),
     c.customerName, c.customerPhone,
@@ -219,6 +225,7 @@ export function exportCSV(filters?: CallFilters): string {
     c.summary?.bolge ?? '',
     c.summary?.butce ?? '',
     c.summary?.zaman_cercevesi ?? '',
+    c.summary?.randevu_alindi != null ? (c.summary.randevu_alindi ? 'Evet' : 'Hayır') : '',
     c.summary?.tavsiye_edilen_aksiyon ?? '',
     c.costs?.total ?? 0,
     c.status,

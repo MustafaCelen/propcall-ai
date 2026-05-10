@@ -23,12 +23,26 @@ export interface VapiCallResponse {
 }
 
 // Vapi üzerinden outbound arama başlat
-export async function createVapiCall(customer: CustomerInfo): Promise<VapiCallResponse> {
+export async function createVapiCall(customer: CustomerInfo, systemPrompt?: string): Promise<VapiCallResponse> {
   const phoneNumberId = process.env.VAPI_PHONE_NUMBER_ID;
   const assistantId = process.env.VAPI_ASSISTANT_ID;
 
   if (!phoneNumberId) throw new Error('VAPI_PHONE_NUMBER_ID tanımlanmamış');
   if (!assistantId) throw new Error('VAPI_ASSISTANT_ID tanımlanmamış');
+
+  const assistantOverrides: Record<string, unknown> = {
+    variableValues: {
+      customerName: customer.name,
+      customerRegion: customer.region || 'belirtilmemiş',
+      customerNotes: customer.notes || 'yok',
+    },
+  };
+
+  if (systemPrompt) {
+    assistantOverrides.model = {
+      messages: [{ role: 'system', content: systemPrompt }],
+    };
+  }
 
   const body = {
     phoneNumberId,
@@ -37,14 +51,7 @@ export async function createVapiCall(customer: CustomerInfo): Promise<VapiCallRe
       number: customer.phone,
       name: customer.name,
     },
-    // Müşteri bilgilerini asistan değişkenlerine geç
-    assistantOverrides: {
-      variableValues: {
-        customerName: customer.name,
-        customerRegion: customer.region || 'belirtilmemiş',
-        customerNotes: customer.notes || 'yok',
-      },
-    },
+    assistantOverrides,
   };
 
   const response = await fetch(`${VAPI_BASE_URL}/call`, {

@@ -41,9 +41,14 @@ SADECE bu JSON formatında döndür:
   "butce": "string veya null",
   "zaman_cercevesi": "acil|3ay|6ay|belirsiz|yok",
   "cevredeki_potansiyel": true|false,
+  "randevu_alindi": true|false,
   "ozet": "2-3 cümle emlakçı için özet",
   "tavsiye_edilen_aksiyon": "Ara|Bekleme listesine al|Çevre takibi|Uğraşma"
 }
+
+randevu_alindi kriterleri:
+- true: Müşteri randevu/görüşme teklifini açıkça kabul etti (ör. "tamam", "evet", "olur", "ayarlayın" veya benzer onay ifadeleri)
+- false: Müşteri reddetti, telefonu kapattı, cevap vermedi veya belirsiz kaldı
 
 Sıcaklık skoru kriterleri:
 - 80-100: Aktif arıyor, bütçesi ve bölgesi net

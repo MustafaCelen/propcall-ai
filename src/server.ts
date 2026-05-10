@@ -10,6 +10,7 @@ dotenv.config();
 import { generateCallSummary } from './ai';
 import { createVapiCall, endVapiCall } from './vapi';
 import { getAllAppointments, saveAppointment, deleteAppointment } from './appointments';
+import { getAllScenarios, getScenario, createScenario, updateScenario, deleteScenario } from './scenarios';
 import {
   getAllCalls, readCall, createCall, updateCall,
   appendTranscript, updateCosts, saveCallSummary,
@@ -46,12 +47,13 @@ app.get('/api/events', (req: Request, res: Response) => {
 
 app.post('/api/call', async (req: Request, res: Response) => {
   try {
-    const { customer } = req.body as VapiCallRequest;
+    const { customer, scenarioId } = req.body as VapiCallRequest;
     if (!customer?.name || !customer?.phone)
       return res.status(400).json({ success: false, error: 'Ad ve telefon zorunlu' });
 
-    const vapiCall = await createVapiCall(customer);
-    const record   = createCall(vapiCall.id, customer);
+    const scenario = scenarioId ? getScenario(scenarioId) : null;
+    const vapiCall = await createVapiCall(customer, scenario?.systemPrompt);
+    const record   = createCall(vapiCall.id, customer, scenario?.id, scenario?.name);
 
     console.log(`[Vapi] Arama başlatıldı: ${vapiCall.id} → ${customer.phone}`);
     return res.json({ success: true, data: { callId: vapiCall.id, recordId: record.callId } });
@@ -192,9 +194,9 @@ async function generateSummaryForCall(vapiCallId: string): Promise<void> {
 
 app.get('/api/calls', (req: Request, res: Response) => {
   try {
-    const { dateFrom, dateTo, minScore, maxScore, niyet, aksiyon, status } = req.query as Record<string, string>;
+    const { dateFrom, dateTo, minScore, maxScore, niyet, aksiyon, status, randevu, scenarioId } = req.query as Record<string, string>;
     const filters: CallFilters = {
-      dateFrom, dateTo, niyet, aksiyon, status,
+      dateFrom, dateTo, niyet, aksiyon, status, randevu, scenarioId,
       minScore: minScore !== undefined ? Number(minScore) : undefined,
       maxScore: maxScore !== undefined ? Number(maxScore) : undefined,
     };
@@ -252,9 +254,9 @@ app.get('/api/stats', (_req: Request, res: Response) => {
 
 app.get('/api/export', (req: Request, res: Response) => {
   try {
-    const { dateFrom, dateTo, minScore, maxScore, niyet, aksiyon, status } = req.query as Record<string, string>;
+    const { dateFrom, dateTo, minScore, maxScore, niyet, aksiyon, status, randevu, scenarioId } = req.query as Record<string, string>;
     const filters: CallFilters = {
-      dateFrom, dateTo, niyet, aksiyon, status,
+      dateFrom, dateTo, niyet, aksiyon, status, randevu, scenarioId,
       minScore: minScore !== undefined ? Number(minScore) : undefined,
       maxScore: maxScore !== undefined ? Number(maxScore) : undefined,
     };
@@ -286,6 +288,39 @@ app.delete('/api/appointments/:id', (req, res) => {
   try {
     if (!deleteAppointment(req.params.id))
       return res.status(404).json({ success: false, error: 'Randevu bulunamadı' });
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+// ─── SENARYOLAR ──────────────────────────────────────────────────────────────
+
+app.get('/api/scenarios', (_req, res) => {
+  try { return res.json({ success: true, data: getAllScenarios() }); }
+  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.post('/api/scenarios', (req, res) => {
+  try {
+    const { name, systemPrompt } = req.body as { name: string; systemPrompt: string };
+    if (!name || !systemPrompt)
+      return res.status(400).json({ success: false, error: 'Ad ve prompt zorunlu' });
+    return res.status(201).json({ success: true, data: createScenario(name, systemPrompt) });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.put('/api/scenarios/:id', (req, res) => {
+  try {
+    const { name, systemPrompt } = req.body as { name: string; systemPrompt: string };
+    const updated = updateScenario(req.params.id, name, systemPrompt);
+    if (!updated) return res.status(404).json({ success: false, error: 'Senaryo bulunamadı' });
+    return res.json({ success: true, data: updated });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.delete('/api/scenarios/:id', (req, res) => {
+  try {
+    if (!deleteScenario(req.params.id))
+      return res.status(404).json({ success: false, error: 'Senaryo bulunamadı' });
     return res.json({ success: true });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
