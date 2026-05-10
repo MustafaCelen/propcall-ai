@@ -19,7 +19,8 @@ import {
 import { VapiCallRequest, VapiWebhookPayload, VapiCostItem, CallFilters } from './types';
 
 const app   = express();
-const PORT  = process.env.PORT || 3000;
+const PORT  = process.env.PORT || 5000;
+const HOST  = '0.0.0.0';
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
@@ -344,9 +345,9 @@ app.get('*', (_req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'i
 
 // ─── BAŞLAT ──────────────────────────────────────────────────────────────────
 
-app.listen(PORT, () => {
+app.listen(Number(PORT), HOST, () => {
   console.log(`\n✅ PropCall AI sunucusu başlatıldı`);
-  console.log(`   → http://localhost:${PORT}`);
+  console.log(`   → http://${HOST}:${PORT}`);
   console.log(`   → Anthropic: ${process.env.ANTHROPIC_API_KEY ? '✓' : '✗'}`);
   console.log(`   → Vapi:      ${process.env.VAPI_API_KEY ? '✓' : '✗'}\n`);
 });
