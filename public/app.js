@@ -153,12 +153,12 @@ function connectSSE() {
   });
 
   src.addEventListener('call-ended', e => {
-    const { vapiCallId, status, endedReason } = JSON.parse(e.data);
+    const { vapiCallId, status, endedReason, duration } = JSON.parse(e.data);
 
     // Campaign call ended
     if (campaign.callMap.has(vapiCallId)) {
       campaignStopPoll(vapiCallId);
-      resolveCampaignCall(vapiCallId, status);
+      resolveCampaignCall(vapiCallId, status, duration);
     }
 
     if (vapiCallId !== state.activeCallId) return;
@@ -1343,7 +1343,7 @@ function campaignStartPoll(vapiCallId, idx) {
       const call = j.data;
       if (call.status !== 'in-progress') {
         campaignStopPoll(vapiCallId);
-        resolveCampaignCall(vapiCallId, call.status);
+        resolveCampaignCall(vapiCallId, call.status, call.duration);
       }
     } catch(e) {}
   }, 10000);
@@ -1357,14 +1357,15 @@ function campaignStopPoll(vapiCallId) {
   }
 }
 
-function resolveCampaignCall(vapiCallId, status) {
+function resolveCampaignCall(vapiCallId, status, duration) {
   if (!campaign.callMap.has(vapiCallId)) return;
   const idx = campaign.callMap.get(vapiCallId);
-  campaign.callMap.delete(vapiCallId);
+  // Do NOT delete from callMap — summary-ready event needs it later
   const cStatus = (status === 'completed') ? 'tamamlandı' :
                   (status === 'no-answer') ? 'cevapsız'   :
                   (status === 'busy')      ? 'meşgul'     : 'başarısız';
-  campaign.contacts[idx].status = cStatus;
+  campaign.contacts[idx].status   = cStatus;
+  if (duration) campaign.contacts[idx].duration = duration;
   renderCampaignRow(idx);
   updateCampaignProgress();
   if (campaign.running && !campaign.paused) campaignFillQueue();

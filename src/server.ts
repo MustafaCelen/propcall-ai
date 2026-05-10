@@ -120,9 +120,10 @@ app.post('/webhook', (req: Request, res: Response) => {
       const recording  = msg.recordingUrl || msg.artifact?.recordingUrl;
       const costs      = parseCosts(msg.costs, msg.cost);
 
-      // artifact.messages'dan transcript yoksa doldur
-      const record = readCall(vapiCallId);
-      if (record && record.transcript.length === 0 && msg.artifact?.messages?.length) {
+      // artifact.messages her zaman tam konuşmayı içerir (assistant + user).
+      // Varsa mevcut transcript'i silerek artifact'tan yeniden yaz.
+      if (msg.artifact?.messages?.length) {
+        updateCall(vapiCallId, { transcript: [] } as any);
         msg.artifact.messages.forEach(m => {
           if (m.role === 'assistant' || m.role === 'user') {
             appendTranscript(vapiCallId, {
@@ -132,6 +133,12 @@ app.post('/webhook', (req: Request, res: Response) => {
             });
           }
         });
+      } else {
+        // artifact yoksa en azından mevcut (sadece user) transcript kalsın
+        const record = readCall(vapiCallId);
+        if (record && !record.transcript.length) {
+          console.warn(`[Webhook] ${vapiCallId} için transcript yok`);
+        }
       }
 
       updateCall(vapiCallId, {
