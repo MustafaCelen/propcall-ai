@@ -119,6 +119,7 @@ app.post('/webhook', (req: Request, res: Response) => {
       const endReason  = msg.call?.endedReason;
       const status     = endedReasonToStatus(endReason);
       const recording  = msg.recordingUrl || msg.artifact?.recordingUrl;
+      console.log(`[Webhook] end-of-call-report → endedReason: "${endReason}" → status: "${status}" | süre: ${duration ?? '?'}s`);
       const costs      = parseCosts(msg.costs, msg.cost);
 
       // artifact.messages her zaman tam konuşmayı içerir (assistant + user).
