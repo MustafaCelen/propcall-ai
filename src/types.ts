@@ -23,11 +23,16 @@ export interface VapiTranscriptEntry {
 }
 
 export interface CallSummary {
+  sicaklik_skoru: number;
+  niyet: 'alım' | 'satım' | 'kiralama' | 'yatırım' | 'yok' | 'belirsiz';
+  mulk_tipi: 'konut' | 'arsa' | 'işyeri' | 'belirsiz';
+  bolge: string | null;
+  butce: string | null;
+  zaman_cercevesi: 'acil' | '3ay' | '6ay' | 'belirsiz' | 'yok';
+  cevredeki_potansiyel: boolean;
   randevu_alindi: boolean;
-  ret_nedeni: string | null;
-  ilgi_seviyesi: 'yüksek' | 'orta' | 'düşük' | 'yok';
-  mulk_tipi: string | null;
   ozet: string;
+  tavsiye_edilen_aksiyon: 'Ara' | 'Bekleme listesine al' | 'Çevre takibi' | 'Uğraşma';
 }
 
 export interface CallRecord {
@@ -47,6 +52,8 @@ export interface CallRecord {
   notes?: string;
   followUp: boolean;
   createdAt: string;
+  scenarioId?: string;
+  scenarioName?: string;
 }
 
 export interface Appointment {
@@ -60,8 +67,17 @@ export interface Appointment {
   createdAt: string;
 }
 
+export interface Scenario {
+  id: string;
+  name: string;
+  systemPrompt: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export interface VapiCallRequest {
   customer: CustomerInfo;
+  scenarioId?: string;
 }
 
 export interface VapiCostItem {
@@ -100,21 +116,33 @@ export interface VapiWebhookPayload {
 
 export interface StatsData {
   totalCalls: number;
+  completedCalls: number;
+  answerRate: number;
   avgDuration: number;
+  avgHeatScore: number;
   totalCost: number;
-  appointmentCount: number;
-  appointmentRate: number;
+  conversionRate: number;
+  randevuCount: number;
+  randevuRate: number;
   dailyCalls: Array<{ date: string; count: number }>;
-  dailyAppointments: Array<{ date: string; count: number }>;
+  heatDistribution: Array<{ range: string; count: number }>;
+  intentDistribution: Array<{ niyet: string; count: number }>;
+  actionDistribution: Array<{ action: string; count: number }>;
   costTrend: Array<{ date: string; cost: number }>;
+  hourlyDistribution: Array<{ hour: number; count: number }>;
+  statusBreakdown: Array<{ status: string; count: number }>;
 }
 
 export interface CallFilters {
   dateFrom?: string;
   dateTo?: string;
-  randevu?: string;
-  ilgi?: string;
+  minScore?: number;
+  maxScore?: number;
+  niyet?: string;
+  aksiyon?: string;
   status?: string;
+  randevu?: string;
+  scenarioId?: string;
 }
 
 export interface ApiResponse<T = unknown> {

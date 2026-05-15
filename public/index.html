@@ -52,11 +52,23 @@
       <div class="info-box">
         <div class="info-box-title">🤖 Asistan Akışı</div>
         <ul class="info-list">
-          <li>KW Quantum Team olarak tanıtır</li>
-          <li>Ücretsiz Gayrimenkul Röntgeni sunar</li>
-          <li>Randevu almayı hedefler</li>
-          <li>Max 2 dakika · Özet otomatik</li>
+          <li>Kendini tanıtır, vakit sorar</li>
+          <li>Gayrimenkul niyetini keşfeder</li>
+          <li>Bölge · Bütçe · Zaman alır</li>
+          <li>Çevredeki potansiyeli sorar</li>
+          <li>Max 3-4 dakika · Özet otomatik</li>
         </ul>
+      </div>
+    </div>
+    <div class="panel-section">
+      <div class="section-title">Senaryo</div>
+      <div class="form-group">
+        <div class="scenario-row">
+          <select id="scenarioSelect" style="flex:1">
+            <option value="">— Varsayılan prompt —</option>
+          </select>
+          <button class="btn-icon" id="btnManageScenarios" title="Senaryoları Yönet">⚙</button>
+        </div>
       </div>
     </div>
     <div class="panel-section">
@@ -75,6 +87,7 @@
       </button>
       <button class="tab-btn" data-tab="history">Geçmiş Aramalar</button>
       <button class="tab-btn" data-tab="stats">İstatistikler</button>
+      <button class="tab-btn" data-tab="campaign">📋 Toplu Arama</button>
     </div>
 
     <!-- ── TAB 1: CANLI ──────────────────────────────────── -->
@@ -131,21 +144,33 @@
           <input type="date" id="filterDateTo" />
         </div>
         <div class="filter-group">
-          <label>Randevu</label>
-          <select id="filterRandevu">
+          <label>Sıcaklık</label>
+          <div class="range-row">
+            <input type="number" id="filterMinScore" placeholder="0"   min="0" max="100" />
+            <span>—</span>
+            <input type="number" id="filterMaxScore" placeholder="100" min="0" max="100" />
+          </div>
+        </div>
+        <div class="filter-group">
+          <label>Niyet</label>
+          <select id="filterNiyet">
             <option value="">Tümü</option>
-            <option value="evet">Alındı</option>
-            <option value="hayir">Reddetti</option>
+            <option value="alım">Alım</option>
+            <option value="satım">Satım</option>
+            <option value="kiralama">Kiralama</option>
+            <option value="yatırım">Yatırım</option>
+            <option value="yok">Yok</option>
+            <option value="belirsiz">Belirsiz</option>
           </select>
         </div>
         <div class="filter-group">
-          <label>İlgi Seviyesi</label>
-          <select id="filterIlgi">
+          <label>Aksiyon</label>
+          <select id="filterAksiyon">
             <option value="">Tümü</option>
-            <option value="yüksek">Yüksek</option>
-            <option value="orta">Orta</option>
-            <option value="düşük">Düşük</option>
-            <option value="yok">Yok</option>
+            <option value="Ara">Ara</option>
+            <option value="Bekleme listesine al">Beklemede</option>
+            <option value="Çevre takibi">Çevre</option>
+            <option value="Uğraşma">Uğraşma</option>
           </select>
         </div>
         <div class="filter-group">
@@ -156,6 +181,20 @@
             <option value="no-answer">Cevapsız</option>
             <option value="busy">Meşgul</option>
             <option value="failed">Başarısız</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label>Senaryo</label>
+          <select id="filterScenario">
+            <option value="">Tümü</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label>Randevu</label>
+          <select id="filterRandevu">
+            <option value="">Tümü</option>
+            <option value="evet">Alındı ✅</option>
+            <option value="hayir">Alınmadı ❌</option>
           </select>
         </div>
         <div class="filter-actions">
@@ -173,15 +212,20 @@
               <th>Müşteri</th>
               <th>Telefon</th>
               <th>Süre</th>
+              <th>Sıcaklık</th>
+              <th>Niyet</th>
+              <th>Bölge</th>
+              <th>Bütçe</th>
+              <th>Senaryo</th>
               <th>Randevu</th>
-              <th>İlgi</th>
-              <th>Özet</th>
+              <th>Aksiyon</th>
+              <th>Maliyet</th>
               <th>Durum</th>
               <th></th>
             </tr>
           </thead>
           <tbody id="callsTableBody">
-            <tr><td colspan="9" class="table-empty">Yükleniyor...</td></tr>
+            <tr><td colspan="14" class="table-empty">Yükleniyor...</td></tr>
           </tbody>
         </table>
       </div>
@@ -194,40 +238,147 @@
 
         <div class="stat-cards">
           <div class="stat-card">
-            <div class="stat-label">Toplam Arama</div>
-            <div class="stat-value" id="statTotal">—</div>
+            <div class="stat-icon">📞</div>
+            <div class="stat-body">
+              <div class="stat-label">Toplam Arama</div>
+              <div class="stat-value" id="statTotal">—</div>
+            </div>
           </div>
           <div class="stat-card">
-            <div class="stat-label">Ort. Süre</div>
-            <div class="stat-value" id="statAvgDur">—</div>
+            <div class="stat-icon">✅</div>
+            <div class="stat-body">
+              <div class="stat-label">Cevaplanan</div>
+              <div class="stat-value" id="statCompleted">—</div>
+              <div class="stat-sub" id="statAnswerRate">— cevap oranı</div>
+            </div>
           </div>
           <div class="stat-card">
-            <div class="stat-label">Randevu Alınan</div>
-            <div class="stat-value" id="statAppCount">—</div>
+            <div class="stat-icon">⏱</div>
+            <div class="stat-body">
+              <div class="stat-label">Ort. Süre</div>
+              <div class="stat-value" id="statAvgDur">—</div>
+            </div>
           </div>
           <div class="stat-card">
-            <div class="stat-label">Toplam Maliyet</div>
-            <div class="stat-value" id="statCost">—</div>
+            <div class="stat-icon">🌡</div>
+            <div class="stat-body">
+              <div class="stat-label">Ort. Sıcaklık</div>
+              <div class="stat-value" id="statAvgHeat">—</div>
+              <div class="stat-sub" id="statConvSub">— dönüşüm (≥60)</div>
+            </div>
+          </div>
+          <div class="stat-card stat-card-highlight">
+            <div class="stat-icon">📅</div>
+            <div class="stat-body">
+              <div class="stat-label">Randevu</div>
+              <div class="stat-value" id="statRandevu">—</div>
+              <div class="stat-sub" id="statRandevuRate">— randevu oranı</div>
+            </div>
           </div>
           <div class="stat-card">
-            <div class="stat-label">Randevu Oranı</div>
-            <div class="stat-value" id="statAppRate">—</div>
+            <div class="stat-icon">💰</div>
+            <div class="stat-body">
+              <div class="stat-label">Toplam Maliyet</div>
+              <div class="stat-value" id="statCost">—</div>
+              <div class="stat-sub" id="statCostPer">— / arama</div>
+            </div>
           </div>
         </div>
 
         <div class="charts-grid">
           <div class="chart-card span2">
             <div class="chart-title">Günlük Arama Sayısı — Son 30 Gün</div>
-            <canvas id="chartDailyCalls"></canvas>
+            <div class="chart-wrap"><canvas id="chartDailyCalls"></canvas></div>
           </div>
           <div class="chart-card span2">
             <div class="chart-title">Maliyet Trendi — Son 30 Gün ($)</div>
-            <canvas id="chartCostTrend"></canvas>
+            <div class="chart-wrap"><canvas id="chartCostTrend"></canvas></div>
           </div>
-          <div class="chart-card span2">
-            <div class="chart-title">Randevu Dönüşüm Oranı</div>
-            <canvas id="chartAppointmentRate"></canvas>
+          <div class="chart-card">
+            <div class="chart-title">Sıcaklık Dağılımı</div>
+            <div class="chart-wrap"><canvas id="chartHeatDist"></canvas></div>
           </div>
+          <div class="chart-card">
+            <div class="chart-title">Niyet Dağılımı</div>
+            <div class="chart-wrap"><canvas id="chartIntentDist"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Aksiyon Dağılımı</div>
+            <div class="chart-wrap"><canvas id="chartActionDist"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Saatlik Arama Dağılımı</div>
+            <div class="chart-wrap"><canvas id="chartHourly"></canvas></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── TAB 4: TOPLU ARAMA ─────────────────────────────── -->
+    <div class="tab-content" id="tabCampaign">
+      <div class="campaign-layout">
+
+        <!-- Üst kontrol çubuğu -->
+        <div class="campaign-toolbar">
+          <div class="campaign-upload-area" id="campaignUploadArea">
+            <input type="file" id="campaignFile" accept=".xlsx,.xls,.csv" style="display:none"/>
+            <button class="btn-upload" id="btnUpload">📂 Excel / CSV Yükle</button>
+            <span class="upload-hint">Ad, Telefon, Bölge, Notlar sütunları</span>
+          </div>
+          <div class="campaign-controls">
+            <div class="concurrency-group">
+              <label>Eş Zamanlı Arama</label>
+              <select id="campaignConcurrency">
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+              </select>
+            </div>
+            <button class="btn-campaign-start" id="btnCampaignStart" disabled>▶ Başlat</button>
+            <button class="btn-campaign-pause" id="btnCampaignPause" disabled>⏸ Duraklat</button>
+            <button class="btn-campaign-stop"  id="btnCampaignStop"  disabled>⏹ Durdur</button>
+          </div>
+        </div>
+
+        <!-- İlerleme çubuğu -->
+        <div class="campaign-progress-bar" id="campaignProgressBar" style="display:none">
+          <div class="progress-info">
+            <span id="progressText">0 / 0</span>
+            <span id="progressPct">0%</span>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" id="progressFill" style="width:0%"></div>
+          </div>
+          <div class="progress-stats">
+            <span class="ps-item ps-success" id="psDone">✅ 0 Tamamlandı</span>
+            <span class="ps-item ps-randevu" id="psRandevu">📅 0 Randevu</span>
+            <span class="ps-item ps-fail"    id="psFail">❌ 0 Başarısız</span>
+            <span class="ps-item ps-active"  id="psActive">📞 0 Aktif</span>
+          </div>
+        </div>
+
+        <!-- Kişi listesi -->
+        <div class="campaign-table-wrap">
+          <table class="campaign-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Ad Soyad</th>
+                <th>Telefon</th>
+                <th>Bölge</th>
+                <th>Durum</th>
+                <th>Sıcaklık</th>
+                <th>Randevu</th>
+                <th>Süre</th>
+              </tr>
+            </thead>
+            <tbody id="campaignTableBody">
+              <tr><td colspan="8" class="table-empty">Excel veya CSV dosyası yükleyin</td></tr>
+            </tbody>
+          </table>
         </div>
 
       </div>
@@ -262,7 +413,35 @@
 
 <div class="toast-container" id="toastContainer"></div>
 
+<!-- SENARYO MODAL -->
+<div class="modal-overlay" id="scenarioModalOverlay"></div>
+<div class="modal" id="scenarioModal">
+  <div class="modal-header">
+    <div class="modal-title">🎭 Senaryolar</div>
+    <button class="modal-close" id="scenarioModalClose">✕</button>
+  </div>
+  <div class="modal-body">
+    <div class="scenario-list" id="scenarioList"></div>
+    <div class="scenario-form" id="scenarioForm">
+      <input type="hidden" id="scenarioEditId"/>
+      <div class="form-group">
+        <label>Senaryo Adı</label>
+        <input type="text" id="scenarioName" placeholder="Değerleme Teklifi v2"/>
+      </div>
+      <div class="form-group">
+        <label>Sistem Promptu</label>
+        <textarea id="scenarioPrompt" rows="10" placeholder="[Identity]&#10;Sen bir..."></textarea>
+      </div>
+      <div class="scenario-form-actions">
+        <button class="btn-secondary" id="btnScenarioCancel">İptal</button>
+        <button class="btn-start" id="btnScenarioSave" style="width:auto;padding:10px 20px">Kaydet</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

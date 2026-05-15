@@ -4,13 +4,13 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import path from 'path';
 import dotenv from 'dotenv';
-import { spawn } from 'child_process';
 
 dotenv.config();
 
 import { generateCallSummary } from './ai';
-import { createVapiCall, endVapiCall, fetchVapiCall } from './vapi';
+import { createVapiCall, endVapiCall } from './vapi';
 import { getAllAppointments, saveAppointment, deleteAppointment } from './appointments';
+import { getAllScenarios, getScenario, createScenario, updateScenario, deleteScenario } from './scenarios';
 import {
   getAllCalls, readCall, createCall, updateCall,
   appendTranscript, updateCosts, saveCallSummary,
@@ -19,14 +19,12 @@ import {
 import { VapiCallRequest, VapiWebhookPayload, VapiCostItem, CallFilters } from './types';
 
 const app   = express();
-const PORT  = process.env.PORT || 3000;
+const PORT  = process.env.PORT || 5000;
+const HOST  = '0.0.0.0';
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
-
-// ─── TUNNEL URL ──────────────────────────────────────────────────────────────
-let tunnelWebhookUrl: string | null = null;
 
 // ─── SSE ─────────────────────────────────────────────────────────────────────
 
@@ -50,15 +48,15 @@ app.get('/api/events', (req: Request, res: Response) => {
 
 app.post('/api/call', async (req: Request, res: Response) => {
   try {
-    const { customer } = req.body as VapiCallRequest;
+    const { customer, scenarioId } = req.body as VapiCallRequest;
     if (!customer?.name || !customer?.phone)
       return res.status(400).json({ success: false, error: 'Ad ve telefon zorunlu' });
 
-    const vapiCall = await createVapiCall(customer, tunnelWebhookUrl ?? undefined);
-    const record   = createCall(vapiCall.id, customer);
+    const scenario = scenarioId ? getScenario(scenarioId) : null;
+    const vapiCall = await createVapiCall(customer, scenario?.systemPrompt);
+    const record   = createCall(vapiCall.id, customer, scenario?.id, scenario?.name);
 
     console.log(`[Vapi] Arama başlatıldı: ${vapiCall.id} → ${customer.phone}`);
-    pollCallUntilEnded(vapiCall.id).catch(console.error);
     return res.json({ success: true, data: { callId: vapiCall.id, recordId: record.callId } });
   } catch (err) {
     console.error('[API] /call hatası:', err);
@@ -121,20 +119,27 @@ app.post('/webhook', (req: Request, res: Response) => {
       const endReason  = msg.call?.endedReason;
       const status     = endedReasonToStatus(endReason);
       const recording  = msg.recordingUrl || msg.artifact?.recordingUrl;
+      console.log(`[Webhook] end-of-call-report → endedReason: "${endReason}" → status: "${status}" | süre: ${duration ?? '?'}s`);
       const costs      = parseCosts(msg.costs, msg.cost);
 
-      // artifact.messages'dan transcript yoksa doldur
-      const record = readCall(vapiCallId);
-      if (record && record.transcript.length === 0 && msg.artifact?.messages?.length) {
-        msg.artifact.messages.forEach(m => {
-          if (m.role === 'assistant' || m.role === 'user') {
-            appendTranscript(vapiCallId, {
-              role: m.role as 'assistant' | 'user',
-              text: m.message,
-              timestamp: new Date(m.time).toISOString(),
-            });
-          }
+      // artifact.messages her zaman tam konuşmayı içerir (assistant + user).
+      // Varsa mevcut transcript'i silerek artifact'tan yeniden yaz.
+      if (msg.artifact?.messages?.length) {
+        updateCall(vapiCallId, { transcript: [] } as any);
+        msg.artifact.messages.forEach((m: any) => {
+          if (m.role !== 'assistant' && m.role !== 'user') return;
+          // Vapi farklı versiyonlarda message, content veya text kullanabilir
+          const text: string = m.message || m.content || m.text || '';
+          if (!text.trim()) return;
+          appendTranscript(vapiCallId, {
+            role: m.role as 'assistant' | 'user',
+            text,
+            timestamp: new Date(m.time || m.timestamp || Date.now()).toISOString(),
+          });
         });
+        console.log(`[Webhook] ${vapiCallId} transcript artifact'tan yazıldı: ${msg.artifact.messages.filter((m:any) => m.role==='assistant'||m.role==='user').length} mesaj`);
+      } else {
+        console.warn(`[Webhook] ${vapiCallId} artifact.messages yok`);
       }
 
       updateCall(vapiCallId, {
@@ -149,12 +154,19 @@ app.post('/webhook', (req: Request, res: Response) => {
       break;
     }
 
-    case 'call-ended':
+    case 'call-ended': {
       if (!vapiCallId) break;
-      const s = endedReasonToStatus(msg.call?.endedReason);
-      updateCall(vapiCallId, { status: s, endTime: new Date().toISOString() } as any);
-      broadcast('call-ended', { vapiCallId, endedReason: msg.call?.endedReason, status: s });
+      const existing  = readCall(vapiCallId);
+      // end-of-call-report zaten 'completed' set ettiyse call-ended ile ezme
+      const alreadyDone = existing?.status && existing.status !== 'in-progress';
+      const newReason   = msg.call?.endedReason;
+      const s2 = newReason
+        ? endedReasonToStatus(newReason)
+        : alreadyDone ? existing!.status : 'failed';
+      updateCall(vapiCallId, { status: s2, endTime: new Date().toISOString() } as any);
+      broadcast('call-ended', { vapiCallId, endedReason: newReason, status: s2 });
       break;
+    }
   }
 });
 
@@ -178,47 +190,6 @@ function parseCosts(costsArr?: VapiCostItem[], totalFallback?: number) {
   return c;
 }
 
-async function pollCallUntilEnded(vapiCallId: string): Promise<void> {
-  for (let i = 0; i < 60; i++) {        // maks 5 dk (60 × 5s)
-    await new Promise(r => setTimeout(r, 5000));
-    const data = await fetchVapiCall(vapiCallId);
-    if (!data || data.status !== 'ended') continue;
-
-    const endReason  = data.endedReason;
-    const status     = endedReasonToStatus(endReason);
-    const endTime    = data.endedAt || new Date().toISOString();
-    const duration   = data.call?.duration ?? data.durationSeconds;
-    const recording  = data.artifact?.recordingUrl ?? data.recordingUrl;
-    const costs      = parseCosts(data.costs, data.cost);
-
-    // Transcript — artifact.messages
-    const record = readCall(vapiCallId);
-    if (record && record.transcript.length === 0 && data.artifact?.messages?.length) {
-      data.artifact.messages.forEach((m: any) => {
-        if (m.role === 'assistant' || m.role === 'user') {
-          appendTranscript(vapiCallId, {
-            role: m.role as 'assistant' | 'user',
-            text: m.message ?? m.content ?? '',
-            timestamp: m.time ? new Date(m.time).toISOString() : new Date().toISOString(),
-          });
-        }
-      });
-    }
-
-    updateCall(vapiCallId, {
-      status, endTime, duration,
-      endedReason: endReason,
-      recordingUrl: recording,
-      ...(costs ? { costs } : {}),
-    } as any);
-
-    broadcast('call-ended', { vapiCallId, endedReason: endReason, duration, status });
-    console.log(`[Poll] Arama bitti: ${vapiCallId} → ${endReason}`);
-    generateSummaryForCall(vapiCallId).catch(console.error);
-    break;
-  }
-}
-
 async function generateSummaryForCall(vapiCallId: string): Promise<void> {
   const record = readCall(vapiCallId);
   if (!record || !record.transcript.length) return;
@@ -238,8 +209,12 @@ async function generateSummaryForCall(vapiCallId: string): Promise<void> {
 
 app.get('/api/calls', (req: Request, res: Response) => {
   try {
-    const { dateFrom, dateTo, randevu, ilgi, status } = req.query as Record<string, string>;
-    const filters: CallFilters = { dateFrom, dateTo, randevu, ilgi, status };
+    const { dateFrom, dateTo, minScore, maxScore, niyet, aksiyon, status, randevu, scenarioId } = req.query as Record<string, string>;
+    const filters: CallFilters = {
+      dateFrom, dateTo, niyet, aksiyon, status, randevu, scenarioId,
+      minScore: minScore !== undefined ? Number(minScore) : undefined,
+      maxScore: maxScore !== undefined ? Number(maxScore) : undefined,
+    };
     return res.json({ success: true, data: getAllCalls(filters) });
   } catch (err) {
     return res.status(500).json({ success: false, error: String(err) });
@@ -294,8 +269,12 @@ app.get('/api/stats', (_req: Request, res: Response) => {
 
 app.get('/api/export', (req: Request, res: Response) => {
   try {
-    const { dateFrom, dateTo, randevu, ilgi, status } = req.query as Record<string, string>;
-    const filters: CallFilters = { dateFrom, dateTo, randevu, ilgi, status };
+    const { dateFrom, dateTo, minScore, maxScore, niyet, aksiyon, status, randevu, scenarioId } = req.query as Record<string, string>;
+    const filters: CallFilters = {
+      dateFrom, dateTo, niyet, aksiyon, status, randevu, scenarioId,
+      minScore: minScore !== undefined ? Number(minScore) : undefined,
+      maxScore: maxScore !== undefined ? Number(maxScore) : undefined,
+    };
     const csv = exportCSV(filters);
     res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="propcall-export.csv"' });
     return res.send('﻿' + csv); // BOM for Excel
@@ -328,51 +307,48 @@ app.delete('/api/appointments/:id', (req, res) => {
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
 
+// ─── SENARYOLAR ──────────────────────────────────────────────────────────────
+
+app.get('/api/scenarios', (_req, res) => {
+  try { return res.json({ success: true, data: getAllScenarios() }); }
+  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.post('/api/scenarios', (req, res) => {
+  try {
+    const { name, systemPrompt } = req.body as { name: string; systemPrompt: string };
+    if (!name || !systemPrompt)
+      return res.status(400).json({ success: false, error: 'Ad ve prompt zorunlu' });
+    return res.status(201).json({ success: true, data: createScenario(name, systemPrompt) });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.put('/api/scenarios/:id', (req, res) => {
+  try {
+    const { name, systemPrompt } = req.body as { name: string; systemPrompt: string };
+    const updated = updateScenario(req.params.id, name, systemPrompt);
+    if (!updated) return res.status(404).json({ success: false, error: 'Senaryo bulunamadı' });
+    return res.json({ success: true, data: updated });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.delete('/api/scenarios/:id', (req, res) => {
+  try {
+    if (!deleteScenario(req.params.id))
+      return res.status(404).json({ success: false, error: 'Senaryo bulunamadı' });
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
 // ─── CATCH-ALL ───────────────────────────────────────────────────────────────
 
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'index.html')));
 
-// ─── CLOUDFLARE TUNNEL ───────────────────────────────────────────────────────
-
-function startTunnel(port: number): void {
-  const ngrokPath = 'C:\\Users\\musta\\ngrok.exe';
-  const ng = spawn(ngrokPath, ['http', String(port)], { windowsHide: true });
-
-  ng.on('error', (err) => console.error('[Tunnel] ngrok başlatılamadı:', err.message));
-  ng.on('close', (code) => console.log(`[Tunnel] Kapandı (${code})`));
-
-  // ngrok API'den URL'i al
-  setTimeout(async () => {
-    try {
-      const res  = await fetch('http://localhost:4040/api/tunnels');
-      const json = await res.json() as any;
-      const tunnelUrl = (json.tunnels as any[]).find((t: any) => t.proto === 'https')?.public_url;
-      if (!tunnelUrl) { console.error('[Tunnel] ngrok URL bulunamadı'); return; }
-      tunnelWebhookUrl = `${tunnelUrl}/webhook`;
-      console.log(`   → Tunnel:  ${tunnelUrl}`);
-      console.log(`   → Webhook: ${tunnelWebhookUrl}\n`);
-      const assistantId = process.env.VAPI_ASSISTANT_ID;
-      if (assistantId && process.env.VAPI_API_KEY) {
-        await fetch(`https://api.vapi.ai/assistant/${assistantId}`, {
-          method: 'PATCH',
-          headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ serverUrl: tunnelWebhookUrl }),
-        });
-        console.log(`   → Vapi serverUrl güncellendi ✓\n`);
-      }
-    } catch (err) {
-      console.error('[Tunnel] ngrok API hatası:', err);
-    }
-  }, 3000);
-}
-
 // ─── BAŞLAT ──────────────────────────────────────────────────────────────────
 
-app.listen(PORT, async () => {
+app.listen(Number(PORT), HOST, () => {
   console.log(`\n✅ PropCall AI sunucusu başlatıldı`);
-  console.log(`   → http://localhost:${PORT}`);
+  console.log(`   → http://${HOST}:${PORT}`);
   console.log(`   → Anthropic: ${process.env.ANTHROPIC_API_KEY ? '✓' : '✗'}`);
   console.log(`   → Vapi:      ${process.env.VAPI_API_KEY ? '✓' : '✗'}\n`);
-
-  startTunnel(Number(PORT));
 });
