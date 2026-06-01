@@ -205,6 +205,35 @@ async function generateSummaryForCall(vapiCallId: string): Promise<void> {
   }
 }
 
+// ─── TAKİP LİSTESİ ───────────────────────────────────────────────────────────
+
+app.get('/api/followup', (_req: Request, res: Response) => {
+  try {
+    const all = getAllCalls();
+    const finished = all.filter(c => c.status !== 'in-progress' && c.summary);
+
+    const byAction = (action: string) =>
+      finished
+        .filter(c => c.summary!.tavsiye_edilen_aksiyon === action)
+        .sort((a, b) => (b.summary!.sicaklik_skoru ?? 0) - (a.summary!.sicaklik_skoru ?? 0));
+
+    return res.json({
+      success: true,
+      data: {
+        randevuAlanlar:  finished.filter(c => c.summary!.randevu_alindi === true)
+                                 .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime()),
+        geriAranacaklar: byAction('Ara'),
+        beklemeListesi:  byAction('Bekleme listesine al'),
+        cevreTakibi:     byAction('Çevre takibi'),
+        manuelTakip:     all.filter(c => c.followUp && c.summary?.tavsiye_edilen_aksiyon !== 'Uğraşma')
+                            .sort((a, b) => (b.summary?.sicaklik_skoru ?? 0) - (a.summary?.sicaklik_skoru ?? 0)),
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
 // ─── ARAMALAR ─────────────────────────────────────────────────────────────────
 
 app.get('/api/calls', (req: Request, res: Response) => {

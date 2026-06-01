@@ -43,7 +43,8 @@ SADECE bu JSON formatında döndür:
   "cevredeki_potansiyel": true|false,
   "randevu_alindi": true|false,
   "ozet": "2-3 cümle emlakçı için özet",
-  "tavsiye_edilen_aksiyon": "Ara|Bekleme listesine al|Çevre takibi|Uğraşma"
+  "tavsiye_edilen_aksiyon": "Ara|Bekleme listesine al|Çevre takibi|Uğraşma",
+  "geri_donus_notu": "string veya null"
 }
 
 randevu_alindi kriterleri:
@@ -55,7 +56,20 @@ Sıcaklık skoru kriterleri:
 - 60-79: İlgili ama henüz karar vermemiş
 - 40-59: Belirsiz niyet, takip değer
 - 20-39: Şu an değil ama gelecekte olabilir
-- 0-19: İlgisiz veya transcript yok`,
+- 0-19: İlgisiz veya transcript yok
+
+tavsiye_edilen_aksiyon kriterleri:
+- "Ara": İlgi var ama randevu alınamadı; tekrar aranmalı
+- "Bekleme listesine al": Şu an değil ama gelecekte potansiyel var
+- "Çevre takibi": Komşu/yakın muhitte satış potansiyeli olduğunu belirtti
+- "Uğraşma": Hiç ilgi yok, devam etmeye değmez
+
+geri_donus_notu kriterleri:
+- Ara/Bekleme/Çevre için ZORUNLU: 1 cümle, somut ve kişiye özel not.
+  Örnekler: "3 ay içinde daire satmayı planlıyor, Ocak'ta tekrar ara"
+            "Meşguldü, akşam saatlerini tercih ediyor — yarın 18:00 sonrası dene"
+            "Komşusu da satmak istiyor, komşunun numarasını istedi"
+- Uğraşma veya randevu alındı için null döndür`,
       },
     ],
   });

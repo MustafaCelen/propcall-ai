@@ -99,6 +99,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initScenarios();
   connectSSE();
   loadHistory();
+  loadFollowupBadge();
 });
 
 // ─── TABS ─────────────────────────────────────────────────────────────────────
@@ -115,11 +116,13 @@ function switchTab(name) {
     const match = (name === 'live'     && c.id === 'tabLive')     ||
                   (name === 'history'  && c.id === 'tabHistory')  ||
                   (name === 'stats'    && c.id === 'tabStats')    ||
-                  (name === 'campaign' && c.id === 'tabCampaign');
+                  (name === 'campaign' && c.id === 'tabCampaign') ||
+                  (name === 'followup' && c.id === 'tabFollowup');
     c.classList.toggle('active', match);
   });
   if (name === 'history') loadHistory();
   if (name === 'stats')   loadStats();
+  if (name === 'followup') loadFollowup();
 }
 
 // ─── SSE ─────────────────────────────────────────────────────────────────────
@@ -949,6 +952,162 @@ function actionClass(action) {
 function randevuBadge(summary) {
   if (!summary || summary.randevu_alindi == null) return '—';
   return summary.randevu_alindi ? '<span class="randevu-yes">✅</span>' : '<span class="randevu-no">❌</span>';
+}
+
+// ─── TAKİP ───────────────────────────────────────────────────────────────────
+
+async function loadFollowupBadge() {
+  try {
+    const resp = await fetch('/api/followup');
+    const json = await resp.json();
+    if (!json.success) return;
+    const d = json.data;
+    const total = d.geriAranacaklar.length + d.beklemeListesi.length +
+                  d.cevreTakibi.length + d.manuelTakip.length;
+    const badge = $('followupBadge');
+    if (badge) {
+      badge.textContent = total;
+      badge.style.display = total > 0 ? 'inline-block' : 'none';
+    }
+  } catch (_) {}
+}
+
+async function loadFollowup() {
+  const layout = $('followupLayout');
+  layout.innerHTML = '<div class="followup-loading">Yükleniyor...</div>';
+  try {
+    const resp = await fetch('/api/followup');
+    const json = await resp.json();
+    if (!json.success) throw new Error(json.error);
+    renderFollowup(json.data);
+  } catch (err) {
+    layout.innerHTML = '<div class="followup-loading">Hata: ' + err.message + '</div>';
+  }
+}
+
+function renderFollowup(d) {
+  const layout = $('followupLayout');
+
+  const sections = [
+    {
+      key: 'randevuAlanlar',
+      icon: '📅',
+      title: 'Randevu Alınanlar',
+      color: 'randevu',
+      emptyMsg: 'Henüz randevu alınmadı',
+      items: d.randevuAlanlar,
+    },
+    {
+      key: 'geriAranacaklar',
+      icon: '🔥',
+      title: 'Geri Aranacaklar',
+      color: 'ara',
+      emptyMsg: 'Geri aranacak kimse yok',
+      items: d.geriAranacaklar,
+    },
+    {
+      key: 'beklemeListesi',
+      icon: '⏳',
+      title: 'Bekleme Listesi',
+      color: 'bekle',
+      emptyMsg: 'Bekleme listesi boş',
+      items: d.beklemeListesi,
+    },
+    {
+      key: 'cevreTakibi',
+      icon: '🏘',
+      title: 'Çevre Takibi',
+      color: 'cevre',
+      emptyMsg: 'Çevre takibi yok',
+      items: d.cevreTakibi,
+    },
+    {
+      key: 'manuelTakip',
+      icon: '⭐',
+      title: 'Manuel Takip',
+      color: 'manuel',
+      emptyMsg: 'Manuel takip işaretlenen yok',
+      items: d.manuelTakip,
+    },
+  ];
+
+  layout.innerHTML = sections.map(sec => {
+    const cards = sec.items.length
+      ? sec.items.map(c => followupCard(c, sec.color)).join('')
+      : '<div class="fu-empty">' + sec.emptyMsg + '</div>';
+
+    return '<div class="fu-section">' +
+      '<div class="fu-section-header">' +
+        '<span class="fu-icon">' + sec.icon + '</span>' +
+        '<span class="fu-title">' + sec.title + '</span>' +
+        '<span class="fu-count">' + sec.items.length + '</span>' +
+      '</div>' +
+      '<div class="fu-cards">' + cards + '</div>' +
+    '</div>';
+  }).join('');
+
+  layout.querySelectorAll('.fu-detail-btn').forEach(btn => {
+    btn.addEventListener('click', () => openDrawer(btn.dataset.id));
+  });
+  layout.querySelectorAll('.fu-call-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const name  = btn.dataset.name;
+      const phone = btn.dataset.phone;
+      const region = btn.dataset.region || '';
+      if ($('customerName'))  $('customerName').value  = name;
+      if ($('customerPhone')) $('customerPhone').value = phone;
+      if ($('customerRegion')) $('customerRegion').value = region;
+      switchTab('live');
+    });
+  });
+}
+
+function followupCard(c, colorClass) {
+  const s = c.summary;
+  const heat = s ? s.sicaklik_skoru : null;
+  const heatCls = heat >= 80 ? 'heat-hot' : heat >= 60 ? 'heat-warm' : heat >= 40 ? 'heat-mid' : 'heat-cold';
+  const heatStr = heat != null ? heat : '—';
+  const niyet   = s ? s.niyet   : null;
+  const bolge   = s ? s.bolge   : null;
+  const note    = s ? s.geri_donus_notu : null;
+  const ago     = timeSince(c.startTime);
+
+  return '<div class="fu-card fu-' + colorClass + '">' +
+    '<div class="fu-card-top">' +
+      '<div class="fu-person">' +
+        '<div class="fu-name">' + esc(c.customerName) + '</div>' +
+        '<div class="fu-phone">' + esc(c.customerPhone) + '</div>' +
+      '</div>' +
+      '<div class="fu-heat ' + heatCls + '">' + heatStr + '</div>' +
+    '</div>' +
+    (note
+      ? '<div class="fu-note">💡 ' + esc(note) + '</div>'
+      : '') +
+    '<div class="fu-meta">' +
+      (niyet && niyet !== 'yok' && niyet !== 'belirsiz' ? '<span class="fu-tag">' + esc(niyet) + '</span>' : '') +
+      (bolge ? '<span class="fu-tag">' + esc(bolge) + '</span>' : '') +
+      '<span class="fu-ago">' + ago + '</span>' +
+    '</div>' +
+    '<div class="fu-actions">' +
+      '<button class="fu-call-btn" data-id="' + c.vapiCallId + '" ' +
+        'data-name="' + esc(c.customerName) + '" ' +
+        'data-phone="' + esc(c.customerPhone) + '" ' +
+        'data-region="' + esc((c.customerInfo && c.customerInfo.region) || '') + '">📞 Ara</button>' +
+      '<button class="fu-detail-btn" data-id="' + c.vapiCallId + '">Detay ›</button>' +
+    '</div>' +
+  '</div>';
+}
+
+function timeSince(iso) {
+  if (!iso) return '';
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins  = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days  = Math.floor(diff / 86400000);
+  if (days  > 0) return days  + ' gün önce';
+  if (hours > 0) return hours + ' saat önce';
+  if (mins  > 0) return mins  + ' dk önce';
+  return 'Az önce';
 }
 
 // ─── CAMPAIGN ────────────────────────────────────────────────────────────────

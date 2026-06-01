@@ -33,6 +33,7 @@ export interface CallSummary {
   randevu_alindi: boolean;
   ozet: string;
   tavsiye_edilen_aksiyon: 'Ara' | 'Bekleme listesine al' | 'Çevre takibi' | 'Uğraşma';
+  geri_donus_notu: string | null;
 }
 
 export interface CallRecord {
