@@ -53,10 +53,9 @@
         <div class="info-box-title">🤖 Asistan Akışı</div>
         <ul class="info-list">
           <li>Kendini tanıtır, vakit sorar</li>
-          <li>Gayrimenkul niyetini keşfeder</li>
-          <li>Bölge · Bütçe · Zaman alır</li>
-          <li>Çevredeki potansiyeli sorar</li>
-          <li>Max 3-4 dakika · Özet otomatik</li>
+          <li>Ücretsiz Gayrimenkul Röntgeni teklif eder</li>
+          <li>Randevu almaya odaklanır</li>
+          <li>Maks. 2 dakika · Özet otomatik</li>
         </ul>
       </div>
     </div>
@@ -125,7 +124,7 @@
           <div class="welcome-badges">
             <span class="badge">🤖 Vapi AI Araması</span>
             <span class="badge">📝 Canlı Transcript</span>
-            <span class="badge">📊 Niyet Analizi</span>
+            <span class="badge">📊 İlgi Analizi</span>
           </div>
         </div>
       </div>
@@ -145,23 +144,13 @@
           <input type="date" id="filterDateTo" />
         </div>
         <div class="filter-group">
-          <label>Sıcaklık</label>
-          <div class="range-row">
-            <input type="number" id="filterMinScore" placeholder="0"   min="0" max="100" />
-            <span>—</span>
-            <input type="number" id="filterMaxScore" placeholder="100" min="0" max="100" />
-          </div>
-        </div>
-        <div class="filter-group">
-          <label>Niyet</label>
-          <select id="filterNiyet">
+          <label>İlgi</label>
+          <select id="filterIlgi">
             <option value="">Tümü</option>
-            <option value="alım">Alım</option>
-            <option value="satım">Satım</option>
-            <option value="kiralama">Kiralama</option>
-            <option value="yatırım">Yatırım</option>
+            <option value="yüksek">Yüksek</option>
+            <option value="orta">Orta</option>
+            <option value="düşük">Düşük</option>
             <option value="yok">Yok</option>
-            <option value="belirsiz">Belirsiz</option>
           </select>
         </div>
         <div class="filter-group">
@@ -170,7 +159,6 @@
             <option value="">Tümü</option>
             <option value="Ara">Ara</option>
             <option value="Bekleme listesine al">Beklemede</option>
-            <option value="Çevre takibi">Çevre</option>
             <option value="Uğraşma">Uğraşma</option>
           </select>
         </div>
@@ -213,12 +201,9 @@
               <th>Müşteri</th>
               <th>Telefon</th>
               <th>Süre</th>
-              <th>Sıcaklık</th>
-              <th>Niyet</th>
-              <th>Bölge</th>
-              <th>Bütçe</th>
-              <th>Senaryo</th>
               <th>Randevu</th>
+              <th>İlgi</th>
+              <th>Ret Nedeni</th>
               <th>Aksiyon</th>
               <th>Maliyet</th>
               <th>Durum</th>
@@ -226,7 +211,7 @@
             </tr>
           </thead>
           <tbody id="callsTableBody">
-            <tr><td colspan="14" class="table-empty">Yükleniyor...</td></tr>
+            <tr><td colspan="11" class="table-empty">Yükleniyor...</td></tr>
           </tbody>
         </table>
       </div>
@@ -260,14 +245,6 @@
               <div class="stat-value" id="statAvgDur">—</div>
             </div>
           </div>
-          <div class="stat-card">
-            <div class="stat-icon">🌡</div>
-            <div class="stat-body">
-              <div class="stat-label">Ort. Sıcaklık</div>
-              <div class="stat-value" id="statAvgHeat">—</div>
-              <div class="stat-sub" id="statConvSub">— dönüşüm (≥60)</div>
-            </div>
-          </div>
           <div class="stat-card stat-card-highlight">
             <div class="stat-icon">📅</div>
             <div class="stat-body">
@@ -296,12 +273,12 @@
             <div class="chart-wrap"><canvas id="chartCostTrend"></canvas></div>
           </div>
           <div class="chart-card">
-            <div class="chart-title">Sıcaklık Dağılımı</div>
-            <div class="chart-wrap"><canvas id="chartHeatDist"></canvas></div>
+            <div class="chart-title">İlgi Seviyesi Dağılımı</div>
+            <div class="chart-wrap"><canvas id="chartIlgiDist"></canvas></div>
           </div>
           <div class="chart-card">
-            <div class="chart-title">Niyet Dağılımı</div>
-            <div class="chart-wrap"><canvas id="chartIntentDist"></canvas></div>
+            <div class="chart-title">Ret Nedeni Dağılımı</div>
+            <div class="chart-wrap"><canvas id="chartRetDist"></canvas></div>
           </div>
           <div class="chart-card">
             <div class="chart-title">Aksiyon Dağılımı</div>

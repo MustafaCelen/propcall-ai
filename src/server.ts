@@ -212,10 +212,13 @@ app.get('/api/followup', (_req: Request, res: Response) => {
     const all = getAllCalls();
     const finished = all.filter(c => c.status !== 'in-progress' && c.summary);
 
+    const ilgiRank: Record<string, number> = { yüksek: 3, orta: 2, düşük: 1, yok: 0 };
+    const byIlgi = (a: typeof finished[0], b: typeof finished[0]) =>
+      (ilgiRank[b.summary?.ilgi_seviyesi ?? 'yok'] ?? 0) -
+      (ilgiRank[a.summary?.ilgi_seviyesi ?? 'yok'] ?? 0);
+
     const byAction = (action: string) =>
-      finished
-        .filter(c => c.summary!.tavsiye_edilen_aksiyon === action)
-        .sort((a, b) => (b.summary!.sicaklik_skoru ?? 0) - (a.summary!.sicaklik_skoru ?? 0));
+      finished.filter(c => c.summary!.tavsiye_edilen_aksiyon === action).sort(byIlgi);
 
     return res.json({
       success: true,
@@ -224,9 +227,8 @@ app.get('/api/followup', (_req: Request, res: Response) => {
                                  .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime()),
         geriAranacaklar: byAction('Ara'),
         beklemeListesi:  byAction('Bekleme listesine al'),
-        cevreTakibi:     byAction('Çevre takibi'),
         manuelTakip:     all.filter(c => c.followUp && c.summary?.tavsiye_edilen_aksiyon !== 'Uğraşma')
-                            .sort((a, b) => (b.summary?.sicaklik_skoru ?? 0) - (a.summary?.sicaklik_skoru ?? 0)),
+                            .sort(byIlgi),
       },
     });
   } catch (err) {
@@ -238,12 +240,8 @@ app.get('/api/followup', (_req: Request, res: Response) => {
 
 app.get('/api/calls', (req: Request, res: Response) => {
   try {
-    const { dateFrom, dateTo, minScore, maxScore, niyet, aksiyon, status, randevu, scenarioId } = req.query as Record<string, string>;
-    const filters: CallFilters = {
-      dateFrom, dateTo, niyet, aksiyon, status, randevu, scenarioId,
-      minScore: minScore !== undefined ? Number(minScore) : undefined,
-      maxScore: maxScore !== undefined ? Number(maxScore) : undefined,
-    };
+    const { dateFrom, dateTo, randevu, ilgi, aksiyon, status, scenarioId } = req.query as Record<string, string>;
+    const filters: CallFilters = { dateFrom, dateTo, randevu, ilgi, aksiyon, status, scenarioId };
     return res.json({ success: true, data: getAllCalls(filters) });
   } catch (err) {
     return res.status(500).json({ success: false, error: String(err) });
@@ -298,12 +296,8 @@ app.get('/api/stats', (_req: Request, res: Response) => {
 
 app.get('/api/export', (req: Request, res: Response) => {
   try {
-    const { dateFrom, dateTo, minScore, maxScore, niyet, aksiyon, status, randevu, scenarioId } = req.query as Record<string, string>;
-    const filters: CallFilters = {
-      dateFrom, dateTo, niyet, aksiyon, status, randevu, scenarioId,
-      minScore: minScore !== undefined ? Number(minScore) : undefined,
-      maxScore: maxScore !== undefined ? Number(maxScore) : undefined,
-    };
+    const { dateFrom, dateTo, randevu, ilgi, aksiyon, status, scenarioId } = req.query as Record<string, string>;
+    const filters: CallFilters = { dateFrom, dateTo, randevu, ilgi, aksiyon, status, scenarioId };
     const csv = exportCSV(filters);
     res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="propcall-export.csv"' });
     return res.send('﻿' + csv); // BOM for Excel

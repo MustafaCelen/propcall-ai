@@ -23,16 +23,12 @@ export interface VapiTranscriptEntry {
 }
 
 export interface CallSummary {
-  sicaklik_skoru: number;
-  niyet: 'alım' | 'satım' | 'kiralama' | 'yatırım' | 'yok' | 'belirsiz';
-  mulk_tipi: 'konut' | 'arsa' | 'işyeri' | 'belirsiz';
-  bolge: string | null;
-  butce: string | null;
-  zaman_cercevesi: 'acil' | '3ay' | '6ay' | 'belirsiz' | 'yok';
-  cevredeki_potansiyel: boolean;
   randevu_alindi: boolean;
+  ilgi_seviyesi: 'yüksek' | 'orta' | 'düşük' | 'yok';
+  ret_nedeni: string | null;
+  mulk_tipi: string | null;
   ozet: string;
-  tavsiye_edilen_aksiyon: 'Ara' | 'Bekleme listesine al' | 'Çevre takibi' | 'Uğraşma';
+  tavsiye_edilen_aksiyon: 'Ara' | 'Bekleme listesine al' | 'Uğraşma';
   geri_donus_notu: string | null;
 }
 
@@ -120,15 +116,13 @@ export interface StatsData {
   completedCalls: number;
   answerRate: number;
   avgDuration: number;
-  avgHeatScore: number;
   totalCost: number;
-  conversionRate: number;
   randevuCount: number;
   randevuRate: number;
-  dailyCalls: Array<{ date: string; count: number }>;
-  heatDistribution: Array<{ range: string; count: number }>;
-  intentDistribution: Array<{ niyet: string; count: number }>;
+  ilgiDistribution: Array<{ seviye: string; count: number }>;
+  retNedeniDistribution: Array<{ neden: string; count: number }>;
   actionDistribution: Array<{ action: string; count: number }>;
+  dailyCalls: Array<{ date: string; count: number }>;
   costTrend: Array<{ date: string; cost: number }>;
   hourlyDistribution: Array<{ hour: number; count: number }>;
   statusBreakdown: Array<{ status: string; count: number }>;
@@ -137,12 +131,10 @@ export interface StatsData {
 export interface CallFilters {
   dateFrom?: string;
   dateTo?: string;
-  minScore?: number;
-  maxScore?: number;
-  niyet?: string;
+  randevu?: string;
+  ilgi?: string;
   aksiyon?: string;
   status?: string;
-  randevu?: string;
   scenarioId?: string;
 }
 

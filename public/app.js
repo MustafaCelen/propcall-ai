@@ -53,9 +53,7 @@ const DOM = {
   welcomeScreen:    $('welcomeScreen'),
   filterDateFrom:   $('filterDateFrom'),
   filterDateTo:     $('filterDateTo'),
-  filterMinScore:   $('filterMinScore'),
-  filterMaxScore:   $('filterMaxScore'),
-  filterNiyet:      $('filterNiyet'),
+  filterIlgi:       $('filterIlgi'),
   filterAksiyon:    $('filterAksiyon'),
   filterStatus:     $('filterStatus'),
   filterRandevu:    $('filterRandevu'),
@@ -68,8 +66,6 @@ const DOM = {
   statCompleted:    $('statCompleted'),
   statAnswerRate:   $('statAnswerRate'),
   statAvgDur:       $('statAvgDur'),
-  statAvgHeat:      $('statAvgHeat'),
-  statConvSub:      $('statConvSub'),
   statCost:         $('statCost'),
   statCostPer:      $('statCostPer'),
   statRandevu:      $('statRandevu'),
@@ -410,13 +406,13 @@ function renderInlineSummary(s) {
   div.innerHTML =
     '<div class="inline-summary-title">📊 Özet</div>' +
     '<div class="summary-pills">' +
-      '<span class="pill heat-pill">' + s.sicaklik_skoru + '/100</span>' +
-      '<span class="pill n-' + s.niyet + '">' + esc(s.niyet) + '</span>' +
-      '<span class="pill">' + esc(s.mulk_tipi) + '</span>' +
-      (s.bolge ? '<span class="pill">📍 ' + esc(s.bolge) + '</span>' : '') +
-      (s.butce ? '<span class="pill">💰 ' + esc(s.butce) + '</span>' : '') +
+      randevuBadge(s) +
+      ilgiBadge(s.ilgi_seviyesi) +
+      (s.mulk_tipi ? '<span class="pill">🏠 ' + esc(s.mulk_tipi) + '</span>' : '') +
       '<span class="pill a-' + actionClass(s.tavsiye_edilen_aksiyon) + '">' + esc(s.tavsiye_edilen_aksiyon) + '</span>' +
     '</div>' +
+    (s.ret_nedeni ? '<div class="summary-ret">❌ ' + esc(s.ret_nedeni) + '</div>' : '') +
+    (s.geri_donus_notu ? '<div class="summary-note">💡 ' + esc(s.geri_donus_notu) + '</div>' : '') +
     '<div class="summary-text">' + esc(s.ozet) + '</div>';
   DOM.transcriptArea.appendChild(div);
   DOM.transcriptArea.scrollTop = DOM.transcriptArea.scrollHeight;
@@ -429,12 +425,10 @@ function initFilterBar() {
   DOM.btnClearFilter.addEventListener('click', () => {
     DOM.filterDateFrom.value  = '';
     DOM.filterDateTo.value    = '';
-    DOM.filterMinScore.value  = '';
-    DOM.filterMaxScore.value  = '';
-    DOM.filterNiyet.value     = '';
-    DOM.filterAksiyon.value   = '';
-    DOM.filterStatus.value    = '';
-    DOM.filterRandevu.value   = '';
+    if (DOM.filterRandevu) DOM.filterRandevu.value = '';
+    if (DOM.filterIlgi)    DOM.filterIlgi.value    = '';
+    if (DOM.filterAksiyon) DOM.filterAksiyon.value = '';
+    DOM.filterStatus.value = '';
     DOM.filterScenario.value  = '';
     state.currentFilters = {};
     loadHistory();
@@ -459,44 +453,41 @@ async function loadHistory() {
 
 function buildFilterParams() {
   const p = {};
-  if (DOM.filterDateFrom.value)  p.dateFrom  = DOM.filterDateFrom.value;
-  if (DOM.filterDateTo.value)    p.dateTo    = DOM.filterDateTo.value;
-  if (DOM.filterMinScore.value)  p.minScore  = DOM.filterMinScore.value;
-  if (DOM.filterMaxScore.value)  p.maxScore  = DOM.filterMaxScore.value;
-  if (DOM.filterNiyet.value)     p.niyet     = DOM.filterNiyet.value;
-  if (DOM.filterAksiyon.value)   p.aksiyon   = DOM.filterAksiyon.value;
-  if (DOM.filterStatus.value)    p.status    = DOM.filterStatus.value;
-  if (DOM.filterRandevu.value)   p.randevu    = DOM.filterRandevu.value;
-  if (DOM.filterScenario.value)  p.scenarioId = DOM.filterScenario.value;
+  if (DOM.filterDateFrom.value)               p.dateFrom   = DOM.filterDateFrom.value;
+  if (DOM.filterDateTo.value)                 p.dateTo     = DOM.filterDateTo.value;
+  if (DOM.filterRandevu && DOM.filterRandevu.value) p.randevu = DOM.filterRandevu.value;
+  if (DOM.filterIlgi    && DOM.filterIlgi.value)    p.ilgi    = DOM.filterIlgi.value;
+  if (DOM.filterAksiyon && DOM.filterAksiyon.value) p.aksiyon = DOM.filterAksiyon.value;
+  if (DOM.filterStatus.value)                 p.status     = DOM.filterStatus.value;
+  if (DOM.filterScenario && DOM.filterScenario.value) p.scenarioId = DOM.filterScenario.value;
   return p;
+}
+
+function ilgiBadge(seviye) {
+  if (!seviye) return '—';
+  const cls = { yüksek: 'ilgi-yuksek', orta: 'ilgi-orta', düşük: 'ilgi-dusuk', yok: 'ilgi-yok' };
+  return '<span class="tag ' + (cls[seviye] || '') + '">' + esc(seviye) + '</span>';
 }
 
 function renderTable(calls) {
   if (!calls.length) {
-    DOM.callsTableBody.innerHTML = '<tr><td colspan="14" class="table-empty">Kayıt bulunamadı</td></tr>';
+    DOM.callsTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Kayıt bulunamadı</td></tr>';
     return;
   }
   DOM.callsTableBody.innerHTML = calls.map(c => {
-    const s    = c.summary;
-    const heat = s != null && s.sicaklik_skoru != null ? s.sicaklik_skoru : null;
-    const heatBar = heat !== null
-      ? '<div class="heat-cell"><div class="heat-bar" style="width:' + heat + '%"></div><span>' + heat + '</span></div>'
-      : '—';
+    const s = c.summary;
+    const retStr = s && s.ret_nedeni ? esc(s.ret_nedeni) : '—';
     return '<tr class="call-row" data-id="' + c.vapiCallId + '">' +
       '<td>' + fmtDateTime(c.startTime) + '</td>' +
       '<td>' + esc(c.customerName) + '</td>' +
       '<td>' + esc(c.customerPhone) + '</td>' +
       '<td>' + (c.duration ? fmtDuration(c.duration) : '—') + '</td>' +
-      '<td>' + heatBar + '</td>' +
-      '<td>' + (s && s.niyet ? '<span class="tag n-' + s.niyet + '">' + esc(s.niyet) + '</span>' : '—') + '</td>' +
-      '<td>' + esc((s && s.bolge) || '—') + '</td>' +
-      '<td>' + esc((s && s.butce) || '—') + '</td>' +
-      '<td>' + (c.scenarioName ? '<span class="tag sc-tag">' + esc(c.scenarioName) + '</span>' : '<span class="tag sc-default">Varsayılan</span>') + '</td>' +
       '<td>' + randevuBadge(s) + '</td>' +
+      '<td>' + ilgiBadge(s && s.ilgi_seviyesi) + '</td>' +
+      '<td class="ozet-cell">' + retStr + '</td>' +
       '<td>' + (s && s.tavsiye_edilen_aksiyon
         ? '<span class="tag a-' + actionClass(s.tavsiye_edilen_aksiyon) + '">' + esc(s.tavsiye_edilen_aksiyon) + '</span>'
         : '—') + '</td>' +
-      '<td>$' + ((c.costs && c.costs.total) || 0).toFixed(4) + '</td>' +
       '<td><span class="tag s-' + c.status + '">' + statusLabel(c.status) + '</span></td>' +
       '<td><button class="btn-detail" data-id="' + c.vapiCallId + '">›</button></td>' +
       '</tr>';
@@ -562,25 +553,19 @@ function renderDrawer(call) {
       '<div class="drawer-section">' +
         '<div class="drawer-section-title">📊 Özet</div>' +
         '<div class="summary-grid">' +
-          '<div class="sg-item"><span class="sg-label">Sıcaklık</span>' +
-            '<span class="sg-val heat-val">' + s.sicaklik_skoru + '/100</span></div>' +
-          '<div class="sg-item"><span class="sg-label">Niyet</span>' +
-            '<span class="sg-val"><span class="tag n-' + s.niyet + '">' + esc(s.niyet) + '</span></span></div>' +
-          '<div class="sg-item"><span class="sg-label">Mülk Tipi</span>' +
-            '<span class="sg-val">' + esc(s.mulk_tipi) + '</span></div>' +
-          '<div class="sg-item"><span class="sg-label">Bölge</span>' +
-            '<span class="sg-val">' + esc(s.bolge || '—') + '</span></div>' +
-          '<div class="sg-item"><span class="sg-label">Bütçe</span>' +
-            '<span class="sg-val">' + esc(s.butce || '—') + '</span></div>' +
-          '<div class="sg-item"><span class="sg-label">Zaman</span>' +
-            '<span class="sg-val">' + esc(s.zaman_cercevesi) + '</span></div>' +
-          '<div class="sg-item"><span class="sg-label">Çevre Potansiyeli</span>' +
-            '<span class="sg-val">' + (s.cevredeki_potansiyel ? '✅ Evet' : '❌ Hayır') + '</span></div>' +
           '<div class="sg-item"><span class="sg-label">Randevu</span>' +
             '<span class="sg-val">' + (s.randevu_alindi ? '✅ Alındı' : '❌ Alınmadı') + '</span></div>' +
+          '<div class="sg-item"><span class="sg-label">İlgi</span>' +
+            '<span class="sg-val">' + ilgiBadge(s.ilgi_seviyesi) + '</span></div>' +
           '<div class="sg-item"><span class="sg-label">Aksiyon</span>' +
             '<span class="sg-val"><span class="tag a-' + actionClass(s.tavsiye_edilen_aksiyon) + '">' +
             esc(s.tavsiye_edilen_aksiyon) + '</span></span></div>' +
+          (s.mulk_tipi ? '<div class="sg-item"><span class="sg-label">Mülk Tipi</span>' +
+            '<span class="sg-val">' + esc(s.mulk_tipi) + '</span></div>' : '') +
+          (s.ret_nedeni ? '<div class="sg-item sg-full"><span class="sg-label">Ret Nedeni</span>' +
+            '<span class="sg-val">' + esc(s.ret_nedeni) + '</span></div>' : '') +
+          (s.geri_donus_notu ? '<div class="sg-item sg-full sg-note"><span class="sg-label">💡 Geri Dönüş Notu</span>' +
+            '<span class="sg-val">' + esc(s.geri_donus_notu) + '</span></div>' : '') +
         '</div>' +
         '<div class="summary-ozet">' + esc(s.ozet) + '</div>' +
       '</div>';
@@ -725,8 +710,6 @@ function renderStats(d) {
   DOM.statCompleted.textContent  = d.completedCalls;
   DOM.statAnswerRate.textContent = d.answerRate + '% cevap oranı';
   DOM.statAvgDur.textContent     = d.avgDuration ? fmtDuration(d.avgDuration) : '—';
-  DOM.statAvgHeat.textContent    = d.avgHeatScore || '—';
-  DOM.statConvSub.textContent    = d.conversionRate + '% dönüşüm (≥60)';
   DOM.statCost.textContent       = '$' + d.totalCost.toFixed(4);
   DOM.statCostPer.textContent    = d.totalCalls
     ? '$' + (d.totalCost / d.totalCalls).toFixed(4) + ' / arama' : '— / arama';
@@ -770,30 +753,40 @@ function renderStats(d) {
     }],
   }, { ...baseOpts, plugins: { legend: { labels: baseLegend } }, scales: baseScales });
 
-  buildOrUpdateChart('chartHeatDist', 'bar', {
-    labels: d.heatDistribution.map(x => x.range),
+  buildOrUpdateChart('chartIlgiDist', 'bar', {
+    labels: (d.ilgiDistribution || []).map(x => x.seviye),
     datasets: [{
       label: 'Müşteri',
-      data: d.heatDistribution.map(x => x.count),
-      backgroundColor: ['rgba(255,83,112,0.7)','rgba(255,159,64,0.7)','rgba(255,208,96,0.7)','rgba(0,200,150,0.5)','rgba(0,200,150,0.85)'],
-      borderColor:     ['#FF5370','#FF9F40','#FFD060','#00C896','#00C896'],
+      data: (d.ilgiDistribution || []).map(x => x.count),
+      backgroundColor: ['rgba(0,200,150,0.8)','rgba(74,158,255,0.7)','rgba(255,208,96,0.65)','rgba(74,80,104,0.6)'],
+      borderColor:     ['#00C896','#4A9EFF','#FFD060','#4A5068'],
       borderWidth: 1,
       borderRadius: 4,
     }],
   }, { ...baseOpts, plugins: { legend: { display: false } }, scales: baseScales });
 
-  buildOrUpdateChart('chartIntentDist', 'doughnut', {
-    labels: d.intentDistribution.map(x => x.niyet),
+  buildOrUpdateChart('chartRetDist', 'bar', {
+    labels: (d.retNedeniDistribution || []).map(x => x.neden),
     datasets: [{
-      data: d.intentDistribution.map(x => x.count),
-      backgroundColor: ['rgba(0,200,150,0.75)','rgba(74,158,255,0.75)','rgba(255,159,64,0.75)','rgba(180,100,255,0.75)','rgba(255,208,96,0.75)','rgba(74,80,104,0.75)'],
-      borderColor: '#12151C',
-      borderWidth: 2,
-      hoverOffset: 6,
+      label: 'Ret',
+      data: (d.retNedeniDistribution || []).map(x => x.count),
+      backgroundColor: 'rgba(255,83,112,0.55)',
+      borderColor: '#FF5370',
+      borderWidth: 1,
+      borderRadius: 4,
+      borderSkipped: false,
     }],
-  }, { ...baseOpts, plugins: { legend: { position: 'bottom', labels: { ...baseLegend, padding: 12, boxWidth: 12 } } } });
+  }, {
+    ...baseOpts,
+    indexAxis: 'y',
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { ticks: { color: tickColor, font: { size: 11 } }, grid: { color: gridColor }, beginAtZero: true },
+      y: { ticks: { color: legendColor, font: { size: 11 } }, grid: { color: gridColor } },
+    },
+  });
 
-  const actionColors = ['rgba(0,200,150,0.75)','rgba(74,158,255,0.75)','rgba(255,208,96,0.75)','rgba(255,83,112,0.75)'];
+  const actionColors = ['rgba(0,200,150,0.75)','rgba(74,158,255,0.75)','rgba(255,83,112,0.75)'];
   buildOrUpdateChart('chartActionDist', 'bar', {
     labels: d.actionDistribution.map(x => x.action),
     datasets: [{
@@ -1063,14 +1056,13 @@ function renderFollowup(d) {
 }
 
 function followupCard(c, colorClass) {
-  const s = c.summary;
-  const heat = s ? s.sicaklik_skoru : null;
-  const heatCls = heat >= 80 ? 'heat-hot' : heat >= 60 ? 'heat-warm' : heat >= 40 ? 'heat-mid' : 'heat-cold';
-  const heatStr = heat != null ? heat : '—';
-  const niyet   = s ? s.niyet   : null;
-  const bolge   = s ? s.bolge   : null;
-  const note    = s ? s.geri_donus_notu : null;
-  const ago     = timeSince(c.startTime);
+  const s    = c.summary;
+  const ilgi = s ? s.ilgi_seviyesi : null;
+  const ilgiCls = ilgi === 'yüksek' ? 'heat-hot' : ilgi === 'orta' ? 'heat-warm' : ilgi === 'düşük' ? 'heat-mid' : 'heat-cold';
+  const ilgiStr = ilgi || '—';
+  const note = s ? s.geri_donus_notu : null;
+  const mulk = s ? s.mulk_tipi : null;
+  const ago  = timeSince(c.startTime);
 
   return '<div class="fu-card fu-' + colorClass + '">' +
     '<div class="fu-card-top">' +
@@ -1078,14 +1070,13 @@ function followupCard(c, colorClass) {
         '<div class="fu-name">' + esc(c.customerName) + '</div>' +
         '<div class="fu-phone">' + esc(c.customerPhone) + '</div>' +
       '</div>' +
-      '<div class="fu-heat ' + heatCls + '">' + heatStr + '</div>' +
+      '<div class="fu-heat ' + ilgiCls + '" title="İlgi: ' + ilgiStr + '">' + ilgiStr.slice(0,3) + '</div>' +
     '</div>' +
     (note
       ? '<div class="fu-note">💡 ' + esc(note) + '</div>'
       : '') +
     '<div class="fu-meta">' +
-      (niyet && niyet !== 'yok' && niyet !== 'belirsiz' ? '<span class="fu-tag">' + esc(niyet) + '</span>' : '') +
-      (bolge ? '<span class="fu-tag">' + esc(bolge) + '</span>' : '') +
+      (mulk ? '<span class="fu-tag">' + esc(mulk) + '</span>' : '') +
       '<span class="fu-ago">' + ago + '</span>' +
     '</div>' +
     '<div class="fu-actions">' +
@@ -1212,7 +1203,7 @@ function campaignRowHtml(c, i) {
     başarısız:   '<span class="ctag ct-fail">Başarısız</span>',
   }[c.status] || '<span class="ctag ct-wait">' + esc(c.status) + '</span>';
 
-  const heat = c.result ? c.result.sicaklik_skoru : '—';
+  const heat = c.result ? (c.result.ilgi_seviyesi || '—') : '—';
   const rdv  = c.result ? (c.result.randevu_alindi ? '✅' : '❌') : '—';
 
   return '<tr id="crow-' + i + '">' +
