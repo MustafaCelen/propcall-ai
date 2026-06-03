@@ -1410,8 +1410,20 @@ async function campaignCallContact(idx) {
   }
 }
 
+const CAMPAIGN_CALL_TIMEOUT_MS = 5 * 60 * 1000; // 5 dakika
+
 function campaignStartPoll(vapiCallId, idx) {
   const intervalId = setInterval(async () => {
+    const c = campaign.contacts[idx];
+
+    // Timeout: 5 dakikadan uzun süren aramaları başarısız say
+    if (c && c.callStartTs && (Date.now() - c.callStartTs) > CAMPAIGN_CALL_TIMEOUT_MS) {
+      campaignStopPoll(vapiCallId);
+      resolveCampaignCall(vapiCallId, 'failed', null);
+      toast(c.name + ': Arama zaman aşımına uğradı', 'error');
+      return;
+    }
+
     try {
       const r = await fetch('/api/calls/' + vapiCallId);
       const j = await r.json();
