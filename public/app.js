@@ -65,9 +65,6 @@ const DOM = {
   statTotal:        $('statTotal'),
   statCompleted:    $('statCompleted'),
   statAnswerRate:   $('statAnswerRate'),
-  statAvgDur:       $('statAvgDur'),
-  statCost:         $('statCost'),
-  statCostPer:      $('statCostPer'),
   statRandevu:      $('statRandevu'),
   statRandevuRate:  $('statRandevuRate'),
   drawerOverlay:    $('drawerOverlay'),
@@ -471,24 +468,20 @@ function ilgiBadge(seviye) {
 
 function renderTable(calls) {
   if (!calls.length) {
-    DOM.callsTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Kayıt bulunamadı</td></tr>';
+    DOM.callsTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">Kayıt bulunamadı</td></tr>';
     return;
   }
   DOM.callsTableBody.innerHTML = calls.map(c => {
     const s = c.summary;
-    const retStr = s && s.ret_nedeni ? esc(s.ret_nedeni) : '—';
+    const retStr  = s && s.ret_nedeni    ? esc(s.ret_nedeni)    : '—';
+    const noteStr = s && s.geri_donus_notu ? esc(s.geri_donus_notu) : '—';
     return '<tr class="call-row" data-id="' + c.vapiCallId + '">' +
       '<td>' + fmtDateTime(c.startTime) + '</td>' +
-      '<td>' + esc(c.customerName) + '</td>' +
-      '<td>' + esc(c.customerPhone) + '</td>' +
-      '<td>' + (c.duration ? fmtDuration(c.duration) : '—') + '</td>' +
+      '<td><div class="tbl-name">' + esc(c.customerName) + '</div><div class="tbl-phone">' + esc(c.customerPhone) + '</div></td>' +
       '<td>' + randevuBadge(s) + '</td>' +
       '<td>' + ilgiBadge(s && s.ilgi_seviyesi) + '</td>' +
       '<td class="ozet-cell">' + retStr + '</td>' +
-      '<td>' + (s && s.tavsiye_edilen_aksiyon
-        ? '<span class="tag a-' + actionClass(s.tavsiye_edilen_aksiyon) + '">' + esc(s.tavsiye_edilen_aksiyon) + '</span>'
-        : '—') + '</td>' +
-      '<td><span class="tag s-' + c.status + '">' + statusLabel(c.status) + '</span></td>' +
+      '<td class="ozet-cell note-cell">' + noteStr + '</td>' +
       '<td><button class="btn-detail" data-id="' + c.vapiCallId + '">›</button></td>' +
       '</tr>';
   }).join('');
@@ -705,16 +698,11 @@ async function loadStats() {
 }
 
 function renderStats(d) {
-  // Stat cards
-  DOM.statTotal.textContent      = d.totalCalls;
-  DOM.statCompleted.textContent  = d.completedCalls;
-  DOM.statAnswerRate.textContent = d.answerRate + '% cevap oranı';
-  DOM.statAvgDur.textContent     = d.avgDuration ? fmtDuration(d.avgDuration) : '—';
-  DOM.statCost.textContent       = '$' + d.totalCost.toFixed(4);
-  DOM.statCostPer.textContent    = d.totalCalls
-    ? '$' + (d.totalCost / d.totalCalls).toFixed(4) + ' / arama' : '— / arama';
-  DOM.statRandevu.textContent    = d.randevuCount;
-  DOM.statRandevuRate.textContent = d.randevuRate + '% randevu oranı';
+  DOM.statTotal.textContent       = d.totalCalls;
+  DOM.statCompleted.textContent   = d.completedCalls;
+  DOM.statAnswerRate.textContent  = d.answerRate + '% cevap oranı';
+  DOM.statRandevu.textContent     = d.randevuCount;
+  DOM.statRandevuRate.textContent = d.randevuRate + '% dönüşüm oranı';
 
   const labels30      = d.dailyCalls.map(x => x.date.slice(5));
   const tickColor     = '#4A5068';
@@ -736,20 +724,6 @@ function renderStats(d) {
       borderColor: '#00C896',
       borderWidth: 1,
       borderRadius: 3,
-    }],
-  }, { ...baseOpts, plugins: { legend: { labels: baseLegend } }, scales: baseScales });
-
-  buildOrUpdateChart('chartCostTrend', 'line', {
-    labels: labels30,
-    datasets: [{
-      label: 'Maliyet ($)',
-      data: d.costTrend.map(x => x.cost),
-      borderColor: '#4A9EFF',
-      backgroundColor: 'rgba(74,158,255,0.08)',
-      fill: true,
-      tension: 0.35,
-      pointRadius: 2,
-      pointBackgroundColor: '#4A9EFF',
     }],
   }, { ...baseOpts, plugins: { legend: { labels: baseLegend } }, scales: baseScales });
 
@@ -786,37 +760,6 @@ function renderStats(d) {
     },
   });
 
-  const actionColors = ['rgba(0,200,150,0.75)','rgba(74,158,255,0.75)','rgba(255,83,112,0.75)'];
-  buildOrUpdateChart('chartActionDist', 'bar', {
-    labels: d.actionDistribution.map(x => x.action),
-    datasets: [{
-      label: 'Aksiyon',
-      data: d.actionDistribution.map(x => x.count),
-      backgroundColor: d.actionDistribution.map((_, i) => actionColors[i % actionColors.length]),
-      borderRadius: 4,
-      borderSkipped: false,
-    }],
-  }, {
-    ...baseOpts,
-    indexAxis: 'y',
-    plugins: { legend: { display: false } },
-    scales: {
-      x: { ticks: { color: tickColor, font: { size: 11 } }, grid: { color: gridColor }, beginAtZero: true },
-      y: { ticks: { color: legendColor, font: { size: 11 } }, grid: { color: gridColor } },
-    },
-  });
-
-  buildOrUpdateChart('chartHourly', 'bar', {
-    labels: d.hourlyDistribution.map(x => x.hour + ':00'),
-    datasets: [{
-      label: 'Arama',
-      data: d.hourlyDistribution.map(x => x.count),
-      backgroundColor: 'rgba(180,100,255,0.35)',
-      borderColor: '#b464ff',
-      borderWidth: 1,
-      borderRadius: 3,
-    }],
-  }, { ...baseOpts, plugins: { legend: { display: false } }, scales: { ...baseScales, x: { ...baseScales.x, maxTicksLimit: 12 } } });
 }
 
 function buildOrUpdateChart(id, type, data, options) {
@@ -955,8 +898,7 @@ async function loadFollowupBadge() {
     const json = await resp.json();
     if (!json.success) return;
     const d = json.data;
-    const total = d.geriAranacaklar.length + d.beklemeListesi.length +
-                  d.cevreTakibi.length + d.manuelTakip.length;
+    const total = d.geriAranacaklar.length + d.beklemeListesi.length;
     const badge = $('followupBadge');
     if (badge) {
       badge.textContent = total;
@@ -1001,26 +943,10 @@ function renderFollowup(d) {
     {
       key: 'beklemeListesi',
       icon: '⏳',
-      title: 'Bekleme Listesi',
+      title: 'İleride Ara',
       color: 'bekle',
       emptyMsg: 'Bekleme listesi boş',
       items: d.beklemeListesi,
-    },
-    {
-      key: 'cevreTakibi',
-      icon: '🏘',
-      title: 'Çevre Takibi',
-      color: 'cevre',
-      emptyMsg: 'Çevre takibi yok',
-      items: d.cevreTakibi,
-    },
-    {
-      key: 'manuelTakip',
-      icon: '⭐',
-      title: 'Manuel Takip',
-      color: 'manuel',
-      emptyMsg: 'Manuel takip işaretlenen yok',
-      items: d.manuelTakip,
     },
   ];
 

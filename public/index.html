@@ -199,19 +199,15 @@
             <tr>
               <th>Tarih/Saat</th>
               <th>Müşteri</th>
-              <th>Telefon</th>
-              <th>Süre</th>
               <th>Randevu</th>
               <th>İlgi</th>
               <th>Ret Nedeni</th>
-              <th>Aksiyon</th>
-              <th>Maliyet</th>
-              <th>Durum</th>
+              <th>Geri Dönüş Notu</th>
               <th></th>
             </tr>
           </thead>
           <tbody id="callsTableBody">
-            <tr><td colspan="11" class="table-empty">Yükleniyor...</td></tr>
+            <tr><td colspan="7" class="table-empty">Yükleniyor...</td></tr>
           </tbody>
         </table>
       </div>
@@ -238,27 +234,12 @@
               <div class="stat-sub" id="statAnswerRate">— cevap oranı</div>
             </div>
           </div>
-          <div class="stat-card">
-            <div class="stat-icon">⏱</div>
-            <div class="stat-body">
-              <div class="stat-label">Ort. Süre</div>
-              <div class="stat-value" id="statAvgDur">—</div>
-            </div>
-          </div>
           <div class="stat-card stat-card-highlight">
             <div class="stat-icon">📅</div>
             <div class="stat-body">
-              <div class="stat-label">Randevu</div>
+              <div class="stat-label">Randevu Alındı</div>
               <div class="stat-value" id="statRandevu">—</div>
-              <div class="stat-sub" id="statRandevuRate">— randevu oranı</div>
-            </div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-icon">💰</div>
-            <div class="stat-body">
-              <div class="stat-label">Toplam Maliyet</div>
-              <div class="stat-value" id="statCost">—</div>
-              <div class="stat-sub" id="statCostPer">— / arama</div>
+              <div class="stat-sub" id="statRandevuRate">— dönüşüm oranı</div>
             </div>
           </div>
         </div>
@@ -268,25 +249,13 @@
             <div class="chart-title">Günlük Arama Sayısı — Son 30 Gün</div>
             <div class="chart-wrap"><canvas id="chartDailyCalls"></canvas></div>
           </div>
-          <div class="chart-card span2">
-            <div class="chart-title">Maliyet Trendi — Son 30 Gün ($)</div>
-            <div class="chart-wrap"><canvas id="chartCostTrend"></canvas></div>
-          </div>
           <div class="chart-card">
             <div class="chart-title">İlgi Seviyesi Dağılımı</div>
             <div class="chart-wrap"><canvas id="chartIlgiDist"></canvas></div>
           </div>
           <div class="chart-card">
-            <div class="chart-title">Ret Nedeni Dağılımı</div>
+            <div class="chart-title">Neden Reddetti?</div>
             <div class="chart-wrap"><canvas id="chartRetDist"></canvas></div>
-          </div>
-          <div class="chart-card">
-            <div class="chart-title">Aksiyon Dağılımı</div>
-            <div class="chart-wrap"><canvas id="chartActionDist"></canvas></div>
-          </div>
-          <div class="chart-card">
-            <div class="chart-title">Saatlik Arama Dağılımı</div>
-            <div class="chart-wrap"><canvas id="chartHourly"></canvas></div>
           </div>
         </div>
 
