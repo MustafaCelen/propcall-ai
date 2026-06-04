@@ -1,57 +1,56 @@
-// PropCall AI - Senaryo yönetimi
-
-import fs from 'fs';
-import path from 'path';
+import pool from './db';
 import { Scenario } from './types';
 
-const FILE = path.join(__dirname, '..', 'data', 'scenarios.json');
-
-function load(): Scenario[] {
-  if (!fs.existsSync(FILE)) return [];
-  try { return JSON.parse(fs.readFileSync(FILE, 'utf-8')); }
-  catch { return []; }
+export async function getAllScenarios(): Promise<Scenario[]> {
+  const { rows } = await pool.query(
+    `SELECT data FROM scenarios ORDER BY data->>'createdAt' ASC`,
+  );
+  return rows.map(r => r.data as Scenario);
 }
 
-function save(list: Scenario[]): void {
-  const dir = path.dirname(FILE);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(FILE, JSON.stringify(list, null, 2), 'utf-8');
+export async function getScenario(id: string): Promise<Scenario | null> {
+  const { rows } = await pool.query(
+    'SELECT data FROM scenarios WHERE id = $1',
+    [id],
+  );
+  return rows[0]?.data ?? null;
 }
 
-export function getAllScenarios(): Scenario[] {
-  return load();
-}
-
-export function getScenario(id: string): Scenario | null {
-  return load().find(s => s.id === id) || null;
-}
-
-export function createScenario(name: string, systemPrompt: string): Scenario {
-  const list = load();
+export async function createScenario(name: string, systemPrompt: string): Promise<Scenario> {
   const scenario: Scenario = {
-    id: `sc_${Date.now()}`,
-    name: name.trim(),
+    id:           `sc_${Date.now()}`,
+    name:         name.trim(),
     systemPrompt,
-    createdAt: new Date().toISOString(),
+    createdAt:    new Date().toISOString(),
   };
-  list.push(scenario);
-  save(list);
+  await pool.query(
+    'INSERT INTO scenarios (id, data) VALUES ($1, $2)',
+    [scenario.id, JSON.stringify(scenario)],
+  );
   return scenario;
 }
 
-export function updateScenario(id: string, name: string, systemPrompt: string): Scenario | null {
-  const list = load();
-  const idx  = list.findIndex(s => s.id === id);
-  if (idx < 0) return null;
-  list[idx] = { ...list[idx], name: name.trim(), systemPrompt, updatedAt: new Date().toISOString() };
-  save(list);
-  return list[idx];
+export async function updateScenario(
+  id: string,
+  name: string,
+  systemPrompt: string,
+): Promise<Scenario | null> {
+  const { rows } = await pool.query('SELECT data FROM scenarios WHERE id = $1', [id]);
+  if (!rows[0]) return null;
+  const updated: Scenario = {
+    ...rows[0].data,
+    name: name.trim(),
+    systemPrompt,
+    updatedAt: new Date().toISOString(),
+  };
+  await pool.query(
+    'UPDATE scenarios SET data = $1 WHERE id = $2',
+    [JSON.stringify(updated), id],
+  );
+  return updated;
 }
 
-export function deleteScenario(id: string): boolean {
-  const list = load();
-  const next = list.filter(s => s.id !== id);
-  if (next.length === list.length) return false;
-  save(next);
-  return true;
+export async function deleteScenario(id: string): Promise<boolean> {
+  const { rowCount } = await pool.query('DELETE FROM scenarios WHERE id = $1', [id]);
+  return (rowCount ?? 0) > 0;
 }
