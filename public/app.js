@@ -180,6 +180,7 @@ function connectSSE() {
       campaign.contacts[idx].result = summary;
       renderCampaignRow(idx);
       updateCampaignProgress();
+      saveCampaignState();
     }
 
     if (vapiCallId !== state.activeCallId) return;
@@ -1038,6 +1039,7 @@ function initCampaign() {
   $('campaignConcurrency').addEventListener('change', function() {
     campaign.maxConcurrent = parseInt(this.value, 10);
   });
+  loadCampaignState();
 }
 
 function onFileSelected(e) {
@@ -1108,6 +1110,41 @@ function parseContacts(rows) {
   $('btnCampaignStart').disabled = false;
   $('campaignProgressBar').style.display = 'none';
   renderCampaignTable();
+  saveCampaignState();
+}
+
+async function saveCampaignState() {
+  try {
+    await fetch('/api/campaign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contacts: campaign.contacts }),
+    });
+  } catch(_) {}
+}
+
+async function loadCampaignState() {
+  try {
+    const resp = await fetch('/api/campaign');
+    const json = await resp.json();
+    if (!json.success || !json.data || !json.data.contacts || !json.data.contacts.length) return;
+    campaign.contacts = json.data.contacts.map(c => ({
+      ...c,
+      // Arayanları bekliyor'a düşür — restart sonrası devam edemeyiz
+      status: c.status === 'arıyor' ? 'bekliyor' : c.status,
+      vapiCallId: c.status === 'arıyor' ? null : c.vapiCallId,
+      callStartTs: null,
+    }));
+    renderCampaignTable();
+    updateCampaignProgress();
+    $('btnCampaignStart').disabled = false;
+    $('campaignProgressBar').style.display = 'block';
+    toast('Önceki kampanya yüklendi (' + campaign.contacts.length + ' kişi)', 'info');
+  } catch(_) {}
+}
+
+async function clearCampaignState() {
+  try { await fetch('/api/campaign', { method: 'DELETE' }); } catch(_) {}
 }
 
 function renderCampaignTable() {
@@ -1173,6 +1210,7 @@ function updateCampaignProgress() {
     $('btnCampaignPause').disabled = true;
     $('btnCampaignStop').disabled  = true;
     toast('Kampanya tamamlandı! ' + randevu + ' randevu alındı.', 'success');
+    clearCampaignState();
   }
 }
 
@@ -1460,5 +1498,6 @@ function resolveCampaignCall(vapiCallId, status, duration) {
   const shouldFill = current === 'arıyor' && cStatus !== 'arıyor';
   renderCampaignRow(idx);
   updateCampaignProgress();
+  saveCampaignState();
   if (shouldFill && campaign.running && !campaign.paused) campaignFillQueue();
 }

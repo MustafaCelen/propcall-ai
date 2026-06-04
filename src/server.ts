@@ -3,6 +3,7 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import path from 'path';
+import fs from 'fs';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -359,6 +360,34 @@ app.delete('/api/scenarios/:id', (req, res) => {
   try {
     if (!deleteScenario(req.params.id))
       return res.status(404).json({ success: false, error: 'Senaryo bulunamadı' });
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+// ─── CAMPAIGN STATE ──────────────────────────────────────────────────────────
+
+const CAMPAIGN_FILE = path.join(__dirname, '..', 'data', 'campaign.json');
+
+app.get('/api/campaign', (_req: Request, res: Response) => {
+  try {
+    if (!fs.existsSync(CAMPAIGN_FILE)) return res.json({ success: true, data: null });
+    const data = JSON.parse(fs.readFileSync(CAMPAIGN_FILE, 'utf-8'));
+    return res.json({ success: true, data });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.post('/api/campaign', (req: Request, res: Response) => {
+  try {
+    const dir = path.join(__dirname, '..', 'data');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(CAMPAIGN_FILE, JSON.stringify(req.body, null, 2), 'utf-8');
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.delete('/api/campaign', (_req: Request, res: Response) => {
+  try {
+    if (fs.existsSync(CAMPAIGN_FILE)) fs.unlinkSync(CAMPAIGN_FILE);
     return res.json({ success: true });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
