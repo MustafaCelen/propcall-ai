@@ -1048,7 +1048,7 @@ function onFileSelected(e) {
   const reader = new FileReader();
   reader.onload = function(ev) {
     try {
-      const wb   = XLSX.read(ev.target.result, { type: 'binary' });
+      const wb   = XLSX.read(ev.target.result, { type: 'array', codepage: 65001 });
       const ws   = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
       parseContacts(rows);
@@ -1056,7 +1056,7 @@ function onFileSelected(e) {
       toast('Dosya okunamadı: ' + err.message, 'error');
     }
   };
-  reader.readAsBinaryString(file);
+  reader.readAsArrayBuffer(file);
   e.target.value = '';
 }
 
