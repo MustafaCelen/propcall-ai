@@ -157,6 +157,10 @@ function connectSSE() {
       resolveCampaignCall(vapiCallId, status, duration);
     }
 
+    // Takip tabı açıksa yenile (cevapsız listesi güncellensin)
+    if (document.querySelector('#tabFollowup.active')) loadFollowup();
+    else loadFollowupBadge();
+
     if (vapiCallId !== state.activeCallId) return;
     stopPollFallback();
     stopTimer();
@@ -182,6 +186,9 @@ function connectSSE() {
       updateCampaignProgress();
       saveCampaignState();
     }
+
+    // Takip tabı açıksa yenile
+    if (document.querySelector('#tabFollowup.active')) loadFollowup();
 
     if (vapiCallId !== state.activeCallId) return;
     renderInlineSummary(summary);
@@ -922,6 +929,7 @@ async function loadFollowup() {
 }
 
 function renderFollowup(d) {
+  renderFollowup._lastData = d;
   const layout = $('followupLayout');
 
   const sections = [
@@ -966,11 +974,16 @@ function renderFollowup(d) {
       ? sec.items.map(c => cardFn(c)).join('')
       : '<div class="fu-empty">' + sec.emptyMsg + '</div>';
 
-    return '<div class="fu-section">' +
+    const bulkBtn = sec.key === 'cevapsizilar' && sec.items.length
+      ? '<button class="fu-bulk-btn" id="btnCevapsizBulk">📞 Hepsini Ara (' + sec.items.length + ')</button>'
+      : '';
+
+    return '<div class="fu-section fu-' + sec.color + '">' +
       '<div class="fu-section-header">' +
         '<span class="fu-icon">' + sec.icon + '</span>' +
         '<span class="fu-title">' + sec.title + '</span>' +
         '<span class="fu-count">' + sec.items.length + '</span>' +
+        bulkBtn +
       '</div>' +
       '<div class="fu-cards">' + cards + '</div>' +
     '</div>';
@@ -981,16 +994,49 @@ function renderFollowup(d) {
   });
   layout.querySelectorAll('.fu-call-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      const name  = btn.dataset.name;
-      const phone = btn.dataset.phone;
+      const name   = btn.dataset.name;
+      const phone  = btn.dataset.phone;
       const region = btn.dataset.region || '';
-      if ($('customerName'))  $('customerName').value  = name;
-      if ($('customerPhone')) $('customerPhone').value = phone;
+      if ($('customerName'))   $('customerName').value   = name;
+      if ($('customerPhone'))  $('customerPhone').value  = phone;
       if ($('customerRegion')) $('customerRegion').value = region;
       switchTab('live');
     });
   });
+
+  const bulkBtn = $('btnCevapsizBulk');
+  if (bulkBtn) {
+    bulkBtn.addEventListener('click', () => {
+      const items = (renderFollowup._lastData?.cevapsizilar || []);
+      if (!items.length) return;
+      // Kampanya tabına geç ve cevapsızları yükle
+      campaign.contacts = items.map(c => ({
+        name:       c.customerName,
+        phone:      c.customerPhone,
+        region:     c.customerInfo?.region || '',
+        notes:      c.customerInfo?.notes  || '',
+        status:     'bekliyor',
+        vapiCallId: null,
+        result:     null,
+        callStartTs: null,
+      }));
+      campaign.callMap  = new Map();
+      campaign.pollMap  = new Map();
+      campaign.running  = false;
+      campaign.paused   = false;
+      switchTab('campaign');
+      renderCampaignTable();
+      updateCampaignProgress();
+      $('btnCampaignStart').disabled = false;
+      $('campaignProgressBar').style.display = 'none';
+      saveCampaignState();
+      toast(items.length + ' cevapsız kampanyaya yüklendi', 'success');
+    });
+  }
 }
+
+// Son veriyi sakla — bulk btn erişimi için
+renderFollowup._lastData = null;
 
 function followupCard(c, colorClass) {
   const s    = c.summary;
