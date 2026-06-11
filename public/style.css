@@ -446,7 +446,7 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 .dtf-time{font-size:10px;color:var(--txm);padding:0 4px}
 
 /* ── TAKİP TAB ── */
-.followup-layout{display:grid;grid-template-columns:1fr 1fr;align-content:start;gap:14px;padding:16px;overflow-y:auto;height:100%}
+.followup-layout{display:grid;grid-template-columns:1fr 1fr;align-content:start;gap:14px;padding:16px;overflow-y:auto;flex:1;min-height:0}
 .followup-layout .fu-section:first-child{grid-column:1/-1}
 .followup-loading{color:var(--txm);padding:40px;text-align:center;grid-column:1/-1}
 
