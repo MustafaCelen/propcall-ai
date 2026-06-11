@@ -111,7 +111,7 @@ export function endedReasonToStatus(r?: string): CallRecord['status'] {
   if (['customer-ended-call','assistant-ended-call','assistant-forwarded-call',
        'exceeded-max-duration','manual','silence-timed-out'].includes(lower)) return 'completed';
   if (lower.includes('no-answer') || lower === 'voicemail') return 'no-answer';
-  if (lower === 'busy' || lower === 'line-busy' || lower === 'call-rejected') return 'busy';
+  if (lower.includes('busy') || lower === 'call-rejected') return 'busy';
   return 'failed';
 }
 
