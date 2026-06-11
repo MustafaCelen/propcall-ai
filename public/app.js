@@ -899,7 +899,7 @@ async function loadFollowupBadge() {
     const json = await resp.json();
     if (!json.success) return;
     const d = json.data;
-    const total = d.geriAranacaklar.length + d.beklemeListesi.length;
+    const total = d.geriAranacaklar.length + d.beklemeListesi.length + (d.cevapsizilar || []).length;
     const badge = $('followupBadge');
     if (badge) {
       badge.textContent = total;
@@ -925,6 +925,15 @@ function renderFollowup(d) {
   const layout = $('followupLayout');
 
   const sections = [
+    {
+      key: 'cevapsizilar',
+      icon: '📵',
+      title: 'Cevapsız — Tekrar Ara',
+      color: 'cevapsiz',
+      emptyMsg: 'Tekrar aranacak kimse yok',
+      items: d.cevapsizilar || [],
+      customCard: cevapsizCard,
+    },
     {
       key: 'randevuAlanlar',
       icon: '📅',
@@ -952,8 +961,9 @@ function renderFollowup(d) {
   ];
 
   layout.innerHTML = sections.map(sec => {
+    const cardFn = sec.customCard || ((c) => followupCard(c, sec.color));
     const cards = sec.items.length
-      ? sec.items.map(c => followupCard(c, sec.color)).join('')
+      ? sec.items.map(c => cardFn(c)).join('')
       : '<div class="fu-empty">' + sec.emptyMsg + '</div>';
 
     return '<div class="fu-section">' +
@@ -1011,6 +1021,33 @@ function followupCard(c, colorClass) {
         'data-name="' + esc(c.customerName) + '" ' +
         'data-phone="' + esc(c.customerPhone) + '" ' +
         'data-region="' + esc((c.customerInfo && c.customerInfo.region) || '') + '">📞 Ara</button>' +
+      '<button class="fu-detail-btn" data-id="' + c.vapiCallId + '">Detay ›</button>' +
+    '</div>' +
+  '</div>';
+}
+
+function cevapsizCard(c) {
+  const ago     = timeSince(c.startTime);
+  const count   = c.retryCount || 1;
+  const statusLabel = c.status === 'busy' ? 'Meşgul' : 'Cevapsız';
+  const statusCls   = c.status === 'busy' ? 'ct-busy' : 'ct-miss';
+  return '<div class="fu-card fu-cevapsiz">' +
+    '<div class="fu-card-top">' +
+      '<div class="fu-person">' +
+        '<div class="fu-name">' + esc(c.customerName) + '</div>' +
+        '<div class="fu-phone">' + esc(c.customerPhone) + '</div>' +
+      '</div>' +
+      '<div class="fu-retry-badge" title="Deneme sayısı">' + count + 'x</div>' +
+    '</div>' +
+    '<div class="fu-retry-meta">' +
+      '<span class="ctag ' + statusCls + '">' + statusLabel + '</span>' +
+      '<span class="fu-ago">' + ago + '</span>' +
+    '</div>' +
+    '<div class="fu-actions">' +
+      '<button class="fu-call-btn" data-id="' + c.vapiCallId + '" ' +
+        'data-name="' + esc(c.customerName) + '" ' +
+        'data-phone="' + esc(c.customerPhone) + '" ' +
+        'data-region="' + esc((c.customerInfo && c.customerInfo.region) || '') + '">📞 Tekrar Ara</button>' +
       '<button class="fu-detail-btn" data-id="' + c.vapiCallId + '">Detay ›</button>' +
     '</div>' +
   '</div>';

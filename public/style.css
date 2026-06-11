@@ -485,9 +485,12 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 .fu-detail-btn:hover{border-color:var(--primary);color:var(--primary)}
 
 /* section accent colors */
-.fu-randevu .fu-section-header{border-left:3px solid var(--primary)}
-.fu-ara     .fu-section-header{border-left:3px solid var(--red)}
-.fu-bekle   .fu-section-header{border-left:3px solid var(--blue)}
+.fu-randevu  .fu-section-header{border-left:3px solid var(--primary)}
+.fu-ara      .fu-section-header{border-left:3px solid var(--red)}
+.fu-bekle    .fu-section-header{border-left:3px solid var(--blue)}
+.fu-cevapsiz .fu-section-header{border-left:3px solid var(--yellow)}
+.fu-retry-badge{background:rgba(255,208,96,.15);color:var(--yellow);font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap}
+.fu-retry-meta{display:flex;align-items:center;gap:8px;padding:6px 14px;font-size:11px;color:var(--txm)}
 .fu-cevre   .fu-section-header{border-left:3px solid var(--yellow)}
 .fu-manuel  .fu-section-header{border-left:3px solid var(--purple)}
 

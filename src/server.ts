@@ -218,6 +218,20 @@ app.get('/api/followup', async (_req: Request, res: Response) => {
     const byAction = (action: string) =>
       finished.filter(c => c.summary!.tavsiye_edilen_aksiyon === action).sort(byIlgi);
 
+    // Cevapsız / Tekrar Ara: her telefon numarası için en son arama no-answer veya busy ise listeye ekle
+    const phoneLatest = new Map<string, typeof all[0]>();
+    all.forEach(c => {
+      const ex = phoneLatest.get(c.customerPhone);
+      if (!ex || new Date(c.startTime) > new Date(ex.startTime)) phoneLatest.set(c.customerPhone, c);
+    });
+    const retryCounts = new Map<string, number>();
+    all.filter(c => c.status === 'no-answer' || c.status === 'busy')
+       .forEach(c => retryCounts.set(c.customerPhone, (retryCounts.get(c.customerPhone) || 0) + 1));
+    const cevapsizilar = Array.from(phoneLatest.values())
+      .filter(c => c.status === 'no-answer' || c.status === 'busy')
+      .map(c => ({ ...c, retryCount: retryCounts.get(c.customerPhone) || 1 }))
+      .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
+
     return res.json({
       success: true,
       data: {
@@ -226,6 +240,7 @@ app.get('/api/followup', async (_req: Request, res: Response) => {
         geriAranacaklar: byAction('Ara'),
         beklemeListesi:  byAction('Bekleme listesine al'),
         manuelTakip:     all.filter(c => c.followUp).sort(byIlgi),
+        cevapsizilar,
       },
     });
   } catch (err) {
