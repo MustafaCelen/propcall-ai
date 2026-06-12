@@ -125,7 +125,11 @@ function connectSSE() {
   const src = new EventSource('/api/events');
   state.sseSource = src;
 
-  src.addEventListener('connected', () => console.log('[SSE] Bağlandı'));
+  src.addEventListener('connected', () => {
+    console.log('[SSE] Bağlandı');
+    // SSE yeniden bağlandıysa aktif kampanya aramalarını hemen kontrol et
+    if (campaign.running && !campaign.paused) campaignSyncActive();
+  });
 
   src.addEventListener('call-started', e => {
     const { vapiCallId } = JSON.parse(e.data);
@@ -1122,6 +1126,10 @@ function initCampaign() {
   $('campaignConcurrency').addEventListener('change', function() {
     campaign.maxConcurrent = parseInt(this.value, 10);
   });
+  // Tab arka plana geçince setInterval yavaşlar — görünür olunca hemen senkronize et
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && campaign.running && !campaign.paused) campaignSyncActive();
+  });
   loadCampaignState();
 }
 
@@ -1201,7 +1209,12 @@ async function saveCampaignState() {
     await fetch('/api/campaign', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contacts: campaign.contacts }),
+      body: JSON.stringify({
+        contacts:      campaign.contacts,
+        running:       campaign.running,
+        paused:        campaign.paused,
+        maxConcurrent: campaign.maxConcurrent,
+      }),
     });
   } catch(_) {}
 }
@@ -1211,18 +1224,43 @@ async function loadCampaignState() {
     const resp = await fetch('/api/campaign');
     const json = await resp.json();
     if (!json.success || !json.data || !json.data.contacts || !json.data.contacts.length) return;
+
+    const wasRunning     = json.data.running === true;
+    const wasPaused      = json.data.paused  === true;
+    const savedConcurrent = json.data.maxConcurrent;
+
     campaign.contacts = json.data.contacts.map(c => ({
       ...c,
-      // Arayanları bekliyor'a düşür — restart sonrası devam edemeyiz
-      status: c.status === 'arıyor' ? 'bekliyor' : c.status,
+      // Arayanları bekliyor'a düşür — restart sonrası poll'lar kaybolmuş olabilir
+      status:     c.status === 'arıyor' ? 'bekliyor' : c.status,
       vapiCallId: c.status === 'arıyor' ? null : c.vapiCallId,
       callStartTs: null,
     }));
+    campaign.callMap = new Map();
+    campaign.pollMap = new Map();
+
+    if (savedConcurrent) {
+      campaign.maxConcurrent = savedConcurrent;
+      const sel = $('campaignConcurrency');
+      if (sel) sel.value = String(savedConcurrent);
+    }
+
     renderCampaignTable();
     updateCampaignProgress();
     $('btnCampaignStart').disabled = false;
     $('campaignProgressBar').style.display = 'block';
-    toast('Önceki kampanya yüklendi (' + campaign.contacts.length + ' kişi)', 'info');
+
+    const hasPending = campaign.contacts.some(c => c.status === 'bekliyor');
+    if (wasRunning && !wasPaused && hasPending) {
+      toast('Kampanya kaldığı yerden devam ediyor (' + campaign.contacts.length + ' kişi)', 'info');
+      setTimeout(() => campaignStart(), 600);
+    } else if (wasRunning && wasPaused) {
+      campaign.paused = true;
+      $('btnCampaignPause').textContent = '▶ Devam Et';
+      toast('Önceki kampanya duraklatılmış yüklendi (' + campaign.contacts.length + ' kişi)', 'info');
+    } else {
+      toast('Önceki kampanya yüklendi (' + campaign.contacts.length + ' kişi)', 'info');
+    }
   } catch(_) {}
 }
 
@@ -1314,6 +1352,7 @@ function campaignPause() {
   campaign.paused = !campaign.paused;
   $('btnCampaignPause').textContent = campaign.paused ? '▶ Devam Et' : '⏸ Duraklat';
   toast(campaign.paused ? 'Kampanya duraklatıldı' : 'Kampanya devam ediyor', 'info');
+  saveCampaignState();
   if (!campaign.paused) campaignFillQueue();
 }
 
@@ -1332,6 +1371,7 @@ function campaignStop() {
   $('btnCampaignPause').disabled = true;
   $('btnCampaignStop').disabled  = true;
   $('btnCampaignPause').textContent = '⏸ Duraklat';
+  saveCampaignState();
   toast('Kampanya durduruldu', 'info');
 }
 
@@ -1348,6 +1388,25 @@ function campaignFillQueue() {
       started++;
     }
   }
+}
+
+// Tab arka plana geçince setInterval yavaşlar; görünür olunca hemen durumu sorgula
+function campaignSyncActive() {
+  campaign.contacts.forEach(c => {
+    if (c.status === 'arıyor' && c.vapiCallId) {
+      fetch('/api/calls/' + c.vapiCallId)
+        .then(r => r.json())
+        .then(j => {
+          if (!j.success) return;
+          if (j.data.status !== 'in-progress') {
+            campaignStopPoll(c.vapiCallId);
+            resolveCampaignCall(c.vapiCallId, j.data.status, j.data.duration);
+          }
+        })
+        .catch(() => {});
+    }
+  });
+  campaignFillQueue();
 }
 
 // ─── SCENARIOS ───────────────────────────────────────────────────────────────
