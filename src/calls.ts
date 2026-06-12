@@ -115,8 +115,17 @@ export function endedReasonToStatus(r?: string): CallRecord['status'] {
   return 'failed';
 }
 
-export async function getStats(): Promise<StatsData> {
-  const calls    = await getAllCalls();
+export async function getStats(periodDays?: number): Promise<StatsData> {
+  const allCalls = await getAllCalls();
+  // Dönem filtresi: belirtilmişse son N güne göre filtrele
+  const calls = (periodDays && periodDays > 0)
+    ? allCalls.filter(c => {
+        if (!c.startTime) return false;
+        const age = (Date.now() - new Date(c.startTime).getTime()) / 86400000;
+        return age <= periodDays;
+      })
+    : allCalls;
+
   const finished = calls.filter(c => c.status !== 'in-progress');
   const withSum  = finished.filter(c => c.summary !== undefined);
 
@@ -129,18 +138,28 @@ export async function getStats(): Promise<StatsData> {
   const randevuCount   = withSum.filter(c => c.summary!.randevu_alindi === true).length;
   const randevuRate    = withSum.length ? Math.round(randevuCount / withSum.length * 100) : 0;
 
+  // Günlük seri: dönem belirtilmişse o gün sayısı, yoksa son 30 gün
+  const days = periodDays && periodDays > 0 ? Math.min(periodDays, 90) : 30;
   const dailyCalls: Record<string, number> = {};
   const dailyCost:  Record<string, number> = {};
-  for (let i = 29; i >= 0; i--) {
+  const dailyRandevu: Record<string, { total: number; alindi: number }> = {};
+  for (let i = days - 1; i >= 0; i--) {
     const d = new Date(); d.setDate(d.getDate() - i);
     const k = d.toISOString().slice(0, 10);
-    dailyCalls[k] = 0; dailyCost[k] = 0;
+    dailyCalls[k]   = 0;
+    dailyCost[k]    = 0;
+    dailyRandevu[k] = { total: 0, alindi: 0 };
   }
   calls.forEach(c => {
+    if (!c.startTime) return;
     const k = c.startTime.slice(0, 10);
     if (k in dailyCalls) {
       dailyCalls[k]++;
       dailyCost[k] = Math.round((dailyCost[k] + (c.costs?.total || 0)) * 10000) / 10000;
+      if (c.summary) {
+        dailyRandevu[k].total++;
+        if (c.summary.randevu_alindi) dailyRandevu[k].alindi++;
+      }
     }
   });
 
@@ -165,10 +184,38 @@ export async function getStats(): Promise<StatsData> {
 
   const hourMap: Record<number, number> = {};
   for (let h = 0; h < 24; h++) hourMap[h] = 0;
-  calls.forEach(c => { hourMap[new Date(c.startTime).getHours()]++; });
+  calls.forEach(c => {
+    if (!c.startTime) return;
+    hourMap[new Date(c.startTime).getHours()]++;
+  });
 
   const statusMap: Record<string, number> = {};
   calls.forEach(c => { statusMap[c.status] = (statusMap[c.status] || 0) + 1; });
+
+  // Senaryo başına performans
+  const scenarioMap: Record<string, { name: string; calls: number; randevu: number; cost: number }> = {};
+  calls.forEach(c => {
+    const key = c.scenarioName || 'Varsayılan';
+    if (!scenarioMap[key]) scenarioMap[key] = { name: key, calls: 0, randevu: 0, cost: 0 };
+    scenarioMap[key].calls++;
+    scenarioMap[key].cost += c.costs?.total || 0;
+    if (c.summary?.randevu_alindi) scenarioMap[key].randevu++;
+  });
+  const scenarioPerformance = Object.values(scenarioMap)
+    .map(s => ({
+      name: s.name,
+      calls: s.calls,
+      randevu: s.randevu,
+      randevuRate: s.calls ? Math.round(s.randevu / s.calls * 100) : 0,
+      cost: Math.round(s.cost * 10000) / 10000,
+    }))
+    .sort((a, b) => b.calls - a.calls);
+
+  const randevuTrend = Object.entries(dailyRandevu).map(([date, v]) => ({
+    date,
+    rate: v.total ? Math.round(v.alindi / v.total * 100) : 0,
+    count: v.alindi,
+  }));
 
   return {
     totalCalls, completedCalls, answerRate, avgDuration, totalCost,
@@ -180,6 +227,8 @@ export async function getStats(): Promise<StatsData> {
     costTrend:           Object.entries(dailyCost).map(([date, cost]) => ({ date, cost })),
     hourlyDistribution:  Object.entries(hourMap).map(([hour, count]) => ({ hour: Number(hour), count })).sort((a, b) => a.hour - b.hour),
     statusBreakdown:     Object.entries(statusMap).map(([status, count]) => ({ status, count })),
+    scenarioPerformance,
+    randevuTrend,
   };
 }
 

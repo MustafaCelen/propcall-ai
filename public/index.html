@@ -134,6 +134,19 @@
     <!-- ── TAB 2: GEÇMİŞ ─────────────────────────────────── -->
     <div class="tab-content" id="tabHistory">
 
+      <!-- Hızlı dönem chip'leri -->
+      <div class="quick-chips" id="historyChips">
+        <button class="chip" data-period="today">Bugün</button>
+        <button class="chip" data-period="yesterday">Dün</button>
+        <button class="chip" data-period="7">Son 7 gün</button>
+        <button class="chip" data-period="30">Son 30 gün</button>
+        <button class="chip active" data-period="all">Hepsi</button>
+        <div class="chip-search">
+          <input type="text" id="historySearch" placeholder="🔍 Ad veya telefon..." />
+        </div>
+        <div class="chip-counter" id="historyCounter"></div>
+      </div>
+
       <div class="filter-bar">
         <div class="filter-group">
           <label>Başlangıç</label>
@@ -187,8 +200,7 @@
           </select>
         </div>
         <div class="filter-actions">
-          <button class="btn-filter" id="btnApplyFilter">Filtrele</button>
-          <button class="btn-filter-clear" id="btnClearFilter">✕</button>
+          <button class="btn-filter-clear" id="btnClearFilter">✕ Temizle</button>
           <button class="btn-export" id="btnExport">⬇ CSV</button>
         </div>
       </div>
@@ -197,8 +209,10 @@
         <table class="calls-table">
           <thead>
             <tr>
-              <th>Tarih/Saat</th>
-              <th>Müşteri</th>
+              <th class="th-sort" data-sort="startTime">Tarih/Saat</th>
+              <th class="th-sort" data-sort="customerName">Müşteri</th>
+              <th>Durum</th>
+              <th>Süre</th>
               <th>Randevu</th>
               <th>İlgi</th>
               <th>Ret Nedeni</th>
@@ -207,7 +221,7 @@
             </tr>
           </thead>
           <tbody id="callsTableBody">
-            <tr><td colspan="7" class="table-empty">Yükleniyor...</td></tr>
+            <tr><td colspan="9" class="table-empty">Yükleniyor...</td></tr>
           </tbody>
         </table>
       </div>
@@ -217,6 +231,15 @@
     <!-- ── TAB 3: İSTATİSTİKLER ─────────────────────────── -->
     <div class="tab-content" id="tabStats">
       <div class="stats-scroll">
+
+        <div class="quick-chips stats-chips" id="statsChips">
+          <button class="chip" data-period="1">Bugün</button>
+          <button class="chip" data-period="7">Son 7 gün</button>
+          <button class="chip active" data-period="30">Son 30 gün</button>
+          <button class="chip" data-period="0">Hepsi</button>
+          <div class="chip-spacer"></div>
+          <button class="chip-refresh" id="statsRefresh" title="Yenile">↻</button>
+        </div>
 
         <div class="stat-cards">
           <div class="stat-card">
@@ -242,12 +265,32 @@
               <div class="stat-sub" id="statRandevuRate">— dönüşüm oranı</div>
             </div>
           </div>
+          <div class="stat-card">
+            <div class="stat-icon">⏱️</div>
+            <div class="stat-body">
+              <div class="stat-label">Ort. Süre</div>
+              <div class="stat-value" id="statAvgDuration">—</div>
+              <div class="stat-sub">saniye/arama</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">💰</div>
+            <div class="stat-body">
+              <div class="stat-label">Toplam Maliyet</div>
+              <div class="stat-value" id="statTotalCost">—</div>
+              <div class="stat-sub" id="statCostPerRandevu">— $ / randevu</div>
+            </div>
+          </div>
         </div>
 
         <div class="charts-grid">
           <div class="chart-card span2">
-            <div class="chart-title">Günlük Arama Sayısı — Son 30 Gün</div>
+            <div class="chart-title" id="chartDailyTitle">Günlük Arama Sayısı</div>
             <div class="chart-wrap"><canvas id="chartDailyCalls"></canvas></div>
+          </div>
+          <div class="chart-card span2">
+            <div class="chart-title">📅 Randevu Dönüşüm Trendi (%)</div>
+            <div class="chart-wrap"><canvas id="chartRandevuTrend"></canvas></div>
           </div>
           <div class="chart-card">
             <div class="chart-title">İlgi Seviyesi Dağılımı</div>
@@ -257,6 +300,18 @@
             <div class="chart-title">Neden Reddetti?</div>
             <div class="chart-wrap"><canvas id="chartRetDist"></canvas></div>
           </div>
+          <div class="chart-card">
+            <div class="chart-title">Saatlik Dağılım</div>
+            <div class="chart-wrap"><canvas id="chartHourly"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Arama Durumu</div>
+            <div class="chart-wrap"><canvas id="chartStatus"></canvas></div>
+          </div>
+          <div class="chart-card span2">
+            <div class="chart-title">🎭 Senaryo Performansı</div>
+            <div class="scenario-perf-table" id="scenarioPerfTable"></div>
+          </div>
         </div>
 
       </div>
@@ -264,6 +319,10 @@
 
     <!-- ── TAB: TAKİP ──────────────────────────────────────── -->
     <div class="tab-content" id="tabFollowup">
+      <div class="followup-toolbar">
+        <input type="text" id="followupSearch" placeholder="🔍 Ad veya telefon ara..." />
+        <div class="followup-summary" id="followupSummary"></div>
+      </div>
       <div class="followup-layout" id="followupLayout">
         <div class="followup-loading">Yükleniyor...</div>
       </div>

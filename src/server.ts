@@ -230,7 +230,11 @@ app.get('/api/followup', async (_req: Request, res: Response) => {
     const cevapsizilar = Array.from(phoneLatest.values())
       .filter(c => c.status === 'no-answer' || c.status === 'busy')
       .map(c => ({ ...c, retryCount: retryCounts.get(c.customerPhone) || 1 }))
-      .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
+      // Öncelik: önce az denenmiş (daha taze), sonra yeniden tarih azalan
+      .sort((a, b) => {
+        if (a.retryCount !== b.retryCount) return a.retryCount - b.retryCount;
+        return new Date(b.startTime).getTime() - new Date(a.startTime).getTime();
+      });
 
     return res.json({
       success: true,
@@ -296,9 +300,10 @@ app.post('/api/generate-summary', async (req: Request, res: Response) => {
 
 // ─── İSTATİSTİK ──────────────────────────────────────────────────────────────
 
-app.get('/api/stats', async (_req: Request, res: Response) => {
+app.get('/api/stats', async (req: Request, res: Response) => {
   try {
-    return res.json({ success: true, data: await getStats() });
+    const period = req.query.period ? parseInt(String(req.query.period), 10) : undefined;
+    return res.json({ success: true, data: await getStats(period && period > 0 ? period : undefined) });
   } catch (err) {
     return res.status(500).json({ success: false, error: String(err) });
   }

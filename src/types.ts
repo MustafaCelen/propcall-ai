@@ -126,6 +126,8 @@ export interface StatsData {
   costTrend: Array<{ date: string; cost: number }>;
   hourlyDistribution: Array<{ hour: number; count: number }>;
   statusBreakdown: Array<{ status: string; count: number }>;
+  scenarioPerformance: Array<{ name: string; calls: number; randevu: number; randevuRate: number; cost: number }>;
+  randevuTrend: Array<{ date: string; rate: number; count: number }>;
 }
 
 export interface CallFilters {

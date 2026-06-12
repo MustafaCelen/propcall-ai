@@ -36,6 +36,12 @@ export async function initDb(): Promise<void> {
       data       JSONB,
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    CREATE INDEX IF NOT EXISTS idx_calls_start_time      ON calls (start_time DESC NULLS LAST);
+    CREATE INDEX IF NOT EXISTS idx_calls_status          ON calls (status);
+    CREATE INDEX IF NOT EXISTS idx_calls_customer_phone  ON calls ((data ->> 'customerPhone'));
+    CREATE INDEX IF NOT EXISTS idx_calls_scenario_id     ON calls ((data ->> 'scenarioId'));
+    CREATE INDEX IF NOT EXISTS idx_calls_follow_up       ON calls (((data ->> 'followUp')::boolean)) WHERE (data ->> 'followUp')::boolean = true;
   `);
 }
 
