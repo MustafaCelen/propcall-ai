@@ -41,7 +41,12 @@ app.get('/api/events', (req: Request, res: Response) => {
   res.flushHeaders();
   res.write('event: connected\ndata: {}\n\n');
   sseClients.add(res);
-  req.on('close', () => sseClients.delete(res));
+
+  const heartbeat = setInterval(() => {
+    try { res.write(': ping\n\n'); } catch { clearInterval(heartbeat); sseClients.delete(res); }
+  }, 30000);
+
+  req.on('close', () => { clearInterval(heartbeat); sseClients.delete(res); });
 });
 
 // ─── VAPI: Arama başlat ───────────────────────────────────────────────────────
