@@ -17,6 +17,11 @@ import {
   endedReasonToStatus, getStats, exportCSV,
 } from './calls';
 import { VapiCallRequest, VapiWebhookPayload, VapiCostItem, CallFilters } from './types';
+import {
+  initCampaignRunner, loadCampaignFromDb, getCampaignState,
+  campaignLoad, campaignStart, campaignResume, campaignPause, campaignStop, campaignClear,
+  onCampaignCallEnded, onCampaignSummaryReady,
+} from './campaign';
 
 const app  = express();
 const PORT = process.env.PORT || 5000;
@@ -154,6 +159,7 @@ async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
       } as any);
 
       broadcast('call-ended', { vapiCallId, endedReason: endReason, duration, status });
+      onCampaignCallEnded(vapiCallId, status, duration).catch(console.error);
       generateSummaryForCall(vapiCallId).catch(console.error);
       break;
     }
@@ -168,6 +174,7 @@ async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
         : alreadyDone ? existing!.status : 'failed';
       await updateCall(vapiCallId, { status: s2, endTime: new Date().toISOString() } as any);
       broadcast('call-ended', { vapiCallId, endedReason: newReason, status: s2 });
+      onCampaignCallEnded(vapiCallId, s2).catch(console.error);
       break;
     }
   }
@@ -201,6 +208,7 @@ async function generateSummaryForCall(vapiCallId: string): Promise<void> {
     const summary = await generateCallSummary(record.customerInfo, history);
     await saveCallSummary(vapiCallId, summary);
     broadcast('summary-ready', { vapiCallId, summary });
+    onCampaignSummaryReady(vapiCallId, summary).catch(console.error);
     console.log(`[AI] Özet hazır: ${vapiCallId}`);
   } catch (err) {
     console.error('[AI] Özet hatası:', err);
@@ -385,32 +393,60 @@ app.delete('/api/scenarios/:id', async (req, res) => {
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
 
-// ─── CAMPAIGN STATE ──────────────────────────────────────────────────────────
+// ─── KAMPANYA — Sunucu taraflı çalışır ───────────────────────────────────────
 
-app.get('/api/campaign', async (_req: Request, res: Response) => {
+app.get('/api/campaign', (_req: Request, res: Response) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT data FROM campaign_state WHERE id = 'current'`,
-    );
-    return res.json({ success: true, data: rows[0]?.data ?? null });
+    return res.json({ success: true, data: getCampaignState() });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
 
-app.post('/api/campaign', async (req: Request, res: Response) => {
+// Kişi listesini yükle (henüz başlatma)
+app.post('/api/campaign/load', async (req: Request, res: Response) => {
   try {
-    await pool.query(
-      `INSERT INTO campaign_state (id, data, updated_at)
-       VALUES ('current', $1, NOW())
-       ON CONFLICT (id) DO UPDATE SET data = $1, updated_at = NOW()`,
-      [JSON.stringify(req.body)],
-    );
+    const { contacts, maxConcurrent, scenarioId } = req.body;
+    if (!Array.isArray(contacts) || !contacts.length)
+      return res.status(400).json({ success: false, error: 'Kişi listesi zorunlu' });
+    await campaignLoad(contacts, maxConcurrent || 1, scenarioId);
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.post('/api/campaign/start', async (req: Request, res: Response) => {
+  try {
+    const { contacts, maxConcurrent, scenarioId } = req.body;
+    if (contacts?.length) {
+      await campaignLoad(contacts, maxConcurrent || 1, scenarioId);
+    }
+    await campaignStart();
+    return res.json({ success: true, data: getCampaignState() });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.post('/api/campaign/resume', async (_req: Request, res: Response) => {
+  try {
+    await campaignResume();
+    return res.json({ success: true, data: getCampaignState() });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.post('/api/campaign/pause', async (_req: Request, res: Response) => {
+  try {
+    const result = await campaignPause();
+    return res.json({ success: true, ...result });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.post('/api/campaign/stop', async (_req: Request, res: Response) => {
+  try {
+    await campaignStop();
     return res.json({ success: true });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
 
 app.delete('/api/campaign', async (_req: Request, res: Response) => {
   try {
-    await pool.query(`DELETE FROM campaign_state WHERE id = 'current'`);
+    await campaignClear();
     return res.json({ success: true });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
@@ -422,7 +458,9 @@ app.get('*', (_req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'i
 // ─── BAŞLAT ──────────────────────────────────────────────────────────────────
 
 initDb()
-  .then(() => {
+  .then(async () => {
+    initCampaignRunner(broadcast);
+    await loadCampaignFromDb();
     app.listen(Number(PORT), HOST, () => {
       console.log(`\n✅ PropCall AI sunucusu başlatıldı`);
       console.log(`   → http://${HOST}:${PORT}`);
