@@ -1352,7 +1352,6 @@ function renderFollowup(d) {
 }
 
 function bulkLoadToCampaign(items) {
-  campaign.pollMap.forEach((id) => clearInterval(id));
   campaign.contacts = items.map(c => ({
     name:       c.customerName,
     phone:      c.customerPhone,
@@ -1361,10 +1360,7 @@ function bulkLoadToCampaign(items) {
     status:     'bekliyor',
     vapiCallId: null,
     result:     null,
-    callStartTs: null,
   }));
-  campaign.callMap  = new Map();
-  campaign.pollMap  = new Map();
   campaign.running  = false;
   campaign.paused   = false;
   switchTab('campaign');
@@ -1509,10 +1505,7 @@ function parseContacts(rows) {
     if (colNotes < 0) colNotes = -1;
   }
 
-  campaign.pollMap.forEach((id) => clearInterval(id));
   campaign.contacts = [];
-  campaign.callMap  = new Map();
-  campaign.pollMap  = new Map();
   campaign.running  = false;
   campaign.paused   = false;
 
