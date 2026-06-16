@@ -2,7 +2,7 @@
 // Tarayıcı kapansa bile çalışmaya devam eder.
 
 import { createVapiCall } from './vapi';
-import { readCall } from './calls';
+import { readCall, createCall } from './calls';
 import { getScenario } from './scenarios';
 import { CustomerInfo, CallSummary } from './types';
 import pool from './db';
@@ -254,17 +254,17 @@ async function callContact(idx: number): Promise<void> {
   });
 
   try {
-    let systemPrompt: string | undefined;
-    if (state.scenarioId) {
-      const scenario = await getScenario(state.scenarioId);
-      systemPrompt   = scenario?.systemPrompt;
-    }
+    const scenario = state.scenarioId ? await getScenario(state.scenarioId) : null;
     const customer: CustomerInfo = {
       name: c.name, phone: c.phone,
       region: c.region || '', notes: c.notes || '',
     };
-    const vapiCall = await createVapiCall(customer, systemPrompt);
+    const vapiCall = await createVapiCall(customer, scenario?.systemPrompt);
     c.vapiCallId   = vapiCall.id;
+
+    // Aramayı DB'ye kaydet — Geçmiş Aramalar'da görünmesi için
+    await createCall(vapiCall.id, customer, scenario?.id, scenario?.name);
+
     await saveCampaignToDb();
     broadcastFn('campaign-contact-update', {
       index: idx, contact: { ...c }, summary: getCampaignSummary(),
