@@ -16,7 +16,7 @@ export async function generateCallSummary(
     .join('\n\n');
 
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-5',
     max_tokens: 600,
     system: `Sen bir gayrimenkul CRM sistemi için görüşme analisti asistanısın.
 Sana verilen telefon görüşmesi transcript'ini analiz edecek ve SADECE geçerli JSON döndüreceksin, başka hiçbir şey yazmayacaksın.`,
