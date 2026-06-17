@@ -2,7 +2,7 @@
 // Tarayıcı kapansa bile çalışmaya devam eder.
 
 import { createVapiCall } from './vapi';
-import { readCall, createCall } from './calls';
+import { readCall, createCall, callStatusToTurkish } from './calls';
 import { getScenario } from './scenarios';
 import { CustomerInfo, CallSummary } from './types';
 import pool from './db';
@@ -163,24 +163,34 @@ export async function campaignClear(): Promise<void> {
 
 // ─── Webhook kancaları ────────────────────────────────────────────────────────
 
+// Kampanya durum önceliği: yüksek sayı = daha kesin sonuç
+const STATUS_PRIORITY: Record<string, number> = {
+  'tamamlandı': 4, 'cevapsız': 3, 'meşgul': 2, 'başarısız': 1, 'arıyor': 0, 'bekliyor': -1,
+};
+
 export async function onCampaignCallEnded(
   vapiCallId: string, status: string, duration?: number,
 ): Promise<void> {
   const idx = state.contacts.findIndex(c => c.vapiCallId === vapiCallId);
   if (idx < 0) return;
 
-  const c = state.contacts[idx];
+  const c      = state.contacts[idx];
+  const mapped = callStatusToTurkish(status) as CampaignContact['status'];
 
-  // Idempotency: sadece hâlâ "arıyor" durumdaysa güncelle.
-  // Bu sayede end-of-call-report + call-ended ikilisi aynı kişiyi iki kez işlemez.
-  if (c.status !== 'arıyor') {
-    console.log(`[Campaign] onCampaignCallEnded: ${c.name} zaten "${c.status}", atlanıyor`);
-    return;
+  const currentPriority = STATUS_PRIORITY[c.status] ?? 0;
+  const newPriority     = STATUS_PRIORITY[mapped]   ?? 0;
+
+  // Statü güncelle: ya hâlâ arıyor durumdaysa YA DA gelen durum daha kesin/yüksek öncelikli ise.
+  // Bu sayede call-ended (fallback) + end-of-call-report (yetkili) çifti doğru çalışır:
+  // call-ended geçici olarak başarısız set edebilir, end-of-call-report doğruysa tamamlandı'ya yükseltir.
+  if (newPriority > currentPriority || c.status === 'arıyor') {
+    c.status = mapped;
+  } else {
+    console.log(`[Campaign] onCampaignCallEnded: "${c.name}" ${c.status}→${mapped} düşürme önlendi`);
   }
 
-  const mapped = mapStatus(status);
-  c.status = mapped;
-  if (duration) c.duration = duration;
+  // Süreyi her zaman güncelle (en iyi değer end-of-call-report'tan gelir)
+  if (duration && (!c.duration || duration > c.duration)) c.duration = duration;
 
   await saveCampaignToDb();
   broadcastFn('campaign-contact-update', {
@@ -205,16 +215,7 @@ export async function onCampaignSummaryReady(
 
 // ─── İç yardımcılar ───────────────────────────────────────────────────────────
 
-function mapStatus(status: string): CampaignContact['status'] {
-  // endedReasonToStatus çıktısıyla senkron — tüm olası değerleri kapsa
-  switch (status) {
-    case 'completed':    return 'tamamlandı';
-    case 'no-answer':    return 'cevapsız';
-    case 'busy':         return 'meşgul';
-    case 'in-progress':  return 'arıyor';
-    default:             return 'başarısız';
-  }
-}
+// mapStatus kaldırıldı — yerine callStatusToTurkish (calls.ts) kullanılıyor
 
 function isDone(): boolean {
   return state.contacts.length > 0 &&
@@ -313,7 +314,7 @@ async function tick(): Promise<void> {
     try {
       const record = await readCall(c.vapiCallId);
       if (record && record.status !== 'in-progress') {
-        c.status = mapStatus(record.status);
+        c.status = callStatusToTurkish(record.status) as CampaignContact['status'];
         if (record.duration) c.duration = record.duration;
         changed = true;
       }

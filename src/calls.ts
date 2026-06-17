@@ -105,6 +105,18 @@ export async function saveCallSummary(
   await updateCall(vapiCallId, { summary });
 }
 
+// Kampanya ve tek arama arasında paylaşılan: İngilizce status → Türkçe UI etiketi
+export function callStatusToTurkish(status: string): string {
+  switch (status) {
+    case 'completed':   return 'tamamlandı';
+    case 'no-answer':   return 'cevapsız';
+    case 'busy':        return 'meşgul';
+    case 'in-progress': return 'arıyor';
+    case 'failed':      return 'başarısız';
+    default:            return 'başarısız';
+  }
+}
+
 export function endedReasonToStatus(r?: string): CallRecord['status'] {
   if (!r) return 'failed';
   const lower = r.toLowerCase();

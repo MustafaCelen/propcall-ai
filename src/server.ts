@@ -130,12 +130,16 @@ async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
       const endReason = msg.call?.endedReason;
       const status    = endedReasonToStatus(endReason);
       const recording = msg.recordingUrl || msg.artifact?.recordingUrl;
-      const costs     = parseCosts(msg.costs, msg.cost);
+      const newCosts  = parseCosts(msg.costs, msg.cost);
 
       console.log(`[Webhook] end-of-call-report → endedReason: "${endReason}" → status: "${status}" | süre: ${duration ?? '?'}s`);
 
-      // Artifact transcript varsa mevcut streaming transcript'in üzerine yaz
-      // (artifact daha eksiksizdir). Yoksa streaming transcript'e dokunma.
+      // Mevcut kaydı bir kez oku — transcript karşılaştırma + cost merge için
+      const existing = await readCall(vapiCallId);
+      const existingTranscriptLen = existing?.transcript?.length ?? 0;
+
+      // Transcript: Artifact, streaming'den daha fazla geçerli mesaj içeriyorsa güncelle.
+      // Aksi takdirde gerçek zamanlı gelen streaming transcript korunur.
       if (msg.artifact?.messages?.length) {
         const validMessages = (msg.artifact.messages as any[]).filter(m => {
           if (m.role !== 'assistant' && m.role !== 'user') return false;
@@ -143,7 +147,7 @@ async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
           return text.trim().length > 0;
         });
 
-        if (validMessages.length > 0) {
+        if (validMessages.length > existingTranscriptLen) {
           await updateCall(vapiCallId, { transcript: [] } as any);
           for (const m of validMessages) {
             const text: string = m.message || m.content || m.text || '';
@@ -153,19 +157,22 @@ async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
               timestamp: new Date(m.time || m.timestamp || Date.now()).toISOString(),
             });
           }
-          console.log(`[Webhook] ${vapiCallId} transcript artifact'tan yazıldı (${validMessages.length} mesaj)`);
+          console.log(`[Webhook] ${vapiCallId} transcript artifact'tan yazıldı (${validMessages.length} > ${existingTranscriptLen})`);
         } else {
-          console.warn(`[Webhook] ${vapiCallId} artifact.messages boş içerik — streaming transcript korundu`);
+          console.log(`[Webhook] ${vapiCallId} streaming transcript korundu (${existingTranscriptLen} >= ${validMessages.length})`);
         }
       } else {
         console.warn(`[Webhook] ${vapiCallId} artifact.messages yok — streaming transcript korundu`);
       }
 
+      // Cost merge: cost-update ile biriken değerleri sıfırlamadan güncelle
+      const mergedCosts = newCosts ? mergeCosts(existing?.costs, newCosts) : undefined;
+
       await updateCall(vapiCallId, {
         status, endTime: endedAt, duration,
         endedReason: endReason,
         recordingUrl: recording,
-        ...(costs ? { costs } : {}),
+        ...(mergedCosts ? { costs: mergedCosts } : {}),
       } as any);
 
       broadcast('call-ended', { vapiCallId, endedReason: endReason, duration, status });
@@ -237,6 +244,22 @@ function parseCosts(costsArr?: VapiCostItem[], totalFallback?: number) {
   c.stt    = Math.round(c.stt    * 1e6) / 1e6;
   c.total  = Math.round(c.total  * 1e6) / 1e6;
   return c;
+}
+
+function mergeCosts(
+  existing: { vapi: number; twilio: number; llm: number; tts: number; stt: number; total: number } | undefined,
+  incoming: { vapi: number; twilio: number; llm: number; tts: number; stt: number; total: number },
+) {
+  if (!existing) return incoming;
+  return {
+    vapi:   incoming.vapi   || existing.vapi,
+    twilio: incoming.twilio || existing.twilio,
+    llm:    incoming.llm    || existing.llm,
+    tts:    incoming.tts    || existing.tts,
+    stt:    incoming.stt    || existing.stt,
+    // Toplam: cost-update birikimli olabileceğinden en yüksek değeri kullan
+    total:  Math.max(incoming.total, existing.total),
+  };
 }
 
 async function generateSummaryForCall(vapiCallId: string, attempt = 1): Promise<void> {
