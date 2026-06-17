@@ -204,12 +204,30 @@ async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
   }
 }
 
+// Vapi'nin farklı formatlarda gönderebileceği cost değerini güvenli şekilde sayıya çevir.
+// item.cost bazen number, bazen nested object olabilir.
+function extractCost(raw: unknown): number {
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) ? raw : 0;
+  }
+  if (raw && typeof raw === 'object') {
+    // Nested object'ten bilinen alanları dene
+    const obj = raw as Record<string, unknown>;
+    for (const key of ['cost', 'value', 'amount', 'total', 'price']) {
+      const v = obj[key];
+      if (typeof v === 'number' && Number.isFinite(v)) return v;
+    }
+  }
+  return 0;
+}
+
 function parseCosts(costsArr?: VapiCostItem[], totalFallback?: number) {
   if (!costsArr?.length && !totalFallback) return null;
   const c = { vapi: 0, twilio: 0, llm: 0, tts: 0, stt: 0, total: 0 };
   if (costsArr?.length) {
     costsArr.forEach(item => {
-      const cost = item.cost || 0;
+      // extractCost: hem sayı hem nested-object formatlarını güvenle handle eder
+      const cost = extractCost(item.cost);
       // Vapi farklı versiyonlarında type isimleri değişebiliyor — hepsini kapsa
       switch (item.type) {
         case 'vapi':
@@ -227,22 +245,23 @@ function parseCosts(costsArr?: VapiCostItem[], totalFallback?: number) {
         case 'transcriber':
         case 'stt':
           c.stt += cost; break;
-        // analysisCost, knowledgeBase vb. → toplama ekle ama kırılımda yok
+        // analysisCost, knowledgeBase vb. → toplama ekle, kırılımda yok
       }
       c.total += cost;
     });
-    // Toplam sıfırsa fallback kullan
+    // Toplam sıfırsa (tüm cost'lar bilinmeyen tip) fallback kullan
     if (c.total === 0 && totalFallback) c.total = totalFallback;
   } else if (totalFallback) {
     c.total = totalFallback;
   }
-  // Küçük yuvarlama hatalarını temizle
-  c.vapi   = Math.round(c.vapi   * 1e6) / 1e6;
-  c.twilio = Math.round(c.twilio * 1e6) / 1e6;
-  c.llm    = Math.round(c.llm    * 1e6) / 1e6;
-  c.tts    = Math.round(c.tts    * 1e6) / 1e6;
-  c.stt    = Math.round(c.stt    * 1e6) / 1e6;
-  c.total  = Math.round(c.total  * 1e6) / 1e6;
+  // Her alanı normalleştir: NaN/Infinity → 0, sonra 6 ondalık yuvarlama
+  const normalize = (v: number) => Number.isFinite(v) ? Math.round(v * 1e6) / 1e6 : 0;
+  c.vapi   = normalize(c.vapi);
+  c.twilio = normalize(c.twilio);
+  c.llm    = normalize(c.llm);
+  c.tts    = normalize(c.tts);
+  c.stt    = normalize(c.stt);
+  c.total  = normalize(c.total);
   return c;
 }
 
