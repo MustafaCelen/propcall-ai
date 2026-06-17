@@ -147,119 +147,188 @@ export function endedReasonToStatus(r?: string): CallRecord['status'] {
 }
 
 export async function getStats(periodDays?: number): Promise<StatsData> {
-  const allCalls = await getAllCalls();
-  // Dönem filtresi: belirtilmişse son N güne göre filtrele
-  const calls = (periodDays && periodDays > 0)
-    ? allCalls.filter(c => {
-        if (!c.startTime) return false;
-        const age = (Date.now() - new Date(c.startTime).getTime()) / 86400000;
-        return age <= periodDays;
-      })
-    : allCalls;
+  const days   = periodDays && periodDays > 0 ? Math.min(periodDays, 90) : 30;
+  const cutoff = periodDays && periodDays > 0
+    ? new Date(Date.now() - periodDays * 86400000).toISOString()
+    : null;
 
-  const finished = calls.filter(c => c.status !== 'in-progress');
-  const withSum  = finished.filter(c => c.summary !== undefined);
+  // Tüm ağır hesaplamalar PostgreSQL'de paralel çalışır — Node'a sadece sonuç gelir
+  const [
+    mainRow,
+    dailyRows,
+    randevuTrendRows,
+    ilgiRows,
+    retRows,
+    actionRows,
+    hourRows,
+    statusRows,
+    scenarioRows,
+  ] = await Promise.all([
+    // 1 — Temel sayılar
+    pool.query<{
+      total_calls: string; completed_calls: string; avg_duration: string;
+      total_cost: string; randevu_count: string; with_summary: string;
+    }>(
+      `SELECT
+         COUNT(*)::int                                                         AS total_calls,
+         COUNT(*) FILTER (WHERE status = 'completed')::int                    AS completed_calls,
+         COALESCE(ROUND(AVG((data->>'duration')::float)
+           FILTER (WHERE status != 'in-progress'))::int, 0)                   AS avg_duration,
+         COALESCE(SUM((data->'costs'->>'total')::float), 0)                  AS total_cost,
+         COUNT(*) FILTER (WHERE (data->'summary'->>'randevu_alindi')::boolean
+           = true)::int                                                        AS randevu_count,
+         COUNT(*) FILTER (WHERE data->'summary' IS NOT NULL
+           AND status != 'in-progress')::int                                  AS with_summary
+       FROM calls
+       WHERE ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)`,
+      [cutoff],
+    ),
 
-  const totalCalls     = calls.length;
-  const completedCalls = calls.filter(c => c.status === 'completed').length;
-  const answerRate     = totalCalls ? Math.round(completedCalls / totalCalls * 100) : 0;
-  const avgDuration    = finished.length
-    ? Math.round(finished.reduce((s, c) => s + (c.duration || 0), 0) / finished.length) : 0;
-  const totalCost      = Math.round(calls.reduce((s, c) => s + (c.costs?.total || 0), 0) * 10000) / 10000;
-  const randevuCount   = withSum.filter(c => c.summary!.randevu_alindi === true).length;
-  const randevuRate    = withSum.length ? Math.round(randevuCount / withSum.length * 100) : 0;
+    // 2 — Günlük arama + maliyet (generate_series → sıfırlı günler dahil)
+    pool.query<{ date: string; count: string; cost: string }>(
+      `WITH ds AS (
+         SELECT generate_series(
+           CURRENT_DATE - ($2::int - 1) * INTERVAL '1 day',
+           CURRENT_DATE, '1 day'
+         )::date AS d
+       )
+       SELECT ds.d::text AS date,
+              COALESCE(COUNT(c.vapi_call_id), 0)::int                AS count,
+              COALESCE(SUM((c.data->'costs'->>'total')::float), 0)   AS cost
+       FROM ds
+       LEFT JOIN calls c ON c.start_time::date = ds.d
+         AND ($1::timestamptz IS NULL OR c.start_time >= $1::timestamptz)
+       GROUP BY ds.d ORDER BY ds.d`,
+      [cutoff, days],
+    ),
 
-  // Günlük seri: dönem belirtilmişse o gün sayısı, yoksa son 30 gün
-  const days = periodDays && periodDays > 0 ? Math.min(periodDays, 90) : 30;
-  const dailyCalls: Record<string, number> = {};
-  const dailyCost:  Record<string, number> = {};
-  const dailyRandevu: Record<string, { total: number; alindi: number }> = {};
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(); d.setDate(d.getDate() - i);
-    const k = d.toISOString().slice(0, 10);
-    dailyCalls[k]   = 0;
-    dailyCost[k]    = 0;
-    dailyRandevu[k] = { total: 0, alindi: 0 };
-  }
-  calls.forEach(c => {
-    if (!c.startTime) return;
-    const k = c.startTime.slice(0, 10);
-    if (k in dailyCalls) {
-      dailyCalls[k]++;
-      dailyCost[k] = Math.round((dailyCost[k] + (c.costs?.total || 0)) * 10000) / 10000;
-      if (c.summary) {
-        dailyRandevu[k].total++;
-        if (c.summary.randevu_alindi) dailyRandevu[k].alindi++;
-      }
-    }
-  });
+    // 3 — Randevu dönüşüm trendi
+    pool.query<{ date: string; total: string; alindi: string }>(
+      `WITH ds AS (
+         SELECT generate_series(
+           CURRENT_DATE - ($2::int - 1) * INTERVAL '1 day',
+           CURRENT_DATE, '1 day'
+         )::date AS d
+       )
+       SELECT ds.d::text AS date,
+              COUNT(c.vapi_call_id) FILTER (WHERE c.data->'summary' IS NOT NULL)::int AS total,
+              COUNT(c.vapi_call_id) FILTER (
+                WHERE (c.data->'summary'->>'randevu_alindi')::boolean = true
+              )::int AS alindi
+       FROM ds
+       LEFT JOIN calls c ON c.start_time::date = ds.d
+         AND ($1::timestamptz IS NULL OR c.start_time >= $1::timestamptz)
+       GROUP BY ds.d ORDER BY ds.d`,
+      [cutoff, days],
+    ),
+
+    // 4 — İlgi seviyesi dağılımı
+    pool.query<{ seviye: string; count: string }>(
+      `SELECT COALESCE(data->'summary'->>'ilgi_seviyesi','yok') AS seviye,
+              COUNT(*)::int AS count
+       FROM calls
+       WHERE data->'summary' IS NOT NULL AND status != 'in-progress'
+         AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
+       GROUP BY seviye`,
+      [cutoff],
+    ),
+
+    // 5 — Ret nedeni dağılımı
+    pool.query<{ neden: string; count: string }>(
+      `SELECT data->'summary'->>'ret_nedeni' AS neden, COUNT(*)::int AS count
+       FROM calls
+       WHERE data->'summary'->>'ret_nedeni' IS NOT NULL
+         AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
+       GROUP BY neden ORDER BY count DESC LIMIT 8`,
+      [cutoff],
+    ),
+
+    // 6 — Aksiyon dağılımı
+    pool.query<{ action: string; count: string }>(
+      `SELECT COALESCE(data->'summary'->>'tavsiye_edilen_aksiyon','Belirsiz') AS action,
+              COUNT(*)::int AS count
+       FROM calls
+       WHERE data->'summary' IS NOT NULL AND status != 'in-progress'
+         AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
+       GROUP BY action`,
+      [cutoff],
+    ),
+
+    // 7 — Saatlik dağılım
+    pool.query<{ hour: string; count: string }>(
+      `SELECT EXTRACT(HOUR FROM start_time)::int AS hour, COUNT(*)::int AS count
+       FROM calls
+       WHERE start_time IS NOT NULL
+         AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
+       GROUP BY hour ORDER BY hour`,
+      [cutoff],
+    ),
+
+    // 8 — Durum dağılımı
+    pool.query<{ status: string; count: string }>(
+      `SELECT status, COUNT(*)::int AS count FROM calls
+       WHERE ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
+       GROUP BY status`,
+      [cutoff],
+    ),
+
+    // 9 — Senaryo performansı
+    pool.query<{ name: string; calls: string; randevu: string; cost: string }>(
+      `SELECT COALESCE(data->>'scenarioName','Varsayılan') AS name,
+              COUNT(*)::int AS calls,
+              COUNT(*) FILTER (
+                WHERE (data->'summary'->>'randevu_alindi')::boolean = true
+              )::int AS randevu,
+              COALESCE(SUM((data->'costs'->>'total')::float), 0) AS cost
+       FROM calls
+       WHERE ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
+       GROUP BY name ORDER BY calls DESC`,
+      [cutoff],
+    ),
+  ]);
+
+  const m            = mainRow.rows[0];
+  const totalCalls   = Number(m.total_calls);
+  const completedCalls = Number(m.completed_calls);
+  const withSummary  = Number(m.with_summary);
+  const randevuCount = Number(m.randevu_count);
+  const totalCost    = Math.round(Number(m.total_cost) * 10000) / 10000;
+  const answerRate   = totalCalls ? Math.round(completedCalls / totalCalls * 100) : 0;
+  const randevuRate  = withSummary ? Math.round(randevuCount / withSummary * 100) : 0;
+  const avgDuration  = Number(m.avg_duration);
 
   const ilgiOrder = ['yüksek', 'orta', 'düşük', 'yok'];
-  const ilgiMap: Record<string, number> = { yüksek: 0, orta: 0, düşük: 0, yok: 0 };
-  withSum.forEach(c => { const s = c.summary!.ilgi_seviyesi || 'yok'; ilgiMap[s] = (ilgiMap[s] || 0) + 1; });
+  const ilgiMap   = Object.fromEntries(ilgiRows.rows.map(r => [r.seviye, Number(r.count)]));
 
-  const retMap: Record<string, number> = {};
-  withSum.filter(c => c.summary!.ret_nedeni).forEach(c => {
-    const r = c.summary!.ret_nedeni!;
-    retMap[r] = (retMap[r] || 0) + 1;
-  });
-  const retNedeniDistribution = Object.entries(retMap)
-    .sort((a, b) => b[1] - a[1]).slice(0, 8)
-    .map(([neden, count]) => ({ neden, count }));
-
-  const actionMap: Record<string, number> = {};
-  withSum.forEach(c => {
-    const a = c.summary!.tavsiye_edilen_aksiyon || 'Belirsiz';
-    actionMap[a] = (actionMap[a] || 0) + 1;
-  });
-
-  const hourMap: Record<number, number> = {};
-  for (let h = 0; h < 24; h++) hourMap[h] = 0;
-  calls.forEach(c => {
-    if (!c.startTime) return;
-    hourMap[new Date(c.startTime).getHours()]++;
-  });
-
-  const statusMap: Record<string, number> = {};
-  calls.forEach(c => { statusMap[c.status] = (statusMap[c.status] || 0) + 1; });
-
-  // Senaryo başına performans
-  const scenarioMap: Record<string, { name: string; calls: number; randevu: number; cost: number }> = {};
-  calls.forEach(c => {
-    const key = c.scenarioName || 'Varsayılan';
-    if (!scenarioMap[key]) scenarioMap[key] = { name: key, calls: 0, randevu: 0, cost: 0 };
-    scenarioMap[key].calls++;
-    scenarioMap[key].cost += c.costs?.total || 0;
-    if (c.summary?.randevu_alindi) scenarioMap[key].randevu++;
-  });
-  const scenarioPerformance = Object.values(scenarioMap)
-    .map(s => ({
-      name: s.name,
-      calls: s.calls,
-      randevu: s.randevu,
-      randevuRate: s.calls ? Math.round(s.randevu / s.calls * 100) : 0,
-      cost: Math.round(s.cost * 10000) / 10000,
-    }))
-    .sort((a, b) => b.calls - a.calls);
-
-  const randevuTrend = Object.entries(dailyRandevu).map(([date, v]) => ({
-    date,
-    rate: v.total ? Math.round(v.alindi / v.total * 100) : 0,
-    count: v.alindi,
-  }));
+  // Saatlik dağılım: 0-23 tam seri
+  const hourFull: { hour: number; count: number }[] = [];
+  const hourMap = Object.fromEntries(hourRows.rows.map(r => [Number(r.hour), Number(r.count)]));
+  for (let h = 0; h < 24; h++) hourFull.push({ hour: h, count: hourMap[h] || 0 });
 
   return {
     totalCalls, completedCalls, answerRate, avgDuration, totalCost,
     randevuCount, randevuRate,
-    ilgiDistribution:    ilgiOrder.map(s => ({ seviye: s, count: ilgiMap[s] || 0 })),
-    retNedeniDistribution,
-    actionDistribution:  Object.entries(actionMap).map(([action, count]) => ({ action, count })),
-    dailyCalls:          Object.entries(dailyCalls).map(([date, count]) => ({ date, count })),
-    costTrend:           Object.entries(dailyCost).map(([date, cost]) => ({ date, cost })),
-    hourlyDistribution:  Object.entries(hourMap).map(([hour, count]) => ({ hour: Number(hour), count })).sort((a, b) => a.hour - b.hour),
-    statusBreakdown:     Object.entries(statusMap).map(([status, count]) => ({ status, count })),
-    scenarioPerformance,
-    randevuTrend,
+    ilgiDistribution:   ilgiOrder.map(s => ({ seviye: s, count: ilgiMap[s] || 0 })),
+    retNedeniDistribution: retRows.rows.map(r => ({ neden: r.neden, count: Number(r.count) })),
+    actionDistribution: actionRows.rows.map(r => ({ action: r.action, count: Number(r.count) })),
+    dailyCalls:         dailyRows.rows.map(r => ({ date: r.date, count: Number(r.count) })),
+    costTrend:          dailyRows.rows.map(r => ({ date: r.date, cost: Math.round(Number(r.cost) * 10000) / 10000 })),
+    hourlyDistribution: hourFull,
+    statusBreakdown:    statusRows.rows.map(r => ({ status: r.status, count: Number(r.count) })),
+    scenarioPerformance: scenarioRows.rows.map(r => {
+      const calls = Number(r.calls);
+      const randevu = Number(r.randevu);
+      return {
+        name: r.name, calls, randevu,
+        randevuRate: calls ? Math.round(randevu / calls * 100) : 0,
+        cost: Math.round(Number(r.cost) * 10000) / 10000,
+      };
+    }),
+    randevuTrend: randevuTrendRows.rows.map(r => {
+      const total  = Number(r.total);
+      const alindi = Number(r.alindi);
+      return { date: r.date, rate: total ? Math.round(alindi / total * 100) : 0, count: alindi };
+    }),
   };
 }
 

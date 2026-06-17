@@ -33,8 +33,10 @@ type BroadcastFn = (event: string, data: unknown) => void;
 
 // ─── Sabitler ─────────────────────────────────────────────────────────────────
 
-const CALL_TIMEOUT_MS  = 5 * 60 * 1000; // 5 dakika
-const TICK_INTERVAL_MS = 10 * 1000;      // 10 saniye
+const CALL_TIMEOUT_MS      = 5 * 60 * 1000; // 5 dakika
+const TICK_ACTIVE_MS       = 5  * 1000;     // Aktif arama varsa: 5 sn
+const TICK_RUNNING_MS      = 15 * 1000;     // Çalışıyor ama bekliyor: 15 sn
+const TICK_IDLE_MS         = 30 * 1000;     // Durmuş/duraklatılmış: 30 sn
 
 // ─── Durum ───────────────────────────────────────────────────────────────────
 
@@ -49,9 +51,20 @@ const state: CampaignSnapshot = {
 
 // ─── Başlatıcı ────────────────────────────────────────────────────────────────
 
+function scheduleNextTick(): void {
+  const hasActive = state.contacts.some(c => c.status === 'arıyor');
+  const delay = hasActive
+    ? TICK_ACTIVE_MS
+    : (state.running && !state.paused ? TICK_RUNNING_MS : TICK_IDLE_MS);
+  setTimeout(async () => {
+    await tick();
+    scheduleNextTick();
+  }, delay).unref();
+}
+
 export function initCampaignRunner(broadcast: BroadcastFn): void {
   broadcastFn = broadcast;
-  setInterval(tick, TICK_INTERVAL_MS).unref();
+  scheduleNextTick();
 }
 
 // ─── DB ───────────────────────────────────────────────────────────────────────

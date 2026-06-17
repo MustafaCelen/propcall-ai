@@ -313,44 +313,66 @@ async function generateSummaryForCall(vapiCallId: string, attempt = 1): Promise<
 
 app.get('/api/followup', async (_req: Request, res: Response) => {
   try {
-    const all      = await getAllCalls();
-    const finished = all.filter(c => c.status !== 'in-progress' && c.summary);
+    // Her grup için yalnızca ilgili satırları çek — tüm tabloyu belleğe almak yerine SQL filtresi
+    const [randevuRes, geriRes, beklemeRes, manuelRes, cevapsiziRes] = await Promise.all([
+      pool.query(
+        `SELECT data FROM calls
+         WHERE (data->'summary'->>'randevu_alindi')::boolean = true
+         ORDER BY start_time DESC NULLS LAST`,
+      ),
+      pool.query(
+        `SELECT data FROM calls
+         WHERE data->'summary'->>'tavsiye_edilen_aksiyon' = 'Ara'
+           AND status != 'in-progress'
+         ORDER BY start_time DESC NULLS LAST`,
+      ),
+      pool.query(
+        `SELECT data FROM calls
+         WHERE data->'summary'->>'tavsiye_edilen_aksiyon' = 'Bekleme listesine al'
+           AND status != 'in-progress'
+         ORDER BY start_time DESC NULLS LAST`,
+      ),
+      pool.query(
+        `SELECT data FROM calls
+         WHERE (data->>'followUp')::boolean = true
+         ORDER BY start_time DESC NULLS LAST`,
+      ),
+      // Cevapsız: her numaranın en son araması + retry count
+      pool.query(
+        `WITH latest AS (
+           SELECT DISTINCT ON (data->>'customerPhone')
+             data,
+             (data->>'customerPhone') AS phone
+           FROM calls
+           ORDER BY data->>'customerPhone', start_time DESC NULLS LAST
+         ),
+         retry_counts AS (
+           SELECT (data->>'customerPhone') AS phone, COUNT(*)::int AS cnt
+           FROM calls
+           WHERE status IN ('no-answer','busy')
+           GROUP BY phone
+         )
+         SELECT l.data, COALESCE(r.cnt, 1) AS retry_count
+         FROM latest l
+         LEFT JOIN retry_counts r ON r.phone = l.phone
+         WHERE l.data->>'status' IN ('no-answer','busy')
+         ORDER BY retry_count ASC, (l.data->>'startTime') DESC`,
+      ),
+    ]);
 
     const ilgiRank: Record<string, number> = { yüksek: 3, orta: 2, düşük: 1, yok: 0 };
-    const byIlgi = (a: typeof finished[0], b: typeof finished[0]) =>
+    const byIlgi = (a: any, b: any) =>
       (ilgiRank[b.summary?.ilgi_seviyesi ?? 'yok'] ?? 0) -
       (ilgiRank[a.summary?.ilgi_seviyesi ?? 'yok'] ?? 0);
-
-    const byAction = (action: string) =>
-      finished.filter(c => c.summary!.tavsiye_edilen_aksiyon === action).sort(byIlgi);
-
-    // Cevapsız / Tekrar Ara: her telefon numarası için en son arama no-answer veya busy ise listeye ekle
-    const phoneLatest = new Map<string, typeof all[0]>();
-    all.forEach(c => {
-      const ex = phoneLatest.get(c.customerPhone);
-      if (!ex || new Date(c.startTime) > new Date(ex.startTime)) phoneLatest.set(c.customerPhone, c);
-    });
-    const retryCounts = new Map<string, number>();
-    all.filter(c => c.status === 'no-answer' || c.status === 'busy')
-       .forEach(c => retryCounts.set(c.customerPhone, (retryCounts.get(c.customerPhone) || 0) + 1));
-    const cevapsizilar = Array.from(phoneLatest.values())
-      .filter(c => c.status === 'no-answer' || c.status === 'busy')
-      .map(c => ({ ...c, retryCount: retryCounts.get(c.customerPhone) || 1 }))
-      // Öncelik: önce az denenmiş (daha taze), sonra yeniden tarih azalan
-      .sort((a, b) => {
-        if (a.retryCount !== b.retryCount) return a.retryCount - b.retryCount;
-        return new Date(b.startTime).getTime() - new Date(a.startTime).getTime();
-      });
 
     return res.json({
       success: true,
       data: {
-        randevuAlanlar:  finished.filter(c => c.summary!.randevu_alindi === true)
-                                 .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime()),
-        geriAranacaklar: byAction('Ara'),
-        beklemeListesi:  byAction('Bekleme listesine al'),
-        manuelTakip:     all.filter(c => c.followUp).sort(byIlgi),
-        cevapsizilar,
+        randevuAlanlar:  randevuRes.rows.map(r => r.data),
+        geriAranacaklar: geriRes.rows.map(r => r.data).sort(byIlgi),
+        beklemeListesi:  beklemeRes.rows.map(r => r.data).sort(byIlgi),
+        manuelTakip:     manuelRes.rows.map(r => r.data).sort(byIlgi),
+        cevapsizilar:    cevapsiziRes.rows.map(r => ({ ...r.data, retryCount: Number(r.retry_count) })),
       },
     });
   } catch (err) {
