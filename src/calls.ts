@@ -108,10 +108,29 @@ export async function saveCallSummary(
 export function endedReasonToStatus(r?: string): CallRecord['status'] {
   if (!r) return 'failed';
   const lower = r.toLowerCase();
-  if (['customer-ended-call','assistant-ended-call','assistant-forwarded-call',
-       'exceeded-max-duration','manual','silence-timed-out'].includes(lower)) return 'completed';
-  if (lower.includes('no-answer') || lower === 'voicemail') return 'no-answer';
-  if (lower.includes('busy') || lower === 'call-rejected') return 'busy';
+  // Gerçek konuşma yapılmış aramalar
+  if ([
+    'customer-ended-call',
+    'assistant-ended-call',
+    'assistant-forwarded-call',
+    'exceeded-max-duration',
+    'max-duration-exceeded',
+    'manual',
+  ].includes(lower)) return 'completed';
+  // Cevapsız / ulaşılamadı
+  if ([
+    'no-answer',
+    'voicemail',
+    'silence-timed-out',       // Bağlandı ama kimse konuşmadı → cevapsız say
+    'customer-did-not-answer',
+  ].some(k => lower.includes(k))) return 'no-answer';
+  // Meşgul / reddedildi
+  if ([
+    'busy',
+    'call-rejected',
+    'rejected',
+  ].some(k => lower.includes(k))) return 'busy';
+  // Gerçek hata durumları
   return 'failed';
 }
 

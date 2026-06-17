@@ -134,21 +134,31 @@ async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
 
       console.log(`[Webhook] end-of-call-report → endedReason: "${endReason}" → status: "${status}" | süre: ${duration ?? '?'}s`);
 
+      // Artifact transcript varsa mevcut streaming transcript'in üzerine yaz
+      // (artifact daha eksiksizdir). Yoksa streaming transcript'e dokunma.
       if (msg.artifact?.messages?.length) {
-        await updateCall(vapiCallId, { transcript: [] } as any);
-        for (const m of msg.artifact.messages as any[]) {
-          if (m.role !== 'assistant' && m.role !== 'user') continue;
+        const validMessages = (msg.artifact.messages as any[]).filter(m => {
+          if (m.role !== 'assistant' && m.role !== 'user') return false;
           const text: string = m.message || m.content || m.text || '';
-          if (!text.trim()) continue;
-          await appendTranscript(vapiCallId, {
-            role: m.role as 'assistant' | 'user',
-            text,
-            timestamp: new Date(m.time || m.timestamp || Date.now()).toISOString(),
-          });
+          return text.trim().length > 0;
+        });
+
+        if (validMessages.length > 0) {
+          await updateCall(vapiCallId, { transcript: [] } as any);
+          for (const m of validMessages) {
+            const text: string = m.message || m.content || m.text || '';
+            await appendTranscript(vapiCallId, {
+              role: m.role as 'assistant' | 'user',
+              text,
+              timestamp: new Date(m.time || m.timestamp || Date.now()).toISOString(),
+            });
+          }
+          console.log(`[Webhook] ${vapiCallId} transcript artifact'tan yazıldı (${validMessages.length} mesaj)`);
+        } else {
+          console.warn(`[Webhook] ${vapiCallId} artifact.messages boş içerik — streaming transcript korundu`);
         }
-        console.log(`[Webhook] ${vapiCallId} transcript artifact'tan yazıldı`);
       } else {
-        console.warn(`[Webhook] ${vapiCallId} artifact.messages yok`);
+        console.warn(`[Webhook] ${vapiCallId} artifact.messages yok — streaming transcript korundu`);
       }
 
       await updateCall(vapiCallId, {
@@ -172,9 +182,16 @@ async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
       const s2 = newReason
         ? endedReasonToStatus(newReason)
         : alreadyDone ? existing!.status : 'failed';
-      await updateCall(vapiCallId, { status: s2, endTime: new Date().toISOString() } as any);
-      broadcast('call-ended', { vapiCallId, endedReason: newReason, status: s2 });
-      onCampaignCallEnded(vapiCallId, s2).catch(console.error);
+
+      if (!alreadyDone) {
+        // end-of-call-report henüz gelmedi — fallback olarak güncelle
+        await updateCall(vapiCallId, { status: s2, endTime: new Date().toISOString() } as any);
+        broadcast('call-ended', { vapiCallId, endedReason: newReason, status: s2 });
+        onCampaignCallEnded(vapiCallId, s2).catch(console.error);
+      } else {
+        // end-of-call-report zaten işledi — sadece SSE gönder (broadcast zaten yapıldı)
+        console.log(`[Webhook] call-ended: ${vapiCallId} zaten işlendi (${existing!.status}), atlanıyor`);
+      }
       break;
     }
   }
@@ -185,24 +202,58 @@ function parseCosts(costsArr?: VapiCostItem[], totalFallback?: number) {
   const c = { vapi: 0, twilio: 0, llm: 0, tts: 0, stt: 0, total: 0 };
   if (costsArr?.length) {
     costsArr.forEach(item => {
+      const cost = item.cost || 0;
+      // Vapi farklı versiyonlarında type isimleri değişebiliyor — hepsini kapsa
       switch (item.type) {
-        case 'vapi':        c.vapi   += item.cost || 0; break;
-        case 'transport':   c.twilio += item.cost || 0; break;
-        case 'model':       c.llm    += item.cost || 0; break;
-        case 'voice':       c.tts    += item.cost || 0; break;
-        case 'transcriber': c.stt    += item.cost || 0; break;
+        case 'vapi':
+          c.vapi += cost; break;
+        case 'transport':
+        case 'telephony':
+        case 'twilio':
+          c.twilio += cost; break;
+        case 'model':
+        case 'llm':
+          c.llm += cost; break;
+        case 'voice':
+        case 'tts':
+          c.tts += cost; break;
+        case 'transcriber':
+        case 'stt':
+          c.stt += cost; break;
+        // analysisCost, knowledgeBase vb. → toplama ekle ama kırılımda yok
       }
-      c.total += item.cost || 0;
+      c.total += cost;
     });
+    // Toplam sıfırsa fallback kullan
+    if (c.total === 0 && totalFallback) c.total = totalFallback;
   } else if (totalFallback) {
     c.total = totalFallback;
   }
+  // Küçük yuvarlama hatalarını temizle
+  c.vapi   = Math.round(c.vapi   * 1e6) / 1e6;
+  c.twilio = Math.round(c.twilio * 1e6) / 1e6;
+  c.llm    = Math.round(c.llm    * 1e6) / 1e6;
+  c.tts    = Math.round(c.tts    * 1e6) / 1e6;
+  c.stt    = Math.round(c.stt    * 1e6) / 1e6;
+  c.total  = Math.round(c.total  * 1e6) / 1e6;
   return c;
 }
 
-async function generateSummaryForCall(vapiCallId: string): Promise<void> {
+async function generateSummaryForCall(vapiCallId: string, attempt = 1): Promise<void> {
   const record = await readCall(vapiCallId);
-  if (!record || !record.transcript.length) return;
+  if (!record) return;
+
+  if (!record.transcript.length) {
+    if (attempt <= 3) {
+      const waitMs = attempt * 5000; // 5s, 10s, 15s
+      console.log(`[AI] ${vapiCallId} transcript henüz hazır değil — ${waitMs / 1000}s bekleyip tekrar denenecek (deneme ${attempt}/3)`);
+      setTimeout(() => generateSummaryForCall(vapiCallId, attempt + 1).catch(console.error), waitMs);
+      return;
+    }
+    console.warn(`[AI] ${vapiCallId} transcript boş, özet oluşturulamadı`);
+    return;
+  }
+
   try {
     const history = record.transcript.map(t => ({ role: t.role, content: t.text }));
     const summary = await generateCallSummary(record.customerInfo, history);

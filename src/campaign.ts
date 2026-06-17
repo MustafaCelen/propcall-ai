@@ -169,10 +169,16 @@ export async function onCampaignCallEnded(
   const idx = state.contacts.findIndex(c => c.vapiCallId === vapiCallId);
   if (idx < 0) return;
 
-  const mapped = mapStatus(status);
-  const c      = state.contacts[idx];
-  if (c.status === 'tamamlandı' && mapped === 'başarısız') return;
+  const c = state.contacts[idx];
 
+  // Idempotency: sadece hâlâ "arıyor" durumdaysa güncelle.
+  // Bu sayede end-of-call-report + call-ended ikilisi aynı kişiyi iki kez işlemez.
+  if (c.status !== 'arıyor') {
+    console.log(`[Campaign] onCampaignCallEnded: ${c.name} zaten "${c.status}", atlanıyor`);
+    return;
+  }
+
+  const mapped = mapStatus(status);
   c.status = mapped;
   if (duration) c.duration = duration;
 
@@ -200,10 +206,14 @@ export async function onCampaignSummaryReady(
 // ─── İç yardımcılar ───────────────────────────────────────────────────────────
 
 function mapStatus(status: string): CampaignContact['status'] {
-  if (status === 'completed') return 'tamamlandı';
-  if (status === 'no-answer') return 'cevapsız';
-  if (status === 'busy')      return 'meşgul';
-  return 'başarısız';
+  // endedReasonToStatus çıktısıyla senkron — tüm olası değerleri kapsa
+  switch (status) {
+    case 'completed':    return 'tamamlandı';
+    case 'no-answer':    return 'cevapsız';
+    case 'busy':         return 'meşgul';
+    case 'in-progress':  return 'arıyor';
+    default:             return 'başarısız';
+  }
 }
 
 function isDone(): boolean {
