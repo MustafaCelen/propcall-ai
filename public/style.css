@@ -517,6 +517,31 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 /* ── DURATION CELL ── */
 .dur-cell{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--tx2)}
 
+/* ── TRANSCRIPT INDICATOR (history table) ── */
+.tc-cell{text-align:center;white-space:nowrap}
+.tc-indicator{font-size:11px;color:var(--primary);font-family:'JetBrains Mono',monospace;font-weight:600;cursor:default;white-space:nowrap}
+.tc-none{font-size:11px;color:var(--txm)}
+
+/* ── COST BADGE (history table action cell) ── */
+.action-cell{white-space:nowrap;display:flex;align-items:center;gap:6px}
+.tbl-cost{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--txm);background:var(--s2);border:1px solid var(--border);border-radius:4px;padding:1px 5px}
+.tbl-dash{color:var(--txm)}
+
+/* ── CAMPAIGN ROW (clickable) ── */
+.cp-row-click{cursor:pointer}
+.cp-row-click:hover td{background:rgba(0,200,150,.04)!important}
+.cp-ozet-icon{font-size:13px;cursor:default;opacity:.75}
+.cp-ozet-icon:hover{opacity:1}
+
+/* ── CAMPAIGN COMPLETE BANNER ── */
+.campaign-complete-banner{display:flex;align-items:center;gap:12px;padding:8px 12px;background:var(--primary-dim);border:1px solid var(--border-a);border-radius:var(--rs);margin-top:10px;font-size:13px;font-weight:600;color:var(--primary);flex-wrap:wrap}
+.ccb-stat{font-size:12px;font-weight:500;color:var(--tx);background:var(--s2);padding:2px 8px;border-radius:4px}
+.ccb-rate{color:var(--primary);font-weight:700}
+
+/* ── SUMMARY GRID FULL-WIDTH ITEM ── */
+.sg-full{grid-column:1/-1}
+.sg-note{background:rgba(255,208,96,.07);border:1px solid rgba(255,208,96,.15)}
+
 /* ── STATUS TAG (table cell) ── */
 .status-tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700}
 

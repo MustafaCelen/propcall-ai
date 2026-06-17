@@ -136,8 +136,9 @@ function connectSSE() {
   src.addEventListener('call-started', e => {
     const { vapiCallId } = JSON.parse(e.data);
     state.activeCallId = vapiCallId;
-    updateStatus('Bağlanıyor...', 'calling');
-    setBadge('Çalıyor');
+    DOM.callPulse.classList.remove('ringing');
+    updateStatus('Devam Ediyor', 'in-progress');
+    setBadge('🟢 Bağlandı');
     switchTab('live');
   });
 
@@ -218,6 +219,21 @@ function connectSSE() {
     campaign.running = false;
     syncCampaignButtons();
     updateCampaignProgress();
+    // Tamamlanma banner'ı
+    const bar = $('campaignProgressBar');
+    if (bar) {
+      const old = bar.querySelector('.campaign-complete-banner');
+      if (old) old.remove();
+      const banner = document.createElement('div');
+      banner.className = 'campaign-complete-banner';
+      const pct = total ? Math.round(randevu / total * 100) : 0;
+      banner.innerHTML =
+        '🏁 <strong>Kampanya Tamamlandı!</strong> ' +
+        '<span class="ccb-stat">📅 ' + randevu + ' randevu</span> · ' +
+        '<span class="ccb-stat">📞 ' + total + ' kişi</span> · ' +
+        '<span class="ccb-stat ccb-rate">%' + pct + ' dönüşüm</span>';
+      bar.appendChild(banner);
+    }
     toast('Kampanya tamamlandı! ' + randevu + '/' + total + ' randevu alındı.', 'success');
   });
 
@@ -251,7 +267,7 @@ async function startCall() {
   DOM.liveName.textContent  = name;
   DOM.livePhone.textContent = phone;
   if (DOM.welcomeScreen) DOM.welcomeScreen.style.display = 'none';
-  DOM.callPulse.classList.add('active');
+  DOM.callPulse.classList.add('active', 'ringing');
   DOM.liveDotBtn.classList.add('active');
 
   resetCosts();
@@ -377,6 +393,28 @@ function statusLabel(status) {
     'in-progress': 'Devam Ediyor',
   };
   return map[status] || status;
+}
+
+function statusColor(status) {
+  const map = {
+    completed:     'var(--primary)',
+    'no-answer':   'var(--orange)',
+    busy:          'var(--yellow)',
+    failed:        'var(--red)',
+    'in-progress': 'var(--blue)',
+  };
+  return map[status] || 'var(--txm)';
+}
+
+function statusIcon(status) {
+  const map = {
+    completed:     '✅',
+    'no-answer':   '📵',
+    busy:          '🔴',
+    failed:        '❌',
+    'in-progress': '📞',
+  };
+  return map[status] || '—';
 }
 
 // ─── COSTS ───────────────────────────────────────────────────────────────────
@@ -600,7 +638,7 @@ function renderTable(calls) {
   const counter = $('historyCounter');
   if (counter) counter.textContent = calls.length + ' kayıt';
   if (!calls.length) {
-    DOM.callsTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Kayıt bulunamadı</td></tr>';
+    DOM.callsTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Kayıt bulunamadı</td></tr>';
     return;
   }
   DOM.callsTableBody.innerHTML = calls.map(c => {
@@ -608,16 +646,24 @@ function renderTable(calls) {
     const retStr  = s && s.ret_nedeni    ? esc(s.ret_nedeni)    : '—';
     const noteStr = s && s.geri_donus_notu ? esc(s.geri_donus_notu) : '—';
     const dur     = c.duration ? fmtDuration(c.duration) : '—';
+    const trCount = c.transcript && c.transcript.length;
+    const trIcon  = trCount
+      ? '<span class="tc-indicator" title="' + trCount + ' mesaj">💬 ' + trCount + '</span>'
+      : '<span class="tc-none" title="Transkript yok">—</span>';
+    const costStr = c.costs && c.costs.total
+      ? '<span class="tbl-cost">$' + c.costs.total.toFixed(4) + '</span>'
+      : '';
     return '<tr class="call-row" data-id="' + c.vapiCallId + '">' +
       '<td>' + fmtDateTime(c.startTime) + '</td>' +
       '<td><div class="tbl-name">' + esc(c.customerName) + '</div><div class="tbl-phone">' + esc(c.customerPhone) + '</div></td>' +
       '<td>' + statusBadge(c.status) + '</td>' +
       '<td class="dur-cell">' + dur + '</td>' +
+      '<td class="tc-cell">' + trIcon + '</td>' +
       '<td>' + randevuBadge(s) + '</td>' +
       '<td>' + ilgiBadge(s && s.ilgi_seviyesi) + '</td>' +
       '<td class="ozet-cell">' + retStr + '</td>' +
       '<td class="ozet-cell note-cell">' + noteStr + '</td>' +
-      '<td><button class="btn-detail" data-id="' + c.vapiCallId + '">›</button></td>' +
+      '<td class="action-cell">' + costStr + '<button class="btn-detail" data-id="' + c.vapiCallId + '">›</button></td>' +
       '</tr>';
   }).join('');
 
@@ -867,7 +913,7 @@ function renderStats(d) {
   DOM.statRandevuRate.textContent = d.randevuRate + '% dönüşüm oranı';
 
   const avgEl = $('statAvgDuration');
-  if (avgEl) avgEl.textContent = d.avgDuration ? d.avgDuration + 's' : '—';
+  if (avgEl) avgEl.textContent = d.avgDuration ? fmtDuration(d.avgDuration) : '—';
   const costEl = $('statTotalCost');
   if (costEl) costEl.textContent = '$' + (d.totalCost || 0).toFixed(2);
   const cprEl = $('statCostPerRandevu');
@@ -1572,30 +1618,45 @@ function renderCampaignTable() {
     return;
   }
   tbody.innerHTML = campaign.contacts.map((c, i) => campaignRowHtml(c, i)).join('');
+  attachCampaignRowClicks(tbody);
+}
+
+function attachCampaignRowClicks(tbody) {
+  tbody.querySelectorAll('.cp-row-click').forEach(row => {
+    row.addEventListener('click', () => openDrawer(row.dataset.callid));
+  });
 }
 
 function campaignRowHtml(c, i) {
   const statusTag = {
     bekliyor:    '<span class="ctag ct-wait">Bekliyor</span>',
     arıyor:      '<span class="ctag ct-calling">📞 Arıyor</span>',
-    tamamlandı:  '<span class="ctag ct-done">Tamamlandı</span>',
-    cevapsız:    '<span class="ctag ct-miss">Cevapsız</span>',
-    meşgul:      '<span class="ctag ct-busy">Meşgul</span>',
-    başarısız:   '<span class="ctag ct-fail">Başarısız</span>',
+    tamamlandı:  '<span class="ctag ct-done">✅ Tamamlandı</span>',
+    cevapsız:    '<span class="ctag ct-miss">📵 Cevapsız</span>',
+    meşgul:      '<span class="ctag ct-busy">🔴 Meşgul</span>',
+    başarısız:   '<span class="ctag ct-fail">❌ Başarısız</span>',
   }[c.status] || '<span class="ctag ct-wait">' + esc(c.status) + '</span>';
 
-  const heat = c.result ? (c.result.ilgi_seviyesi || '—') : '—';
-  const rdv  = c.result ? (c.result.randevu_alindi ? '✅' : '❌') : '—';
+  const heat = c.result ? ilgiBadge(c.result.ilgi_seviyesi) : '<span class="tbl-dash">—</span>';
+  const rdv  = c.result
+    ? (c.result.randevu_alindi ? '<span class="randevu-yes">✅</span>' : '<span class="randevu-no">❌</span>')
+    : '<span class="tbl-dash">—</span>';
+  const ozetIcon = c.result
+    ? '<span class="cp-ozet-icon" title="' + esc(c.result.ozet || 'Özet var') + '">📊</span>'
+    : '';
+  const clickAttr = c.vapiCallId
+    ? ' class="cp-row cp-row-click" data-callid="' + c.vapiCallId + '" title="Detay için tıkla"'
+    : ' class="cp-row"';
 
-  return '<tr id="crow-' + i + '">' +
+  return '<tr id="crow-' + i + '"' + clickAttr + '>' +
     '<td>' + (i + 1) + '</td>' +
     '<td>' + esc(c.name) + '</td>' +
-    '<td>' + esc(c.phone) + '</td>' +
+    '<td class="dur-cell">' + esc(c.phone) + '</td>' +
     '<td>' + esc(c.region || '—') + '</td>' +
     '<td>' + statusTag + '</td>' +
     '<td>' + heat + '</td>' +
-    '<td>' + rdv + '</td>' +
-    '<td>' + (c.duration ? fmtDuration(c.duration) : '—') + '</td>' +
+    '<td>' + rdv + ' ' + ozetIcon + '</td>' +
+    '<td class="dur-cell">' + (c.duration ? fmtDuration(c.duration) : '—') + '</td>' +
     '</tr>';
 }
 
@@ -1604,6 +1665,10 @@ function renderCampaignRow(idx) {
   if (!row) return;
   const c = campaign.contacts[idx];
   row.outerHTML = campaignRowHtml(c, idx);
+  const newRow = $('crow-' + idx);
+  if (newRow && newRow.classList.contains('cp-row-click')) {
+    newRow.addEventListener('click', () => openDrawer(newRow.dataset.callid));
+  }
 }
 
 function updateCampaignProgress() {
