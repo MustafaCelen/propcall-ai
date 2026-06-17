@@ -603,7 +603,7 @@ function filterHistoryData(arr) {
 async function loadHistory() {
   const params = buildFilterParams();
   state.currentFilters = params;
-  DOM.callsTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Yükleniyor...</td></tr>';
+  DOM.callsTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Yükleniyor...</td></tr>';
   try {
     const qs   = new URLSearchParams(params).toString();
     const resp = await fetch('/api/calls' + (qs ? '?' + qs : ''));
@@ -612,7 +612,7 @@ async function loadHistory() {
     state.historyData = json.data;
     renderTable(filterHistoryData(json.data));
   } catch (err) {
-    DOM.callsTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Hata: ' + err.message + '</td></tr>';
+    DOM.callsTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Hata: ' + err.message + '</td></tr>';
   }
 }
 
@@ -676,15 +676,17 @@ function renderTable(calls) {
 }
 
 function statusBadge(status) {
-  const map = {
-    'completed':   { cls: 's-completed',   label: 'Tamamlandı' },
-    'no-answer':   { cls: 's-no-answer',   label: 'Cevapsız' },
-    'busy':        { cls: 's-busy',        label: 'Meşgul' },
-    'failed':      { cls: 's-failed',      label: 'Başarısız' },
-    'in-progress': { cls: 's-in-progress', label: 'Devam Ediyor' },
+  const clsMap = {
+    completed:     's-completed',
+    'no-answer':   's-no-answer',
+    busy:          's-busy',
+    failed:        's-failed',
+    'in-progress': 's-in-progress',
   };
-  const m = map[status] || { cls: '', label: status || '—' };
-  return '<span class="status-tag ' + m.cls + '">' + m.label + '</span>';
+  const cls = clsMap[status] || '';
+  return '<span class="status-tag ' + cls + '">' +
+    statusIcon(status) + ' ' + statusLabel(status) +
+    '</span>';
 }
 
 function exportCSV() {
@@ -765,8 +767,15 @@ function renderDrawer(call) {
       '</div>';
   }
 
-  const recLink = call.recordingUrl
-    ? ' <a class="recording-link" href="' + call.recordingUrl + '" target="_blank">🎧 Dinle</a>'
+  const recPlayerHtml = call.recordingUrl
+    ? '<div class="recording-player">' +
+        '<div class="rp-label">🎧 Ses Kaydı</div>' +
+        '<audio controls preload="none" class="rp-audio" src="' + call.recordingUrl + '">' +
+          '<source src="' + call.recordingUrl + '">' +
+          '<a href="' + call.recordingUrl + '" target="_blank" class="recording-link">Tarayıcıda Aç</a>' +
+        '</audio>' +
+        '<a class="rp-ext-link" href="' + call.recordingUrl + '" target="_blank" title="Yeni sekmede aç">↗</a>' +
+      '</div>'
     : '';
 
   let transcriptHtml;
@@ -778,15 +787,18 @@ function renderDrawer(call) {
       '<div class="drawer-section">' +
         '<div class="drawer-section-title">' +
           '💬 Transkript <span class="tr-count">(' + call.transcript.length + ' mesaj)</span>' +
-          recLink +
           '<button class="btn-copy-tr" data-text="' + encodeURIComponent(plainText) + '">📋 Kopyala</button>' +
         '</div>' +
-        '<div class="drawer-transcript-full">' +
+        '<div class="tr-search-wrap">' +
+          '<input class="tr-search-input" placeholder="🔍 Transkriptte ara..." autocomplete="off"/>' +
+          '<span class="tr-search-count"></span>' +
+        '</div>' +
+        '<div class="drawer-transcript-full" id="drawerTranscriptFull">' +
           call.transcript.map(t => {
             const isAgent = t.role === 'assistant';
             return '<div class="dtf-row ' + (isAgent ? 'agent' : 'user') + '">' +
               '<div class="dtf-who">' + (isAgent ? '🤖 Asistan' : '👤 Müşteri') + '</div>' +
-              '<div class="dtf-bubble">' + esc(t.text) + '</div>' +
+              '<div class="dtf-bubble" data-text="' + encodeURIComponent(t.text) + '">' + esc(t.text) + '</div>' +
               '<div class="dtf-time">' + fmtTime(t.timestamp) + '</div>' +
             '</div>';
           }).join('') +
@@ -795,13 +807,14 @@ function renderDrawer(call) {
   } else {
     transcriptHtml =
       '<div class="drawer-section">' +
-        '<div class="drawer-section-title">💬 Transkript' + recLink + '</div>' +
+        '<div class="drawer-section-title">💬 Transkript</div>' +
         '<div class="tr-empty">Transkript bulunamadı — webhook olayları alınamadı veya arama çok kısa sürdü.</div>' +
       '</div>';
   }
 
   DOM.drawerBody.innerHTML =
     summaryHtml +
+    (recPlayerHtml ? '<div class="drawer-section">' + recPlayerHtml + '</div>' : '') +
     '<div class="drawer-section">' +
       '<div class="drawer-section-title">💰 Maliyet</div>' +
       '<div class="cost-breakdown">' +
@@ -849,6 +862,46 @@ function renderDrawer(call) {
       navigator.clipboard.writeText(decodeURIComponent(this.dataset.text))
         .then(() => toast('Transkript kopyalandı', 'success'))
         .catch(() => toast('Kopyalama başarısız', 'error'));
+    });
+  }
+
+  // ── Transkript arama / vurgulama ──────────────────────────────────────────
+  const trSearchInput = DOM.drawerBody.querySelector('.tr-search-input');
+  const trSearchCount = DOM.drawerBody.querySelector('.tr-search-count');
+  const trFull        = DOM.drawerBody.querySelector('#drawerTranscriptFull');
+  if (trSearchInput && trFull) {
+    trSearchInput.addEventListener('input', function() {
+      const q = this.value.trim().toLowerCase();
+      const bubbles = trFull.querySelectorAll('.dtf-bubble');
+      let matchTotal = 0;
+      bubbles.forEach(b => {
+        const raw = decodeURIComponent(b.dataset.text || '');
+        if (!q) {
+          b.innerHTML = esc(raw);
+          b.classList.remove('tr-bubble-match');
+          return;
+        }
+        const lower = raw.toLowerCase();
+        if (lower.includes(q)) {
+          matchTotal++;
+          b.classList.add('tr-bubble-match');
+          // Highlight matches
+          const re = new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+          b.innerHTML = esc(raw).replace(
+            new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'),
+            m => '<mark class="tr-highlight">' + esc(m) + '</mark>'
+          );
+          b.scrollIntoView({ block: 'nearest' });
+        } else {
+          b.classList.remove('tr-bubble-match');
+          b.innerHTML = esc(raw);
+        }
+      });
+      if (trSearchCount) {
+        trSearchCount.textContent = q
+          ? (matchTotal > 0 ? matchTotal + ' mesajda bulundu' : 'bulunamadı')
+          : '';
+      }
     });
   }
 
@@ -972,6 +1025,38 @@ function renderStats(d) {
       scales: {
         ...baseScales,
         y: { ...baseScales.y, max: 100, ticks: { ...baseScales.y.ticks, callback: v => v + '%' } },
+      },
+    });
+  }
+
+  // Maliyet trendi
+  if (d.costTrend && d.costTrend.length) {
+    buildOrUpdateChart('chartCostTrend', 'line', {
+      labels: d.costTrend.map(x => x.date.slice(5)),
+      datasets: [{
+        label: 'Maliyet ($)',
+        data: d.costTrend.map(x => x.cost),
+        borderColor: '#b464ff',
+        backgroundColor: 'rgba(180,100,255,0.10)',
+        borderWidth: 2,
+        tension: 0.3,
+        fill: true,
+        pointRadius: 2,
+        pointBackgroundColor: '#b464ff',
+      }],
+    }, {
+      ...baseOpts,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => '$' + (ctx.parsed.y || 0).toFixed(4),
+          },
+        },
+      },
+      scales: {
+        ...baseScales,
+        y: { ...baseScales.y, ticks: { ...baseScales.y.ticks, callback: v => '$' + v.toFixed(3) } },
       },
     });
   }
