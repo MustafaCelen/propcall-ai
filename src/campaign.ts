@@ -51,7 +51,7 @@ const state: CampaignSnapshot = {
 
 export function initCampaignRunner(broadcast: BroadcastFn): void {
   broadcastFn = broadcast;
-  setInterval(tick, TICK_INTERVAL_MS);
+  setInterval(tick, TICK_INTERVAL_MS).unref();
 }
 
 // ─── DB ───────────────────────────────────────────────────────────────────────

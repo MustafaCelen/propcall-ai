@@ -49,7 +49,7 @@ app.get('/api/events', (req: Request, res: Response) => {
 
   const heartbeat = setInterval(() => {
     try { res.write(': ping\n\n'); } catch { clearInterval(heartbeat); sseClients.delete(res); }
-  }, 30000);
+  }, 30000).unref();
 
   req.on('close', () => { clearInterval(heartbeat); sseClients.delete(res); });
 });
