@@ -6,12 +6,21 @@ const pool = new Pool({
     ? false
     : { rejectUnauthorized: false },
   max: 3,
-  idleTimeoutMillis: 10000,
-  connectionTimeoutMillis: 5000,
+  idleTimeoutMillis:     30_000,
+  connectionTimeoutMillis: 10_000,
 });
 
+// Neon serverless: uç nokta askıya alındığında pool 'error' fırlatır.
+// İşlenmezse Node süreci çöker — bu hatayı yakala ve yoksay (bağlantı zaten yeniden denenir).
+pool.on('error', (err) => {
+  console.warn('[DB] Pool bağlantı hatası (yeniden denenecek):', (err as Error).message);
+});
+
+const INIT_RETRIES    = 8;
+const INIT_RETRY_MS   = 2_000; // Neon uç noktası genellikle 1-3 sn içinde uyanır
+
 export async function initDb(): Promise<void> {
-  await pool.query(`
+  const ddl = `
     CREATE TABLE IF NOT EXISTS calls (
       vapi_call_id TEXT PRIMARY KEY,
       data         JSONB NOT NULL,
@@ -42,8 +51,30 @@ export async function initDb(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_calls_status          ON calls (status);
     CREATE INDEX IF NOT EXISTS idx_calls_customer_phone  ON calls ((data ->> 'customerPhone'));
     CREATE INDEX IF NOT EXISTS idx_calls_scenario_id     ON calls ((data ->> 'scenarioId'));
-    CREATE INDEX IF NOT EXISTS idx_calls_follow_up       ON calls (((data ->> 'followUp')::boolean)) WHERE (data ->> 'followUp')::boolean = true;
-  `);
+    CREATE INDEX IF NOT EXISTS idx_calls_follow_up       ON calls (((data ->> 'followUp')::boolean))
+      WHERE (data ->> 'followUp')::boolean = true;
+  `;
+
+  for (let attempt = 1; attempt <= INIT_RETRIES; attempt++) {
+    try {
+      await pool.query(ddl);
+      return;
+    } catch (err: any) {
+      const msg = String(err?.message ?? err);
+      const isWaking =
+        msg.includes('endpoint has been disabled') ||
+        msg.includes('connection refused') ||
+        msg.includes('ECONNREFUSED') ||
+        msg.includes('terminating connection');
+
+      if (isWaking && attempt < INIT_RETRIES) {
+        console.warn(`[DB] Bağlantı denemesi ${attempt}/${INIT_RETRIES} başarısız — ${INIT_RETRY_MS / 1000}sn sonra yeniden denenecek:`, msg);
+        await new Promise(r => setTimeout(r, INIT_RETRY_MS));
+      } else {
+        throw err;
+      }
+    }
+  }
 }
 
 export default pool;
