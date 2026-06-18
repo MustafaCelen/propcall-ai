@@ -574,6 +574,18 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 .sp-rate.sp-mid{background:rgba(255,208,96,.15);color:var(--yellow)}
 .sp-rate.sp-low{background:rgba(255,83,112,.15);color:var(--red)}
 
+/* ── CAMPAIGN LIMIT INPUTS ── */
+.camp-limit-input{width:72px;background:var(--s2);border:1px solid var(--border);border-radius:var(--rs);color:var(--tx);font-size:13px;padding:4px 8px;outline:none;text-align:center;font-family:'JetBrains Mono',monospace;transition:border-color .15s}
+.camp-limit-input:focus{border-color:var(--border-a)}
+.camp-limit-input::placeholder{color:var(--txm)}
+
+/* ── FOLLOWUP SCENARIO FILTER & DELETE BTN ── */
+.fu-scenario-select{background:var(--s2);border:1px solid var(--border);border-radius:var(--rs);color:var(--tx);font-size:13px;padding:5px 10px;outline:none;cursor:pointer;transition:border-color .15s;max-width:220px}
+.fu-scenario-select:focus{border-color:var(--border-a)}
+.btn-delete-old{background:transparent;border:1px solid rgba(255,83,112,.35);color:var(--red);border-radius:var(--rs);padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap}
+.btn-delete-old:hover{background:rgba(255,83,112,.12);border-color:var(--red)}
+.btn-delete-old:disabled{opacity:.4;cursor:not-allowed}
+
 /* ── STATS: 5-col card grid (override) ── */
 .stat-cards{grid-template-columns:repeat(5,1fr)!important}
 @media (max-width:1280px){.stat-cards{grid-template-columns:repeat(3,1fr)!important}}

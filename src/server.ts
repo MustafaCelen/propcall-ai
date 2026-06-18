@@ -529,13 +529,27 @@ app.post('/api/campaign/load', async (req: Request, res: Response) => {
 
 app.post('/api/campaign/start', async (req: Request, res: Response) => {
   try {
-    const { contacts, maxConcurrent, scenarioId } = req.body;
+    const { contacts, maxConcurrent, scenarioId, startFromIndex, callLimit, answeredLimit } = req.body;
     if (contacts?.length) {
-      await campaignLoad(contacts, maxConcurrent || 1, scenarioId);
+      await campaignLoad(
+        contacts, maxConcurrent || 1, scenarioId,
+        startFromIndex || 0, callLimit || 0, answeredLimit || 0,
+      );
     }
     await campaignStart();
     return res.json({ success: true, data: getCampaignState() });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.delete('/api/calls/before-today', async (_req: Request, res: Response) => {
+  try {
+    const result = await pool.query(
+      `DELETE FROM calls WHERE start_time < CURRENT_DATE RETURNING vapi_call_id`,
+    );
+    return res.json({ success: true, deleted: result.rowCount ?? 0 });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: String(err) });
+  }
 });
 
 app.post('/api/campaign/resume', async (_req: Request, res: Response) => {

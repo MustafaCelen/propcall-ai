@@ -1336,6 +1336,36 @@ function initFollowupToolbar() {
     try { localStorage.setItem(FOLLOWUP_STORAGE_KEY, search.value); } catch(_) {}
     if (renderFollowup._lastData) renderFollowup(renderFollowup._lastData);
   });
+
+  const scenarioFilter = $('followupScenarioFilter');
+  if (scenarioFilter) {
+    scenarioFilter.addEventListener('change', () => {
+      if (renderFollowup._lastData) renderFollowup(renderFollowup._lastData);
+    });
+  }
+
+  const deleteBtn = $('btnDeleteOldCalls');
+  if (deleteBtn) {
+    deleteBtn.addEventListener('click', async () => {
+      if (!confirm('Bugün öncesi tüm arama kayıtları silinecek. Bu işlem geri alınamaz. Devam edilsin mi?')) return;
+      deleteBtn.disabled = true;
+      deleteBtn.textContent = '⏳ Siliniyor...';
+      try {
+        const r = await fetch('/api/calls/before-today', { method: 'DELETE' });
+        const j = await r.json();
+        if (!j.success) throw new Error(j.error);
+        toast(j.deleted + ' kayıt silindi', 'success');
+        loadFollowup();
+        loadFollowupBadge();
+        loadHistory();
+      } catch (err) {
+        toast('Silme hatası: ' + err.message, 'error');
+      } finally {
+        deleteBtn.disabled = false;
+        deleteBtn.textContent = '🗑 Bugün hariç sil';
+      }
+    });
+  }
 }
 
 function followupMatchesSearch(c, q) {
@@ -1349,6 +1379,27 @@ function renderFollowup(d) {
   const layout = $('followupLayout');
   const searchInput = $('followupSearch');
   const q = searchInput ? searchInput.value.trim().toLowerCase() : '';
+
+  // Senaryo filtresi
+  const scenarioSel  = $('followupScenarioFilter');
+  const scenarioFilter = scenarioSel ? scenarioSel.value : '';
+
+  // Tüm itemleri toplayıp unique scenario isimlerini bul — select'i güncelle
+  if (scenarioSel) {
+    const allItems = [
+      ...(d.randevuAlanlar  || []),
+      ...(d.geriAranacaklar || []),
+      ...(d.beklemeListesi  || []),
+      ...(d.cevapsizilar    || []),
+      ...(d.manuelTakip     || []),
+    ];
+    const names = [...new Set(allItems.map(c => c.scenarioName).filter(Boolean))].sort();
+    const current = scenarioSel.value;
+    scenarioSel.innerHTML = '<option value="">📋 Tüm Kampanyalar</option>' +
+      names.map(n => '<option value="' + esc(n) + '"' + (current === n ? ' selected' : '') + '>' + esc(n) + '</option>').join('');
+  }
+
+  const matchesScenario = (c) => !scenarioFilter || c.scenarioName === scenarioFilter;
 
   const sections = [
     {
@@ -1407,16 +1458,17 @@ function renderFollowup(d) {
 
   layout.innerHTML = sections.map(sec => {
     const cardFn = sec.customCard || ((c) => followupCard(c, sec.color));
-    const filtered = sec.items.filter(c => followupMatchesSearch(c, q));
+    const filtered = sec.items.filter(c => followupMatchesSearch(c, q) && matchesScenario(c));
     const cards = filtered.length
       ? filtered.map(c => cardFn(c)).join('')
-      : '<div class="fu-empty">' + (q ? 'Aramaya uyan kayıt yok' : sec.emptyMsg) + '</div>';
+      : '<div class="fu-empty">' + (q || scenarioFilter ? 'Filtreye uyan kayıt yok' : sec.emptyMsg) + '</div>';
 
     const bulkBtn = sec.bulk && filtered.length
       ? '<button class="fu-bulk-btn" data-bulk-key="' + sec.key + '">📞 Hepsini Kampanyaya At (' + filtered.length + ')</button>'
       : '';
 
-    const filterBadge = (q && filtered.length !== sec.items.length)
+    const isFiltered = (q || scenarioFilter) && filtered.length !== sec.items.length;
+    const filterBadge = isFiltered
       ? '<span class="fu-filter-badge">' + filtered.length + '/' + sec.items.length + '</span>'
       : '<span class="fu-count">' + sec.items.length + '</span>';
 
@@ -1796,15 +1848,24 @@ function updateCampaignProgressFromSummary(sum) {
 async function campaignStart() {
   if (!campaign.contacts.length) return;
   campaign.maxConcurrent = parseInt($('campaignConcurrency').value, 10) || 1;
-  const scenarioId = $('scenarioSelect') ? ($('scenarioSelect').value || undefined) : undefined;
+  const scenarioId      = $('scenarioSelect') ? ($('scenarioSelect').value || undefined) : undefined;
+  const startFromRaw    = parseInt(($('campaignStartFrom')?.value    || ''), 10);
+  const callLimitRaw    = parseInt(($('campaignCallLimit')?.value     || ''), 10);
+  const answeredLimitRaw = parseInt(($('campaignAnsweredLimit')?.value || ''), 10);
+  const startFromIndex  = (startFromRaw  > 1  ? startFromRaw - 1 : 0); // UI 1-tabanlı → 0-tabanlı
+  const callLimit       = (callLimitRaw  > 0  ? callLimitRaw   : 0);
+  const answeredLimit   = (answeredLimitRaw > 0 ? answeredLimitRaw : 0);
   try {
     const resp = await fetch('/api/campaign/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contacts:      campaign.contacts,
+        contacts: campaign.contacts,
         maxConcurrent: campaign.maxConcurrent,
         scenarioId,
+        startFromIndex,
+        callLimit,
+        answeredLimit,
       }),
     });
     const json = await resp.json();

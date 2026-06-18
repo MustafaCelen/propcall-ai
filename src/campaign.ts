@@ -27,6 +27,9 @@ export interface CampaignSnapshot {
   paused: boolean;
   maxConcurrent: number;
   scenarioId?: string;
+  startFromIndex?: number;  // 0-tabanlı; bu satırdan öncekileri atla
+  callLimit?: number;       // toplam arama limiti (0 = sınırsız)
+  answeredLimit?: number;   // konuşulan (tamamlandı) arama limiti (0 = sınırsız)
 }
 
 type BroadcastFn = (event: string, data: unknown) => void;
@@ -118,12 +121,18 @@ export async function campaignLoad(
   contacts: Omit<CampaignContact, 'status' | 'vapiCallId' | 'result'>[],
   maxConcurrent: number,
   scenarioId?: string,
+  startFromIndex?: number,
+  callLimit?: number,
+  answeredLimit?: number,
 ): Promise<void> {
-  state.running       = false;
-  state.paused        = false;
-  state.maxConcurrent = maxConcurrent;
-  state.scenarioId    = scenarioId;
-  state.contacts      = contacts.map(c => ({
+  state.running        = false;
+  state.paused         = false;
+  state.maxConcurrent  = maxConcurrent;
+  state.scenarioId     = scenarioId;
+  state.startFromIndex = startFromIndex || 0;
+  state.callLimit      = callLimit      || 0;
+  state.answeredLimit  = answeredLimit  || 0;
+  state.contacts       = contacts.map(c => ({
     ...c, status: 'bekliyor', vapiCallId: null, result: null,
   }));
   await saveCampaignToDb();
@@ -231,8 +240,29 @@ export async function onCampaignSummaryReady(
 // mapStatus kaldırıldı — yerine callStatusToTurkish (calls.ts) kullanılıyor
 
 function isDone(): boolean {
-  return state.contacts.length > 0 &&
-    state.contacts.every(c => c.status !== 'bekliyor' && c.status !== 'arıyor');
+  const startIdx = state.startFromIndex ?? 0;
+  const scope    = state.contacts.slice(startIdx);
+  if (scope.length === 0) return false;
+
+  const active = scope.filter(c => c.status === 'arıyor').length;
+  if (active > 0) return false; // hâlâ aktif arama var
+
+  const allDone = scope.every(c => c.status !== 'bekliyor' && c.status !== 'arıyor');
+  if (allDone) return true;
+
+  // Toplam arama limiti aşıldıysa bitti say
+  if (state.callLimit && state.callLimit > 0) {
+    const dialed = scope.filter(c => c.status !== 'bekliyor').length;
+    if (dialed >= state.callLimit) return true;
+  }
+
+  // Cevaplayan limiti aşıldıysa bitti say
+  if (state.answeredLimit && state.answeredLimit > 0) {
+    const answered = state.contacts.filter(c => c.status === 'tamamlandı').length;
+    if (answered >= state.answeredLimit) return true;
+  }
+
+  return false;
 }
 
 function getCampaignSummary() {
@@ -255,12 +285,42 @@ async function onCampaignComplete(): Promise<void> {
 
 function fillQueue(): void {
   if (!state.running || state.paused) return;
-  const active = state.contacts.filter(c => c.status === 'arıyor').length;
-  const slots  = state.maxConcurrent - active;
+
+  const startIdx = state.startFromIndex ?? 0;
+  const answered = state.contacts.filter(c => c.status === 'tamamlandı').length;
+  const active   = state.contacts.filter(c => c.status === 'arıyor').length;
+
+  // Cevaplayan limiti dolmuşsa bekleyenleri iptal et ve bitir
+  if (state.answeredLimit && state.answeredLimit > 0 && answered >= state.answeredLimit) {
+    let changed = false;
+    state.contacts.forEach(c => { if (c.status === 'bekliyor') { c.status = 'başarısız'; changed = true; } });
+    if (active === 0) { if (changed) void saveCampaignToDb(); void onCampaignComplete(); }
+    return;
+  }
+
+  // Toplam arama limiti dolmuşsa bekleyenleri iptal et ve bitir
+  if (state.callLimit && state.callLimit > 0) {
+    const dialed = state.contacts.slice(startIdx).filter(c => c.status !== 'bekliyor').length;
+    if (dialed >= state.callLimit) {
+      let changed = false;
+      state.contacts.forEach(c => { if (c.status === 'bekliyor') { c.status = 'başarısız'; changed = true; } });
+      if (active === 0) { if (changed) void saveCampaignToDb(); void onCampaignComplete(); }
+      return;
+    }
+  }
+
+  let slots = state.maxConcurrent - active;
+
+  // Cevaplayan limitine kalan boşluğu geç — fazla arama başlatma
+  if (state.answeredLimit && state.answeredLimit > 0) {
+    const remaining = state.answeredLimit - answered - active;
+    slots = Math.min(slots, remaining);
+  }
+
   if (slots <= 0) return;
 
   let started = 0;
-  for (let i = 0; i < state.contacts.length && started < slots; i++) {
+  for (let i = startIdx; i < state.contacts.length && started < slots; i++) {
     if (state.contacts[i].status === 'bekliyor') {
       callContact(i);
       started++;

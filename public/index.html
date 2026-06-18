@@ -326,6 +326,10 @@
     <div class="tab-content" id="tabFollowup">
       <div class="followup-toolbar">
         <input type="text" id="followupSearch" placeholder="🔍 Ad veya telefon ara..." />
+        <select id="followupScenarioFilter" class="fu-scenario-select">
+          <option value="">📋 Tüm Kampanyalar</option>
+        </select>
+        <button class="btn-delete-old" id="btnDeleteOldCalls" title="Bugün hariç tüm arama kayıtlarını sil">🗑 Bugün hariç sil</button>
         <div class="followup-summary" id="followupSummary"></div>
       </div>
       <div class="followup-layout" id="followupLayout">
@@ -346,7 +350,7 @@
           </div>
           <div class="campaign-controls">
             <div class="concurrency-group">
-              <label>Eş Zamanlı Arama</label>
+              <label>Eş Zamanlı</label>
               <select id="campaignConcurrency">
                 <option value="1">1</option>
                 <option value="2">2</option>
@@ -354,6 +358,18 @@
                 <option value="4">4</option>
                 <option value="5">5</option>
               </select>
+            </div>
+            <div class="concurrency-group" title="Kaçıncı satırdan başlanacak (1'den sayılır)">
+              <label>Başlangıç Satırı</label>
+              <input type="number" id="campaignStartFrom" class="camp-limit-input" min="1" placeholder="1" />
+            </div>
+            <div class="concurrency-group" title="Toplam kaç arama yapılacak (0 = sınırsız)">
+              <label>Arama Limiti</label>
+              <input type="number" id="campaignCallLimit" class="camp-limit-input" min="0" placeholder="∞" />
+            </div>
+            <div class="concurrency-group" title="Kaç kişi konuşunca duracak (0 = sınırsız)">
+              <label>Cevaplayan Limiti</label>
+              <input type="number" id="campaignAnsweredLimit" class="camp-limit-input" min="0" placeholder="∞" />
             </div>
             <button class="btn-campaign-start" id="btnCampaignStart" disabled>▶ Başlat</button>
             <button class="btn-campaign-pause" id="btnCampaignPause" disabled>⏸ Duraklat</button>
