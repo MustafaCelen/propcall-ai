@@ -23,6 +23,17 @@
       </div>
     </div>
     <div class="header-actions">
+      <div class="credits-widget" id="creditsWidget" title="Yükleniyor...">
+        <div class="credit-chip credit-vapi">
+          <span class="credit-lbl">Vapi</span>
+          <span class="credit-val" id="creditVapi">—</span>
+        </div>
+        <div class="credit-chip credit-el">
+          <span class="credit-lbl">ElevenLabs</span>
+          <span class="credit-val" id="creditEl">—</span>
+        </div>
+        <button class="credit-refresh" id="btnCreditRefresh" title="Yenile">↻</button>
+      </div>
       <button class="btn-secondary" id="btnToggleApts">📅 Randevular</button>
     </div>
   </header>
@@ -256,6 +267,14 @@
               <div class="stat-label">Cevaplanan</div>
               <div class="stat-value" id="statCompleted">—</div>
               <div class="stat-sub" id="statAnswerRate">— cevap oranı</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">📵</div>
+            <div class="stat-body">
+              <div class="stat-label">Cevaplanmayan</div>
+              <div class="stat-value" id="statUnanswered">—</div>
+              <div class="stat-sub" id="statUnansweredBreak">— cevapsız · — meşgul</div>
             </div>
           </div>
           <div class="stat-card stat-card-highlight">

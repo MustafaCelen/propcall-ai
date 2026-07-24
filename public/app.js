@@ -94,10 +94,77 @@ document.addEventListener('DOMContentLoaded', () => {
   initAppointments();
   initCampaign();
   initScenarios();
+  initCredits();
   connectSSE();
   loadHistory();
   loadFollowupBadge();
 });
+
+// ─── KREDİLER (Vapi + ElevenLabs) ─────────────────────────────────────────────
+
+function initCredits() {
+  const btn = $('btnCreditRefresh');
+  if (btn) btn.addEventListener('click', loadCredits);
+  loadCredits();
+  // 5 dakikada bir tazele
+  setInterval(loadCredits, 5 * 60 * 1000);
+}
+
+async function loadCredits() {
+  const vEl = $('creditVapi');
+  const eEl = $('creditEl');
+  const wrap = $('creditsWidget');
+  try {
+    const r = await fetch('/api/credits');
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error || 'Kredi alınamadı');
+    const { vapi, elevenlabs } = j.data;
+    const tips = [];
+
+    if (vEl) {
+      if (vapi.ok && typeof vapi.balance === 'number') {
+        vEl.textContent = '$' + vapi.balance.toFixed(2);
+        vEl.className = 'credit-val ' + creditLevelCls(vapi.balance, [1, 5]);
+        tips.push('Vapi: $' + vapi.balance.toFixed(2) + (vapi.plan ? ' (' + vapi.plan + ')' : ''));
+      } else {
+        vEl.textContent = '—';
+        vEl.className = 'credit-val credit-unknown';
+        tips.push('Vapi: ' + (vapi.error || 'bilinmiyor'));
+      }
+    }
+
+    if (eEl) {
+      if (elevenlabs.ok && typeof elevenlabs.remaining === 'number') {
+        eEl.textContent = fmtChar(elevenlabs.remaining);
+        const pct = elevenlabs.limit ? (elevenlabs.remaining / elevenlabs.limit) * 100 : 100;
+        eEl.className = 'credit-val ' + (pct < 5 ? 'credit-low' : pct < 20 ? 'credit-warn' : 'credit-ok');
+        tips.push('ElevenLabs: ' + fmtChar(elevenlabs.remaining) + ' / ' + fmtChar(elevenlabs.limit) + ' karakter' +
+                  (elevenlabs.tier ? ' (' + elevenlabs.tier + ')' : ''));
+      } else {
+        eEl.textContent = '—';
+        eEl.className = 'credit-val credit-unknown';
+        tips.push('ElevenLabs: ' + (elevenlabs.error || 'bilinmiyor'));
+      }
+    }
+    if (wrap) wrap.title = tips.join(' · ');
+  } catch (err) {
+    if (vEl) vEl.textContent = '—';
+    if (eEl) eEl.textContent = '—';
+    if (wrap) wrap.title = 'Kredi bilgisi alınamadı: ' + err.message;
+  }
+}
+
+function creditLevelCls(v, thresholds) {
+  if (v < thresholds[0]) return 'credit-low';
+  if (v < thresholds[1]) return 'credit-warn';
+  return 'credit-ok';
+}
+
+function fmtChar(n) {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+  if (n >= 1_000)     return Math.round(n / 1_000) + 'K';
+  return String(n);
+}
 
 // ─── TABS ─────────────────────────────────────────────────────────────────────
 
@@ -965,6 +1032,17 @@ function renderStats(d) {
   DOM.statRandevu.textContent     = d.randevuCount;
   DOM.statRandevuRate.textContent = d.randevuRate + '% dönüşüm oranı';
 
+  // Cevaplanmayan (no-answer + busy + failed)
+  const sbMap = {};
+  (d.statusBreakdown || []).forEach(x => { sbMap[x.status] = x.count; });
+  const noAns   = sbMap['no-answer'] || 0;
+  const busy    = sbMap['busy']      || 0;
+  const failed  = sbMap['failed']    || 0;
+  const unansEl = $('statUnanswered');
+  const unansBk = $('statUnansweredBreak');
+  if (unansEl) unansEl.textContent = noAns + busy + failed;
+  if (unansBk) unansBk.textContent = noAns + ' cevapsız · ' + busy + ' meşgul' + (failed ? ' · ' + failed + ' hata' : '');
+
   const avgEl = $('statAvgDuration');
   if (avgEl) avgEl.textContent = d.avgDuration ? fmtDuration(d.avgDuration) : '—';
   const costEl = $('statTotalCost');
@@ -1479,7 +1557,7 @@ function renderFollowup(d) {
         filterBadge +
         bulkBtn +
       '</div>' +
-      '<div class="fu-cards">' + cards + '</div>' +
+      '<div class="fu-list">' + cards + '</div>' +
     '</div>';
   }).join('');
 
@@ -1571,27 +1649,23 @@ function followupCard(c, colorClass, opts) {
     ? '<button class="fu-unfollow-btn" data-id="' + c.vapiCallId + '" title="Takipten çıkart">✓</button>'
     : '';
 
-  return '<div class="fu-card fu-' + colorClass + '">' +
-    '<div class="fu-card-top">' +
-      '<div class="fu-person">' +
-        '<div class="fu-name">' + esc(c.customerName) + '</div>' +
-        '<div class="fu-phone">' + esc(c.customerPhone) + '</div>' +
+  return '<div class="fu-row fu-' + colorClass + '">' +
+    '<div class="fu-row-heat ' + ilgiCls + '" title="İlgi: ' + ilgiStr + '">' + ilgiStr.slice(0,3) + '</div>' +
+    '<div class="fu-row-main">' +
+      '<div class="fu-row-line1">' +
+        '<span class="fu-name">' + esc(c.customerName) + '</span>' +
+        '<span class="fu-phone">' + esc(c.customerPhone) + '</span>' +
+        (mulk ? '<span class="fu-tag">' + esc(mulk) + '</span>' : '') +
+        '<span class="fu-ago">' + ago + '</span>' +
       '</div>' +
-      '<div class="fu-heat ' + ilgiCls + '" title="İlgi: ' + ilgiStr + '">' + ilgiStr.slice(0,3) + '</div>' +
+      (note ? '<div class="fu-row-note">💡 ' + esc(note) + '</div>' : '') +
     '</div>' +
-    (note
-      ? '<div class="fu-note">💡 ' + esc(note) + '</div>'
-      : '') +
-    '<div class="fu-meta">' +
-      (mulk ? '<span class="fu-tag">' + esc(mulk) + '</span>' : '') +
-      '<span class="fu-ago">' + ago + '</span>' +
-    '</div>' +
-    '<div class="fu-actions">' +
+    '<div class="fu-row-actions">' +
       '<button class="fu-call-btn" data-id="' + c.vapiCallId + '" ' +
         'data-name="' + esc(c.customerName) + '" ' +
         'data-phone="' + esc(c.customerPhone) + '" ' +
         'data-region="' + esc((c.customerInfo && c.customerInfo.region) || '') + '">📞 Ara</button>' +
-      '<button class="fu-detail-btn" data-id="' + c.vapiCallId + '">Detay ›</button>' +
+      '<button class="fu-detail-btn" data-id="' + c.vapiCallId + '">Detay</button>' +
       unfollowBtn +
     '</div>' +
   '</div>';
@@ -1602,24 +1676,22 @@ function cevapsizCard(c) {
   const count   = c.retryCount || 1;
   const statusLabel = c.status === 'busy' ? 'Meşgul' : 'Cevapsız';
   const statusCls   = c.status === 'busy' ? 'ct-busy' : 'ct-miss';
-  return '<div class="fu-card fu-cevapsiz">' +
-    '<div class="fu-card-top">' +
-      '<div class="fu-person">' +
-        '<div class="fu-name">' + esc(c.customerName) + '</div>' +
-        '<div class="fu-phone">' + esc(c.customerPhone) + '</div>' +
+  return '<div class="fu-row fu-cevapsiz">' +
+    '<div class="fu-row-retry" title="Deneme sayısı">' + count + 'x</div>' +
+    '<div class="fu-row-main">' +
+      '<div class="fu-row-line1">' +
+        '<span class="fu-name">' + esc(c.customerName) + '</span>' +
+        '<span class="fu-phone">' + esc(c.customerPhone) + '</span>' +
+        '<span class="ctag ' + statusCls + '">' + statusLabel + '</span>' +
+        '<span class="fu-ago">' + ago + '</span>' +
       '</div>' +
-      '<div class="fu-retry-badge" title="Deneme sayısı">' + count + 'x</div>' +
     '</div>' +
-    '<div class="fu-retry-meta">' +
-      '<span class="ctag ' + statusCls + '">' + statusLabel + '</span>' +
-      '<span class="fu-ago">' + ago + '</span>' +
-    '</div>' +
-    '<div class="fu-actions">' +
+    '<div class="fu-row-actions">' +
       '<button class="fu-call-btn" data-id="' + c.vapiCallId + '" ' +
         'data-name="' + esc(c.customerName) + '" ' +
         'data-phone="' + esc(c.customerPhone) + '" ' +
-        'data-region="' + esc((c.customerInfo && c.customerInfo.region) || '') + '">📞 Tekrar Ara</button>' +
-      '<button class="fu-detail-btn" data-id="' + c.vapiCallId + '">Detay ›</button>' +
+        'data-region="' + esc((c.customerInfo && c.customerInfo.region) || '') + '">📞 Tekrar</button>' +
+      '<button class="fu-detail-btn" data-id="' + c.vapiCallId + '">Detay</button>' +
     '</div>' +
   '</div>';
 }

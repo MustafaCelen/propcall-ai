@@ -8,7 +8,8 @@ dotenv.config();
 import { initDb } from './db';
 import pool from './db';
 import { generateCallSummary } from './ai';
-import { createVapiCall, endVapiCall } from './vapi';
+import { createVapiCall, endVapiCall, getVapiCredit } from './vapi';
+import { getElevenLabsCredit } from './elevenlabs';
 import { getAllAppointments, saveAppointment, deleteAppointment } from './appointments';
 import { getAllScenarios, getScenario, createScenario, updateScenario, deleteScenario } from './scenarios';
 import {
@@ -435,6 +436,15 @@ app.get('/api/stats', async (req: Request, res: Response) => {
   } catch (err) {
     return res.status(500).json({ success: false, error: String(err) });
   }
+});
+
+// ─── Kredi / abonelik bilgisi (Vapi + ElevenLabs) ─────────────────────────────
+app.get('/api/credits', async (_req: Request, res: Response) => {
+  const [vapi, elevenlabs] = await Promise.all([
+    getVapiCredit(),
+    getElevenLabsCredit(),
+  ]);
+  return res.json({ success: true, data: { vapi, elevenlabs } });
 });
 
 // ─── CSV EXPORT ───────────────────────────────────────────────────────────────

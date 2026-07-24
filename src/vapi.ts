@@ -80,3 +80,36 @@ export async function endVapiCall(vapiCallId: string): Promise<void> {
     throw new Error(`Vapi arama sonlandırma hatası: ${response.status} - ${errText}`);
   }
 }
+
+// Vapi hesap kredisi / abonelik bilgisi
+export interface VapiCreditInfo {
+  ok: boolean;
+  balance?: number;         // USD kredi (varsa)
+  monthlyCharge?: number;   // Aylık ücret
+  plan?: string;            // Plan adı
+  error?: string;
+}
+
+export async function getVapiCredit(): Promise<VapiCreditInfo> {
+  try {
+    if (!process.env.VAPI_API_KEY) return { ok: false, error: 'VAPI_API_KEY yok' };
+    const resp = await fetch(`${VAPI_BASE_URL}/subscription`, { headers: getHeaders() });
+    if (!resp.ok) return { ok: false, error: `HTTP ${resp.status}` };
+    const data = await resp.json() as {
+      credits?: string | number;
+      status?: string;
+      type?: string;
+      monthlyChargeSchedule?: { cost?: number };
+    };
+    const rawCredit = data.credits;
+    const balance = typeof rawCredit === 'string' ? parseFloat(rawCredit) : (rawCredit ?? 0);
+    return {
+      ok: true,
+      balance: Number.isFinite(balance) ? balance : 0,
+      monthlyCharge: data.monthlyChargeSchedule?.cost,
+      plan: data.type || data.status,
+    };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
