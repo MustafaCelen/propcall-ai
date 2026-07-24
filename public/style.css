@@ -436,10 +436,18 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 .ctag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700}
 .ct-wait{background:rgba(255,255,255,.06);color:var(--txm)}
 .ct-calling{background:rgba(74,158,255,.15);color:var(--blue);animation:pulse 1.5s infinite}
+.ct-appt{background:rgba(0,200,150,.18);color:var(--primary);border:1px solid rgba(0,200,150,.35)}
+.ct-talked{background:rgba(180,100,255,.12);color:var(--purple)}
 .ct-done{background:rgba(0,200,150,.12);color:var(--primary)}
 .ct-miss{background:rgba(255,159,64,.12);color:var(--orange)}
 .ct-busy{background:rgba(255,208,96,.12);color:var(--yellow)}
 .ct-fail{background:rgba(255,83,112,.12);color:var(--red)}
+.ct-error{background:rgba(255,83,112,.18);color:var(--red);border:1px solid rgba(255,83,112,.35)}
+
+/* Progress bar mini stats — kova renkleri */
+.ps-talked{color:var(--purple)}
+.ps-unreachable{color:var(--orange)}
+.ps-error{color:var(--red)}
 
 /* ── TRANSCRIPT FULL VIEW ── */
 .tr-count{font-size:11px;color:var(--txm);font-weight:400;margin-left:4px}

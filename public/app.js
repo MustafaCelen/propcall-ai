@@ -1836,15 +1836,39 @@ function attachCampaignRowClicks(tbody) {
   });
 }
 
+// Kişinin özet + status kombinasyonuna göre iş odaklı etiket üretir.
+// Örn: status=tamamlandı + randevu_alindi=true → "Randevu Alındı"
+//      status=tamamlandı + randevu_alindi=false → "Görüşüldü (Ret)"
+//      status=cevapsız → "Cevapsız" (yeniden aranabilir, hata değil)
+function resolveCampaignStatusTag(c) {
+  if (c.status === 'bekliyor')   return '<span class="ctag ct-wait">Bekliyor</span>';
+  if (c.status === 'arıyor')     return '<span class="ctag ct-calling">📞 Arıyor</span>';
+  if (c.status === 'cevapsız')   return '<span class="ctag ct-miss">📵 Cevapsız</span>';
+  if (c.status === 'meşgul')     return '<span class="ctag ct-busy">⏰ Meşgul</span>';
+  if (c.status === 'başarısız')  return '<span class="ctag ct-error">⚠️ Hata</span>';
+  if (c.status === 'tamamlandı') {
+    if (c.result && c.result.randevu_alindi === true)  return '<span class="ctag ct-appt">✅ Randevu</span>';
+    if (c.result && c.result.randevu_alindi === false) return '<span class="ctag ct-talked">💬 Görüşüldü (Ret)</span>';
+    return '<span class="ctag ct-done">✅ Görüşüldü</span>';
+  }
+  return '<span class="ctag ct-wait">' + esc(c.status) + '</span>';
+}
+
+// Kişiyi hangi kovaya sayacağımızı belirler
+function categorizeCampaignContact(c) {
+  if (c.status === 'arıyor')    return 'active';
+  if (c.status === 'bekliyor')  return 'waiting';
+  if (c.status === 'cevapsız' || c.status === 'meşgul') return 'unreachable';
+  if (c.status === 'başarısız') return 'error';
+  if (c.status === 'tamamlandı') {
+    if (c.result && c.result.randevu_alindi === true) return 'appointment';
+    return 'talked'; // Randevu yok veya özet gelmedi ama görüşme oldu
+  }
+  return 'waiting';
+}
+
 function campaignRowHtml(c, i) {
-  const statusTag = {
-    bekliyor:    '<span class="ctag ct-wait">Bekliyor</span>',
-    arıyor:      '<span class="ctag ct-calling">📞 Arıyor</span>',
-    tamamlandı:  '<span class="ctag ct-done">✅ Tamamlandı</span>',
-    cevapsız:    '<span class="ctag ct-miss">📵 Cevapsız</span>',
-    meşgul:      '<span class="ctag ct-busy">🔴 Meşgul</span>',
-    başarısız:   '<span class="ctag ct-fail">❌ Başarısız</span>',
-  }[c.status] || '<span class="ctag ct-wait">' + esc(c.status) + '</span>';
+  const statusTag = resolveCampaignStatusTag(c);
 
   const heat = c.result ? ilgiBadge(c.result.ilgi_seviyesi) : '<span class="tbl-dash">—</span>';
   const rdv  = c.result
@@ -1880,21 +1904,32 @@ function renderCampaignRow(idx) {
   }
 }
 
-function updateCampaignProgress() {
-  const total    = campaign.contacts.length;
-  const done     = campaign.contacts.filter(c => c.status !== 'bekliyor' && c.status !== 'arıyor').length;
-  const randevu  = campaign.contacts.filter(c => c.result && c.result.randevu_alindi).length;
-  const fail     = campaign.contacts.filter(c => ['cevapsız','meşgul','başarısız'].includes(c.status)).length;
-  const active   = campaign.contacts.filter(c => c.status === 'arıyor').length;
-  const pct      = total ? Math.round(done / total * 100) : 0;
+function computeCampaignBuckets() {
+  const buckets = { appointment:0, talked:0, unreachable:0, error:0, active:0, waiting:0 };
+  campaign.contacts.forEach(c => {
+    const k = categorizeCampaignContact(c);
+    buckets[k] = (buckets[k] || 0) + 1;
+  });
+  return buckets;
+}
 
+function paintCampaignProgress(total, done, b) {
+  const pct = total ? Math.round(done / total * 100) : 0;
   $('progressText').textContent = done + ' / ' + total;
   $('progressPct').textContent  = pct + '%';
   $('progressFill').style.width = pct + '%';
-  $('psDone').textContent    = '✅ ' + (done - fail) + ' Tamamlandı';
-  $('psRandevu').textContent = '📅 ' + randevu + ' Randevu';
-  $('psFail').textContent    = '❌ ' + fail + ' Başarısız';
-  $('psActive').textContent  = '📞 ' + active + ' Aktif';
+  $('psRandevu').textContent     = '✅ ' + b.appointment + ' Randevu';
+  $('psTalked').textContent      = '💬 ' + b.talked      + ' Görüşüldü';
+  $('psUnreachable').textContent = '📵 ' + b.unreachable + ' Ulaşılamadı';
+  $('psError').textContent       = '⚠️ ' + b.error       + ' Hata';
+  $('psActive').textContent      = '📞 ' + b.active      + ' Aktif';
+}
+
+function updateCampaignProgress() {
+  const total = campaign.contacts.length;
+  const b     = computeCampaignBuckets();
+  const done  = b.appointment + b.talked + b.unreachable + b.error;
+  paintCampaignProgress(total, done, b);
 
   if (done === total && total > 0) {
     syncCampaignButtons();
@@ -1902,19 +1937,20 @@ function updateCampaignProgress() {
 }
 
 function updateCampaignProgressFromSummary(sum) {
-  const total  = sum.total  || campaign.contacts.length;
-  const done   = sum.done   ?? campaign.contacts.filter(c => c.status !== 'bekliyor' && c.status !== 'arıyor').length;
-  const randevu = sum.randevu ?? campaign.contacts.filter(c => c.result && c.result.randevu_alindi).length;
-  const fail   = sum.fail   ?? campaign.contacts.filter(c => ['cevapsız','meşgul','başarısız'].includes(c.status)).length;
-  const active = sum.active  ?? campaign.contacts.filter(c => c.status === 'arıyor').length;
-  const pct    = total ? Math.round(done / total * 100) : 0;
-  $('progressText').textContent = done + ' / ' + total;
-  $('progressPct').textContent  = pct + '%';
-  $('progressFill').style.width = pct + '%';
-  $('psDone').textContent    = '✅ ' + (done - fail) + ' Tamamlandı';
-  $('psRandevu').textContent = '📅 ' + randevu + ' Randevu';
-  $('psFail').textContent    = '❌ ' + fail + ' Başarısız';
-  $('psActive').textContent  = '📞 ' + active + ' Aktif';
+  const total = sum.total || campaign.contacts.length;
+  // Backend zaten kovaları verdiyse onu kullan; yoksa local hesapla
+  const b = (sum.appointment != null)
+    ? {
+        appointment: sum.appointment,
+        talked:      sum.talked      ?? 0,
+        unreachable: sum.unreachable ?? sum.fail ?? 0,
+        error:       sum.error       ?? 0,
+        active:      sum.active      ?? 0,
+        waiting:     sum.waiting     ?? 0,
+      }
+    : computeCampaignBuckets();
+  const done = sum.done ?? (b.appointment + b.talked + b.unreachable + b.error);
+  paintCampaignProgress(total, done, b);
 }
 
 async function campaignStart() {

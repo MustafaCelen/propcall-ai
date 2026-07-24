@@ -266,13 +266,16 @@ function isDone(): boolean {
 }
 
 function getCampaignSummary() {
-  const total   = state.contacts.length;
-  const done    = state.contacts.filter(c => c.status !== 'bekliyor' && c.status !== 'arıyor').length;
-  const randevu = state.contacts.filter(c => c.result?.randevu_alindi).length;
-  const fail    = state.contacts.filter(c =>
-    ['cevapsız','meşgul','başarısız'].includes(c.status)).length;
-  const active  = state.contacts.filter(c => c.status === 'arıyor').length;
-  return { total, done, randevu, fail, active };
+  const total       = state.contacts.length;
+  const active      = state.contacts.filter(c => c.status === 'arıyor').length;
+  const waiting     = state.contacts.filter(c => c.status === 'bekliyor').length;
+  const appointment = state.contacts.filter(c => c.status === 'tamamlandı' && c.result?.randevu_alindi === true).length;
+  const talked      = state.contacts.filter(c => c.status === 'tamamlandı' && !c.result?.randevu_alindi).length;
+  const unreachable = state.contacts.filter(c => c.status === 'cevapsız' || c.status === 'meşgul').length;
+  const error       = state.contacts.filter(c => c.status === 'başarısız').length;
+  const done        = appointment + talked + unreachable + error;
+  // Geriye dönük uyumluluk için 'randevu' ve 'fail' de gönderilmeye devam ediyor
+  return { total, done, active, waiting, appointment, talked, unreachable, error, randevu: appointment, fail: unreachable + error };
 }
 
 async function onCampaignComplete(): Promise<void> {
