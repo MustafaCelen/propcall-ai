@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kurulum — PropCall AI</title>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    html,body{height:100%;overflow-y:auto}
+    body{background:var(--bg);min-height:100vh;padding:40px 20px}
+    .ob-wrap{max-width:640px;margin:0 auto}
+    .ob-header{text-align:center;margin-bottom:32px}
+    .ob-logo{width:56px;height:56px;background:var(--primary);border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:26px;margin:0 auto 12px}
+    .ob-title{font-size:22px;font-weight:700}
+    .ob-sub{font-size:13px;color:var(--tx2);margin-top:4px}
+
+    .ob-steps{display:flex;gap:6px;justify-content:center;margin-bottom:32px}
+    .ob-step{width:36px;height:6px;background:var(--s2);border-radius:3px;transition:background .3s}
+    .ob-step.done{background:var(--primary)}
+    .ob-step.active{background:var(--primary);opacity:.6}
+
+    .ob-card{background:var(--s1);border:1px solid var(--border);border-radius:14px;padding:28px;margin-bottom:16px}
+    .ob-card h2{font-size:16px;font-weight:700;margin-bottom:6px}
+    .ob-card .ob-desc{font-size:13px;color:var(--tx2);margin-bottom:20px;line-height:1.6}
+    .ob-card .ob-desc a{color:var(--primary);text-decoration:none}
+    .ob-card .ob-desc a:hover{text-decoration:underline}
+
+    .ob-input-row{display:flex;gap:10px;margin-bottom:12px}
+    .ob-input-row input,.ob-input-row select{flex:1;font-size:13px;padding:10px 14px;background:var(--s2);border:1px solid var(--border);border-radius:8px;color:var(--tx);font-family:'Sora',sans-serif;outline:none;transition:border-color .15s}
+    .ob-input-row input:focus,.ob-input-row select:focus{border-color:var(--border-a)}
+
+    .ob-btn{background:var(--primary);color:#000;border:none;border-radius:8px;padding:10px 20px;font-size:13px;font-weight:700;cursor:pointer;transition:opacity .15s;font-family:'Sora',sans-serif;white-space:nowrap}
+    .ob-btn:hover:not(:disabled){opacity:.85}
+    .ob-btn:disabled{opacity:.4;cursor:not-allowed}
+    .ob-btn-secondary{background:var(--s2);color:var(--tx2);border:1px solid var(--border)}
+    .ob-btn-secondary:hover:not(:disabled){border-color:var(--primary);color:var(--primary)}
+
+    .ob-status{margin-top:10px;padding:10px 14px;border-radius:8px;font-size:12px;display:none}
+    .ob-status.ok{background:rgba(0,200,150,.1);border:1px solid rgba(0,200,150,.3);color:var(--primary);display:block}
+    .ob-status.err{background:rgba(255,83,112,.1);border:1px solid rgba(255,83,112,.3);color:var(--red);display:block}
+    .ob-status.info{background:var(--s2);border:1px solid var(--border);color:var(--tx2);display:block}
+
+    .ob-choice{display:flex;gap:12px;margin-bottom:14px}
+    .ob-choice label{flex:1;padding:16px;background:var(--s2);border:1.5px solid var(--border);border-radius:10px;cursor:pointer;transition:all .15s;display:flex;flex-direction:column;gap:4px}
+    .ob-choice label:hover{border-color:var(--primary)}
+    .ob-choice input[type=radio]{display:none}
+    .ob-choice input[type=radio]:checked + span .ob-choice-title{color:var(--primary)}
+    .ob-choice label:has(input:checked){border-color:var(--primary);background:rgba(0,200,150,.05)}
+    .ob-choice-title{font-size:14px;font-weight:700}
+    .ob-choice-sub{font-size:11px;color:var(--txm)}
+
+    .ob-actions{display:flex;gap:10px;justify-content:space-between;margin-top:20px}
+    .ob-actions .ob-btn{margin:0}
+    .ob-hidden{display:none}
+    .ob-help{margin-top:10px;font-size:11px;color:var(--txm);line-height:1.6}
+    .ob-help ol{margin-left:18px;margin-top:4px}
+    .ob-summary{padding:14px;background:var(--s2);border-radius:8px;font-size:12px;color:var(--tx2);line-height:1.7}
+    .ob-summary b{color:var(--tx)}
+  </style>
+</head>
+<body>
+<div class="ob-wrap">
+  <div class="ob-header">
+    <div class="ob-logo">📞</div>
+    <div class="ob-title">İlk Kurulum</div>
+    <div class="ob-sub">Vapi hesabınızı bağlayarak aramaya başlayın</div>
+  </div>
+
+  <div class="ob-steps">
+    <div class="ob-step" data-step="1"></div>
+    <div class="ob-step" data-step="2"></div>
+    <div class="ob-step" data-step="3"></div>
+    <div class="ob-step" data-step="4"></div>
+  </div>
+
+  <!-- STEP 1: Vapi API Key -->
+  <div class="ob-card" id="step1">
+    <h2>Adım 1 — Vapi API Anahtarı</h2>
+    <p class="ob-desc">
+      Vapi hesabınız yoksa <a href="https://dashboard.vapi.ai/register" target="_blank">buradan ücretsiz açın</a>
+      (10$ hediye kredi ile başlarsınız). Sonra Dashboard → API Keys sayfasından bir private key oluşturup buraya yapıştırın.
+    </p>
+    <div class="ob-input-row">
+      <input type="password" id="vapiKey" placeholder="Vapi Private Key (Bearer token)" />
+      <button class="ob-btn" id="btnVerifyVapi">Doğrula</button>
+    </div>
+    <div class="ob-status" id="vapiStatus"></div>
+    <div class="ob-help">
+      🔒 Anahtarınız AES-256 ile şifrelenip veritabanında saklanır. Kimse okuyamaz.
+    </div>
+  </div>
+
+  <!-- STEP 2: Telefon Numarası -->
+  <div class="ob-card ob-hidden" id="step2">
+    <h2>Adım 2 — Telefon Numarası</h2>
+    <p class="ob-desc">Aramaları hangi Vapi telefon numarasından yapmak istiyorsunuz?</p>
+    <div class="ob-input-row">
+      <select id="phoneSelect"><option value="">Yükleniyor...</option></select>
+    </div>
+    <div class="ob-help">
+      Numara yoksa Vapi Dashboard → Phone Numbers'tan Twilio numara alıp ekleyin, sonra tekrar başlatın.
+    </div>
+    <div class="ob-actions">
+      <button class="ob-btn ob-btn-secondary" onclick="goStep(1)">← Geri</button>
+      <button class="ob-btn" id="btnSavePhone">Devam →</button>
+    </div>
+  </div>
+
+  <!-- STEP 3: Asistan -->
+  <div class="ob-card ob-hidden" id="step3">
+    <h2>Adım 3 — Asistan</h2>
+    <p class="ob-desc">Aramalarda kullanılacak Vapi asistanı.</p>
+    <div class="ob-choice">
+      <label><input type="radio" name="assistantChoice" value="new" checked/>
+        <span>
+          <div class="ob-choice-title">✨ Yeni Yarat (önerilen)</div>
+          <div class="ob-choice-sub">Türk emlakçı için hazır prompt ile</div>
+        </span>
+      </label>
+      <label><input type="radio" name="assistantChoice" value="existing"/>
+        <span>
+          <div class="ob-choice-title">🔗 Mevcut Asistanımı Bağla</div>
+          <div class="ob-choice-sub">Kendi Vapi asistanınızı kullanın</div>
+        </span>
+      </label>
+    </div>
+    <div class="ob-input-row ob-hidden" id="assistantSelectRow">
+      <select id="assistantSelect"><option value="">Yükleniyor...</option></select>
+    </div>
+    <div class="ob-status" id="assistantStatus"></div>
+    <div class="ob-actions">
+      <button class="ob-btn ob-btn-secondary" onclick="goStep(2)">← Geri</button>
+      <button class="ob-btn" id="btnSaveAssistant">Devam →</button>
+    </div>
+  </div>
+
+  <!-- STEP 4: ElevenLabs (opsiyonel) + Bitir -->
+  <div class="ob-card ob-hidden" id="step4">
+    <h2>Adım 4 — Kurulum Özeti</h2>
+    <p class="ob-desc">Her şey hazır. ElevenLabs opsiyoneldir, sonra da ekleyebilirsiniz.</p>
+    <div class="ob-summary" id="summary"></div>
+    <div class="ob-input-row" style="margin-top:14px">
+      <input type="password" id="elKey" placeholder="ElevenLabs API Key (opsiyonel)" />
+    </div>
+    <div class="ob-status" id="finalStatus"></div>
+    <div class="ob-actions">
+      <button class="ob-btn ob-btn-secondary" onclick="goStep(3)">← Geri</button>
+      <button class="ob-btn" id="btnFinish">✓ Kurulumu Tamamla</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentStep = 1;
+function goStep(n) {
+  currentStep = n;
+  [1,2,3,4].forEach(i => {
+    const card = document.getElementById('step' + i);
+    card.classList.toggle('ob-hidden', i !== n);
+    const dot = document.querySelector('.ob-step[data-step="' + i + '"]');
+    dot.classList.toggle('done', i < n);
+    dot.classList.toggle('active', i === n);
+  });
+}
+
+function show(elId, kind, msg) {
+  const el = document.getElementById(elId);
+  el.className = 'ob-status ' + kind;
+  el.textContent = msg;
+}
+function hide(elId) {
+  const el = document.getElementById(elId);
+  el.className = 'ob-status';
+}
+
+// STEP 1
+document.getElementById('btnVerifyVapi').addEventListener('click', async () => {
+  const key = document.getElementById('vapiKey').value.trim();
+  if (!key) return show('vapiStatus', 'err', 'API key boş');
+  show('vapiStatus', 'info', 'Doğrulanıyor...');
+  const r = await fetch('/api/onboarding/vapi/verify', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ apiKey: key }),
+  }).then(x=>x.json());
+  if (!r.success) return show('vapiStatus', 'err', r.error);
+  show('vapiStatus', 'ok', '✓ Doğrulandı — Kredi: $' + (r.data.balance || 0).toFixed(2));
+  setTimeout(() => { loadResources(); goStep(2); }, 700);
+});
+
+// STEP 2 + 3 için kaynakları yükle
+async function loadResources() {
+  const r = await fetch('/api/onboarding/vapi/resources').then(x=>x.json());
+  if (!r.success) return;
+  const phoneSel = document.getElementById('phoneSelect');
+  phoneSel.innerHTML = r.data.phones.length
+    ? r.data.phones.map(p => `<option value="${p.id}">${p.number} ${p.name ? '('+p.name+')' : ''}</option>`).join('')
+    : '<option value="">Telefon numarası yok — Vapi Dashboard\'dan ekleyin</option>';
+  const assistSel = document.getElementById('assistantSelect');
+  assistSel.innerHTML = r.data.assistants.length
+    ? '<option value="">Seçin...</option>' + r.data.assistants.map(a => `<option value="${a.id}">${a.name}</option>`).join('')
+    : '<option value="">Asistan yok — Yeni yarat seçeneğini kullanın</option>';
+}
+
+document.getElementById('btnSavePhone').addEventListener('click', async () => {
+  const id = document.getElementById('phoneSelect').value;
+  if (!id) return alert('Bir telefon numarası seçin');
+  const r = await fetch('/api/onboarding/vapi/phone', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ phoneNumberId: id }),
+  }).then(x=>x.json());
+  if (!r.success) return alert('Hata: ' + r.error);
+  goStep(3);
+});
+
+// STEP 3 — asistan seçim UI
+document.querySelectorAll('input[name=assistantChoice]').forEach(r => {
+  r.addEventListener('change', () => {
+    document.getElementById('assistantSelectRow').classList.toggle('ob-hidden', r.value === 'new');
+  });
+});
+document.getElementById('btnSaveAssistant').addEventListener('click', async () => {
+  const choice = document.querySelector('input[name=assistantChoice]:checked').value;
+  show('assistantStatus', 'info', 'İşleniyor...');
+  let r;
+  if (choice === 'new') {
+    r = await fetch('/api/onboarding/vapi/assistant/create', { method:'POST' }).then(x=>x.json());
+  } else {
+    const id = document.getElementById('assistantSelect').value;
+    if (!id) return show('assistantStatus', 'err', 'Bir asistan seçin');
+    r = await fetch('/api/onboarding/vapi/assistant/link', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ assistantId: id }),
+    }).then(x=>x.json());
+  }
+  if (!r.success) return show('assistantStatus', 'err', r.error);
+  show('assistantStatus', 'ok', '✓ Asistan hazır, webhook otomatik yapılandırıldı');
+  setTimeout(() => { showSummary(); goStep(4); }, 700);
+});
+
+async function showSummary() {
+  const me = await fetch('/api/me').then(x=>x.json());
+  const u = me.data;
+  document.getElementById('summary').innerHTML =
+    '<b>👤 Kullanıcı:</b> ' + u.email + '<br/>' +
+    '<b>📞 Vapi:</b> ✓ Bağlı<br/>' +
+    '<b>🤖 Asistan:</b> ✓ Kurulu<br/>' +
+    '<b>🔗 Webhook:</b> Otomatik yapılandırıldı';
+}
+
+document.getElementById('btnFinish').addEventListener('click', async () => {
+  const elKey = document.getElementById('elKey').value.trim();
+  if (elKey) {
+    await fetch('/api/onboarding/elevenlabs', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ apiKey: elKey }),
+    });
+  }
+  const r = await fetch('/api/onboarding/complete', { method:'POST' }).then(x=>x.json());
+  if (!r.success) return show('finalStatus', 'err', r.error);
+  show('finalStatus', 'ok', '✓ Tamamlandı! Uygulamaya yönlendiriliyorsunuz...');
+  setTimeout(() => location.href = '/', 1200);
+});
+
+goStep(1);
+</script>
+</body>
+</html>

@@ -4,16 +4,29 @@ import {
   VapiTranscriptEntry, CallFilters, StatsData,
 } from './types';
 
-async function writeCall(record: CallRecord): Promise<void> {
-  await pool.query(
-    `INSERT INTO calls (vapi_call_id, data, start_time, status)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (vapi_call_id) DO UPDATE
-       SET data = EXCLUDED.data, status = EXCLUDED.status`,
-    [record.vapiCallId, JSON.stringify(record), record.startTime || null, record.status],
-  );
+// TÜM PUBLIC FONKSİYONLAR user_id ZORUNLU — çapraz erişim yok.
+// Webhook (internal) fonksiyonları vapiCallId ile başlar, user_id row'dan okunur.
+
+// Internal — user_id parametreli INSERT/UPDATE
+async function writeCall(record: CallRecord, userId?: string): Promise<void> {
+  if (userId) {
+    await pool.query(
+      `INSERT INTO calls (vapi_call_id, user_id, data, start_time, status)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (vapi_call_id) DO UPDATE
+         SET data = EXCLUDED.data, status = EXCLUDED.status`,
+      [record.vapiCallId, userId, JSON.stringify(record), record.startTime || null, record.status],
+    );
+  } else {
+    // Update path — user_id set edilmişse dokunma
+    await pool.query(
+      `UPDATE calls SET data = $2, status = $3 WHERE vapi_call_id = $1`,
+      [record.vapiCallId, JSON.stringify(record), record.status],
+    );
+  }
 }
 
+// Webhook-safe read — user_id kontrolü yok, yönlendirmeyi çağıran yapar
 export async function readCall(vapiCallId: string): Promise<CallRecord | null> {
   const { rows } = await pool.query(
     'SELECT data FROM calls WHERE vapi_call_id = $1',
@@ -22,9 +35,28 @@ export async function readCall(vapiCallId: string): Promise<CallRecord | null> {
   return rows[0]?.data ?? null;
 }
 
-export async function getAllCalls(filters?: CallFilters): Promise<CallRecord[]> {
+// Bir aramanın sahibi kim (webhook doğrulama için)
+export async function getCallOwnerUserId(vapiCallId: string): Promise<string | null> {
   const { rows } = await pool.query(
-    'SELECT data FROM calls ORDER BY start_time DESC NULLS LAST',
+    'SELECT user_id FROM calls WHERE vapi_call_id = $1',
+    [vapiCallId],
+  );
+  return rows[0]?.user_id ?? null;
+}
+
+// User-scoped read — başkasının aramasına erişemez
+export async function readCallForUser(userId: string, vapiCallId: string): Promise<CallRecord | null> {
+  const { rows } = await pool.query(
+    'SELECT data FROM calls WHERE vapi_call_id = $1 AND user_id = $2',
+    [vapiCallId, userId],
+  );
+  return rows[0]?.data ?? null;
+}
+
+export async function getAllCalls(userId: string, filters?: CallFilters): Promise<CallRecord[]> {
+  const { rows } = await pool.query(
+    'SELECT data FROM calls WHERE user_id = $1 ORDER BY start_time DESC NULLS LAST',
+    [userId],
   );
   let calls: CallRecord[] = rows.map(r => r.data as CallRecord);
 
@@ -43,6 +75,7 @@ export async function getAllCalls(filters?: CallFilters): Promise<CallRecord[]> 
 }
 
 export async function createCall(
+  userId: string,
   vapiCallId: string,
   customer: CustomerInfo,
   scenarioId?: string,
@@ -63,15 +96,29 @@ export async function createCall(
     scenarioId,
     scenarioName,
   };
-  await writeCall(record);
+  await writeCall(record, userId);
   return record;
 }
 
+// Webhook-called — vapiCallId ile update (user_id zaten row'da)
 export async function updateCall(
   vapiCallId: string,
   updates: Partial<CallRecord>,
 ): Promise<CallRecord | null> {
   const record = await readCall(vapiCallId);
+  if (!record) return null;
+  const updated = { ...record, ...updates };
+  await writeCall(updated);
+  return updated;
+}
+
+// User-scoped update — başkasınınkine yazamaz
+export async function updateCallForUser(
+  userId: string,
+  vapiCallId: string,
+  updates: Partial<CallRecord>,
+): Promise<CallRecord | null> {
+  const record = await readCallForUser(userId, vapiCallId);
   if (!record) return null;
   const updated = { ...record, ...updates };
   await writeCall(updated);
@@ -120,7 +167,6 @@ export function callStatusToTurkish(status: string): string {
 export function endedReasonToStatus(r?: string): CallRecord['status'] {
   if (!r) return 'failed';
   const lower = r.toLowerCase();
-  // Gerçek konuşma yapılmış aramalar
   if ([
     'customer-ended-call',
     'assistant-ended-call',
@@ -129,62 +175,51 @@ export function endedReasonToStatus(r?: string): CallRecord['status'] {
     'max-duration-exceeded',
     'manual',
   ].includes(lower)) return 'completed';
-  // Cevapsız / ulaşılamadı
   if ([
     'no-answer',
     'voicemail',
-    'silence-timed-out',       // Bağlandı ama kimse konuşmadı → cevapsız say
+    'silence-timed-out',
     'customer-did-not-answer',
   ].some(k => lower.includes(k))) return 'no-answer';
-  // Meşgul / reddedildi
   if ([
     'busy',
     'call-rejected',
     'rejected',
   ].some(k => lower.includes(k))) return 'busy';
-  // Gerçek hata durumları
   return 'failed';
 }
 
-export async function getStats(periodDays?: number): Promise<StatsData> {
+// User-scoped stats — SQL'de user_id filter
+export async function getStats(userId: string, periodDays?: number): Promise<StatsData> {
   const days   = periodDays && periodDays > 0 ? Math.min(periodDays, 90) : 30;
   const cutoff = periodDays && periodDays > 0
     ? new Date(Date.now() - periodDays * 86400000).toISOString()
     : null;
 
-  // Tüm ağır hesaplamalar PostgreSQL'de paralel çalışır — Node'a sadece sonuç gelir
   const [
-    mainRow,
-    dailyRows,
-    randevuTrendRows,
-    ilgiRows,
-    retRows,
-    actionRows,
-    hourRows,
-    statusRows,
-    scenarioRows,
+    mainRow, dailyRows, randevuTrendRows, ilgiRows, retRows,
+    actionRows, hourRows, statusRows, scenarioRows,
   ] = await Promise.all([
-    // 1 — Temel sayılar
     pool.query<{
       total_calls: string; completed_calls: string; avg_duration: string;
       total_cost: string; randevu_count: string; with_summary: string;
     }>(
       `SELECT
-         COUNT(*)::int                                                         AS total_calls,
-         COUNT(*) FILTER (WHERE status = 'completed')::int                    AS completed_calls,
+         COUNT(*)::int                                                       AS total_calls,
+         COUNT(*) FILTER (WHERE status = 'completed')::int                  AS completed_calls,
          COALESCE(ROUND(AVG((data->>'duration')::float)
-           FILTER (WHERE status != 'in-progress'))::int, 0)                   AS avg_duration,
-         COALESCE(SUM((data->'costs'->>'total')::float), 0)                  AS total_cost,
+           FILTER (WHERE status != 'in-progress'))::int, 0)                 AS avg_duration,
+         COALESCE(SUM((data->'costs'->>'total')::float), 0)                AS total_cost,
          COUNT(*) FILTER (WHERE (data->'summary'->>'randevu_alindi')::boolean
-           = true)::int                                                        AS randevu_count,
+           = true)::int                                                      AS randevu_count,
          COUNT(*) FILTER (WHERE data->'summary' IS NOT NULL
-           AND status != 'in-progress')::int                                  AS with_summary
+           AND status != 'in-progress')::int                                AS with_summary
        FROM calls
-       WHERE ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)`,
-      [cutoff],
+       WHERE user_id = $3
+         AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)`,
+      [cutoff, days, userId],
     ),
 
-    // 2 — Günlük arama + maliyet (generate_series → sıfırlı günler dahil)
     pool.query<{ date: string; count: string; cost: string }>(
       `WITH ds AS (
          SELECT generate_series(
@@ -193,16 +228,15 @@ export async function getStats(periodDays?: number): Promise<StatsData> {
          )::date AS d
        )
        SELECT ds.d::text AS date,
-              COALESCE(COUNT(c.vapi_call_id), 0)::int                AS count,
-              COALESCE(SUM((c.data->'costs'->>'total')::float), 0)   AS cost
+              COALESCE(COUNT(c.vapi_call_id), 0)::int              AS count,
+              COALESCE(SUM((c.data->'costs'->>'total')::float), 0) AS cost
        FROM ds
-       LEFT JOIN calls c ON c.start_time::date = ds.d
+       LEFT JOIN calls c ON c.start_time::date = ds.d AND c.user_id = $3
          AND ($1::timestamptz IS NULL OR c.start_time >= $1::timestamptz)
        GROUP BY ds.d ORDER BY ds.d`,
-      [cutoff, days],
+      [cutoff, days, userId],
     ),
 
-    // 3 — Randevu dönüşüm trendi
     pool.query<{ date: string; total: string; alindi: string }>(
       `WITH ds AS (
          SELECT generate_series(
@@ -216,63 +250,57 @@ export async function getStats(periodDays?: number): Promise<StatsData> {
                 WHERE (c.data->'summary'->>'randevu_alindi')::boolean = true
               )::int AS alindi
        FROM ds
-       LEFT JOIN calls c ON c.start_time::date = ds.d
+       LEFT JOIN calls c ON c.start_time::date = ds.d AND c.user_id = $3
          AND ($1::timestamptz IS NULL OR c.start_time >= $1::timestamptz)
        GROUP BY ds.d ORDER BY ds.d`,
-      [cutoff, days],
+      [cutoff, days, userId],
     ),
 
-    // 4 — İlgi seviyesi dağılımı
     pool.query<{ seviye: string; count: string }>(
       `SELECT COALESCE(data->'summary'->>'ilgi_seviyesi','yok') AS seviye,
               COUNT(*)::int AS count
        FROM calls
-       WHERE data->'summary' IS NOT NULL AND status != 'in-progress'
+       WHERE user_id = $2 AND data->'summary' IS NOT NULL AND status != 'in-progress'
          AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
        GROUP BY seviye`,
-      [cutoff],
+      [cutoff, userId],
     ),
 
-    // 5 — Ret nedeni dağılımı
     pool.query<{ neden: string; count: string }>(
       `SELECT data->'summary'->>'ret_nedeni' AS neden, COUNT(*)::int AS count
        FROM calls
-       WHERE data->'summary'->>'ret_nedeni' IS NOT NULL
+       WHERE user_id = $2 AND data->'summary'->>'ret_nedeni' IS NOT NULL
          AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
        GROUP BY neden ORDER BY count DESC LIMIT 8`,
-      [cutoff],
+      [cutoff, userId],
     ),
 
-    // 6 — Aksiyon dağılımı
     pool.query<{ action: string; count: string }>(
       `SELECT COALESCE(data->'summary'->>'tavsiye_edilen_aksiyon','Belirsiz') AS action,
               COUNT(*)::int AS count
        FROM calls
-       WHERE data->'summary' IS NOT NULL AND status != 'in-progress'
+       WHERE user_id = $2 AND data->'summary' IS NOT NULL AND status != 'in-progress'
          AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
        GROUP BY action`,
-      [cutoff],
+      [cutoff, userId],
     ),
 
-    // 7 — Saatlik dağılım
     pool.query<{ hour: string; count: string }>(
       `SELECT EXTRACT(HOUR FROM start_time)::int AS hour, COUNT(*)::int AS count
        FROM calls
-       WHERE start_time IS NOT NULL
+       WHERE user_id = $2 AND start_time IS NOT NULL
          AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
        GROUP BY hour ORDER BY hour`,
-      [cutoff],
+      [cutoff, userId],
     ),
 
-    // 8 — Durum dağılımı
     pool.query<{ status: string; count: string }>(
       `SELECT status, COUNT(*)::int AS count FROM calls
-       WHERE ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
+       WHERE user_id = $2 AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
        GROUP BY status`,
-      [cutoff],
+      [cutoff, userId],
     ),
 
-    // 9 — Senaryo performansı
     pool.query<{ name: string; calls: string; randevu: string; cost: string }>(
       `SELECT COALESCE(data->>'scenarioName','Varsayılan') AS name,
               COUNT(*)::int AS calls,
@@ -281,9 +309,9 @@ export async function getStats(periodDays?: number): Promise<StatsData> {
               )::int AS randevu,
               COALESCE(SUM((data->'costs'->>'total')::float), 0) AS cost
        FROM calls
-       WHERE ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
+       WHERE user_id = $2 AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
        GROUP BY name ORDER BY calls DESC`,
-      [cutoff],
+      [cutoff, userId],
     ),
   ]);
 
@@ -300,7 +328,6 @@ export async function getStats(periodDays?: number): Promise<StatsData> {
   const ilgiOrder = ['yüksek', 'orta', 'düşük', 'yok'];
   const ilgiMap   = Object.fromEntries(ilgiRows.rows.map(r => [r.seviye, Number(r.count)]));
 
-  // Saatlik dağılım: 0-23 tam seri
   const hourFull: { hour: number; count: number }[] = [];
   const hourMap = Object.fromEntries(hourRows.rows.map(r => [Number(r.hour), Number(r.count)]));
   for (let h = 0; h < 24; h++) hourFull.push({ hour: h, count: hourMap[h] || 0 });
@@ -332,8 +359,8 @@ export async function getStats(periodDays?: number): Promise<StatsData> {
   };
 }
 
-export async function exportCSV(filters?: CallFilters): Promise<string> {
-  const calls = await getAllCalls(filters);
+export async function exportCSV(userId: string, filters?: CallFilters): Promise<string> {
+  const calls = await getAllCalls(userId, filters);
   const headers = ['Tarih','Ad','Telefon','Süre','Randevu','İlgi','Ret Nedeni','Mülk Tipi','Aksiyon','Geri Dönüş Notu','Özet','Maliyet','Durum','Notlar'];
   const rows = calls.map(c => [
     new Date(c.startTime).toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' }),

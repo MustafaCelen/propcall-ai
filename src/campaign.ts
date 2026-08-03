@@ -22,6 +22,7 @@ export interface CampaignContact {
 }
 
 export interface CampaignSnapshot {
+  userId?: string;          // Kampanyanın sahibi (multi-tenancy için)
   contacts: CampaignContact[];
   running: boolean;
   paused: boolean;
@@ -341,16 +342,27 @@ async function callContact(idx: number): Promise<void> {
   });
 
   try {
-    const scenario = state.scenarioId ? await getScenario(state.scenarioId) : null;
+    if (!state.userId) throw new Error('Campaign userId set edilmemiş');
+    const scenario = state.scenarioId ? await getScenario(state.userId, state.scenarioId) : null;
     const customer: CustomerInfo = {
       name: c.name, phone: c.phone,
       region: c.region || '', notes: c.notes || '',
     };
-    const vapiCall = await createVapiCall(customer, scenario?.systemPrompt);
+    // Kullanıcının Vapi credentials'ını al
+    const { getUserById, getUserVapiApiKey } = await import('./users');
+    const u = await getUserById(state.userId);
+    const apiKey = await getUserVapiApiKey(state.userId);
+    if (!u?.vapi_assistant_id || !u?.vapi_phone_number_id || !apiKey) {
+      throw new Error('Kullanıcının Vapi kurulumu eksik');
+    }
+    const vapiCall = await createVapiCall(
+      { apiKey, assistantId: u.vapi_assistant_id, phoneNumberId: u.vapi_phone_number_id },
+      customer, scenario?.systemPrompt,
+    );
     c.vapiCallId   = vapiCall.id;
 
     // Aramayı DB'ye kaydet — Geçmiş Aramalar'da görünmesi için
-    await createCall(vapiCall.id, customer, scenario?.id, scenario?.name);
+    await createCall(state.userId, vapiCall.id, customer, scenario?.id, scenario?.name);
 
     await saveCampaignToDb();
     broadcastFn('campaign-contact-update', {

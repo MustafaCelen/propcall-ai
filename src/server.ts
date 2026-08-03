@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import path from 'path';
 import dotenv from 'dotenv';
 
@@ -7,6 +8,14 @@ dotenv.config();
 
 import { initDb } from './db';
 import pool from './db';
+import {
+  handleGoogleLogin, handleGoogleCallback, handleLogout,
+  requireAuth, requireAdmin, attachUser,
+} from './auth';
+import {
+  getUserById, setUserVapiCredentials, setUserElevenLabsCredentials,
+  markOnboardingComplete, listUsers, setUserActive, setUserRole,
+} from './users';
 import { generateCallSummary } from './ai';
 import { createVapiCall, endVapiCall, getVapiCredit } from './vapi';
 import { getElevenLabsCredit } from './elevenlabs';
@@ -29,8 +38,157 @@ const PORT = process.env.PORT || 5000;
 const HOST = '0.0.0.0';
 
 app.use(cors());
+app.use(cookieParser());
 app.use(express.json({ limit: '10mb' }));
+
+// ─── Auth Routes (public) ─────────────────────────────────────────────────
+app.get ('/auth/google',          handleGoogleLogin);
+app.get ('/auth/google/callback', handleGoogleCallback);
+app.post('/auth/logout',          handleLogout);
+app.get ('/auth/logout',          handleLogout);
+
+// Login sayfası (public static)
+app.get('/login', (_req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'login.html'));
+});
+
+// Onboarding sayfası — auth gerektirir
+app.get('/onboarding', requireAuth, (_req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'onboarding.html'));
+});
+
+// Kullanıcı meta bilgisi (frontend için)
+app.get('/api/me', attachUser, (req, res) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, error: 'not_authenticated' });
+    return;
+  }
+  const u = req.user;
+  res.json({
+    success: true,
+    data: {
+      id: u.id, email: u.email, name: u.name, pictureUrl: u.picture_url,
+      role: u.role,
+      onboardingCompleted: u.onboarding_completed,
+      hasVapi: !!u.vapi_assistant_id,
+      hasElevenLabs: !!u.elevenlabs_voice_id,
+    },
+  });
+});
+
+// Static asset'ler — auth gerekmez (CSS/JS/img). login.html, onboarding.html public.
 app.use(express.static(path.join(__dirname, '..', 'public')));
+
+// ─── Onboarding API (auth arkasında) ──────────────────────────────────────
+import {
+  verifyVapiKey, listVapiPhoneNumbers, listVapiAssistants,
+  createVapiAssistantFromTemplate, updateVapiAssistantServer,
+} from './vapi';
+
+const APP_URL_BASE = process.env.APP_URL || `http://localhost:${PORT}`;
+
+// Step 1: Vapi API key doğrula
+app.post('/api/onboarding/vapi/verify', requireAuth, async (req, res) => {
+  try {
+    const { apiKey } = req.body as { apiKey: string };
+    if (!apiKey) return res.status(400).json({ success: false, error: 'apiKey zorunlu' });
+    const info = await verifyVapiKey(apiKey);
+    if (!info.ok) return res.status(400).json({ success: false, error: info.error });
+    // Key'i geçici olarak sakla (henüz assistant seçilmemiş)
+    await setUserVapiCredentials(req.userId!, { apiKey });
+    return res.json({ success: true, data: info });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+// Step 2: Telefon + asistan listelerini getir
+app.get('/api/onboarding/vapi/resources', requireAuth, async (req, res) => {
+  try {
+    const { getUserVapiApiKey } = await import('./users');
+    const key = await getUserVapiApiKey(req.userId!);
+    if (!key) return res.status(400).json({ success: false, error: 'Önce Vapi API key ekleyin' });
+    const [phones, assistants] = await Promise.all([
+      listVapiPhoneNumbers(key).catch(() => []),
+      listVapiAssistants(key).catch(() => []),
+    ]);
+    return res.json({ success: true, data: { phones, assistants } });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+// Step 3a: Yeni asistan yarat (template'ten)
+app.post('/api/onboarding/vapi/assistant/create', requireAuth, async (req, res) => {
+  try {
+    const { getUserVapiApiKey } = await import('./users');
+    const key = await getUserVapiApiKey(req.userId!);
+    if (!key) return res.status(400).json({ success: false, error: 'Önce Vapi API key ekleyin' });
+    const assistant = await createVapiAssistantFromTemplate(key, {
+      name: `PropCall - ${req.user!.name || req.user!.email}`,
+      serverUrl: `${APP_URL_BASE}/webhook/${req.userId}`,
+    });
+    await setUserVapiCredentials(req.userId!, { assistantId: assistant.id });
+    return res.json({ success: true, data: assistant });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+// Step 3b: Mevcut asistanı bağla (webhook URL'sini set eder)
+app.post('/api/onboarding/vapi/assistant/link', requireAuth, async (req, res) => {
+  try {
+    const { assistantId } = req.body as { assistantId: string };
+    if (!assistantId) return res.status(400).json({ success: false, error: 'assistantId zorunlu' });
+    const { getUserVapiApiKey } = await import('./users');
+    const key = await getUserVapiApiKey(req.userId!);
+    if (!key) return res.status(400).json({ success: false, error: 'Önce Vapi API key ekleyin' });
+    await updateVapiAssistantServer(key, assistantId, {
+      serverUrl: `${APP_URL_BASE}/webhook/${req.userId}`,
+    });
+    await setUserVapiCredentials(req.userId!, { assistantId });
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+// Step 4: Telefon numarası seç
+app.post('/api/onboarding/vapi/phone', requireAuth, async (req, res) => {
+  try {
+    const { phoneNumberId } = req.body as { phoneNumberId: string };
+    if (!phoneNumberId) return res.status(400).json({ success: false, error: 'phoneNumberId zorunlu' });
+    await setUserVapiCredentials(req.userId!, { phoneNumberId });
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+// Step 5 (opsiyonel): ElevenLabs
+app.post('/api/onboarding/elevenlabs', requireAuth, async (req, res) => {
+  try {
+    const { apiKey, voiceId } = req.body as { apiKey?: string; voiceId?: string };
+    await setUserElevenLabsCredentials(req.userId!, { apiKey, voiceId });
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+// Onboarding tamamlandı
+app.post('/api/onboarding/complete', requireAuth, async (req, res) => {
+  try {
+    const u = await getUserById(req.userId!);
+    if (!u?.vapi_assistant_id || !u?.vapi_phone_number_id) {
+      return res.status(400).json({ success: false, error: 'Vapi kurulumu eksik' });
+    }
+    await markOnboardingComplete(req.userId!);
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: String(err) });
+  }
+});
 
 // ─── SSE ─────────────────────────────────────────────────────────────────────
 
@@ -57,17 +215,28 @@ app.get('/api/events', (req: Request, res: Response) => {
 
 // ─── VAPI: Arama başlat ───────────────────────────────────────────────────────
 
-app.post('/api/call', async (req: Request, res: Response) => {
+async function getUserVapiCreds(userId: string) {
+  const { getUserVapiApiKey } = await import('./users');
+  const u = await getUserById(userId);
+  const apiKey = await getUserVapiApiKey(userId);
+  if (!u || !apiKey || !u.vapi_assistant_id || !u.vapi_phone_number_id) {
+    throw new Error('Vapi kurulumu eksik — Ayarlar\'dan tamamlayın');
+  }
+  return { apiKey, assistantId: u.vapi_assistant_id, phoneNumberId: u.vapi_phone_number_id };
+}
+
+app.post('/api/call', requireAuth, async (req: Request, res: Response) => {
   try {
     const { customer, scenarioId } = req.body as VapiCallRequest;
     if (!customer?.name || !customer?.phone)
       return res.status(400).json({ success: false, error: 'Ad ve telefon zorunlu' });
 
-    const scenario = scenarioId ? await getScenario(scenarioId) : null;
-    const vapiCall = await createVapiCall(customer, scenario?.systemPrompt);
-    const record   = await createCall(vapiCall.id, customer, scenario?.id, scenario?.name);
+    const scenario = scenarioId ? await getScenario(req.userId!, scenarioId) : null;
+    const creds    = await getUserVapiCreds(req.userId!);
+    const vapiCall = await createVapiCall(creds, customer, scenario?.systemPrompt);
+    const record   = await createCall(req.userId!, vapiCall.id, customer, scenario?.id, scenario?.name);
 
-    console.log(`[Vapi] Arama başlatıldı: ${vapiCall.id} → ${customer.phone}`);
+    console.log(`[Vapi] Arama başlatıldı: ${vapiCall.id} → ${customer.phone} (user: ${req.userId})`);
     return res.json({ success: true, data: { callId: vapiCall.id, recordId: record.callId } });
   } catch (err) {
     console.error('[API] /call hatası:', err);
@@ -75,9 +244,16 @@ app.post('/api/call', async (req: Request, res: Response) => {
   }
 });
 
-app.delete('/api/call/:vapiCallId', async (req: Request, res: Response) => {
+app.delete('/api/call/:vapiCallId', requireAuth, async (req: Request, res: Response) => {
   try {
-    await endVapiCall(req.params.vapiCallId);
+    const { getUserVapiApiKey } = await import('./users');
+    const key = await getUserVapiApiKey(req.userId!);
+    if (!key) return res.status(400).json({ success: false, error: 'Vapi key yok' });
+    // Sadece kendi araması ise sonlandırabilir
+    const { getCallOwnerUserId } = await import('./calls');
+    const owner = await getCallOwnerUserId(req.params.vapiCallId);
+    if (owner !== req.userId) return res.status(404).json({ success: false, error: 'Arama bulunamadı' });
+    await endVapiCall(key, req.params.vapiCallId);
     await updateCall(req.params.vapiCallId, { status: 'completed', endTime: new Date().toISOString() });
     return res.json({ success: true });
   } catch (err) {
@@ -86,18 +262,49 @@ app.delete('/api/call/:vapiCallId', async (req: Request, res: Response) => {
 });
 
 // ─── VAPI: Webhook ────────────────────────────────────────────────────────────
+// Multi-tenant: /webhook/:userId — Vapi assistant serverUrl'inde userId var
 
-app.post('/webhook', (req: Request, res: Response) => {
+app.post('/webhook/:userId', async (req: Request, res: Response) => {
   res.sendStatus(200);
-  handleWebhook(req.body as VapiWebhookPayload).catch(console.error);
+  const routeUserId = req.params.userId;
+  const payload = req.body as VapiWebhookPayload;
+
+  // Anti-spoof: payload'daki assistantId → gerçekten bu user'ın assistant'ı mı?
+  const assistantId = (payload?.message?.call as any)?.assistantId;
+  if (assistantId) {
+    const owner = await getUserById(routeUserId);
+    if (!owner || owner.vapi_assistant_id !== assistantId) {
+      console.warn(`[Webhook] SPOOF ATTEMPT: userId=${routeUserId} assistantId=${assistantId} — reject`);
+      return;
+    }
+  }
+  handleWebhook(payload, routeUserId).catch(console.error);
 });
 
-async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
+// Legacy webhook (mevcut kullanıcılar için — user_id assistantId'den bulunur)
+app.post('/webhook', async (req: Request, res: Response) => {
+  res.sendStatus(200);
+  const payload = req.body as VapiWebhookPayload;
+  const assistantId = (payload?.message?.call as any)?.assistantId;
+  if (!assistantId) return;
+  // Assistant ID'den user'ı bul
+  const { rows } = await pool.query(
+    'SELECT id FROM users WHERE vapi_assistant_id = $1 LIMIT 1', [assistantId],
+  );
+  const userId = rows[0]?.id;
+  if (!userId) {
+    console.warn(`[Webhook /] Bilinmeyen assistantId=${assistantId}`);
+    return;
+  }
+  handleWebhook(payload, userId).catch(console.error);
+});
+
+async function handleWebhook(payload: VapiWebhookPayload, userId?: string): Promise<void> {
   const msg = payload?.message;
   if (!msg?.type) return;
 
   const vapiCallId = msg.call?.id;
-  console.log(`[Webhook] ${msg.type}${vapiCallId ? ` | ${vapiCallId}` : ''}`);
+  console.log(`[Webhook] ${msg.type}${vapiCallId ? ` | ${vapiCallId}` : ''}${userId ? ` | user=${userId}` : ''}`);
 
   switch (msg.type) {
 
@@ -383,29 +590,31 @@ app.get('/api/followup', async (_req: Request, res: Response) => {
 
 // ─── ARAMALAR ─────────────────────────────────────────────────────────────────
 
-app.get('/api/calls', async (req: Request, res: Response) => {
+app.get('/api/calls', requireAuth, async (req: Request, res: Response) => {
   try {
     const { dateFrom, dateTo, randevu, ilgi, aksiyon, status, scenarioId } = req.query as Record<string, string>;
     const filters: CallFilters = { dateFrom, dateTo, randevu, ilgi, aksiyon, status, scenarioId };
-    return res.json({ success: true, data: await getAllCalls(filters) });
+    return res.json({ success: true, data: await getAllCalls(req.userId!, filters) });
   } catch (err) {
     return res.status(500).json({ success: false, error: String(err) });
   }
 });
 
-app.get('/api/calls/:id', async (req: Request, res: Response) => {
-  const record = await readCall(req.params.id);
+app.get('/api/calls/:id', requireAuth, async (req: Request, res: Response) => {
+  const { readCallForUser } = await import('./calls');
+  const record = await readCallForUser(req.userId!, req.params.id);
   if (!record) return res.status(404).json({ success: false, error: 'Arama bulunamadı' });
   return res.json({ success: true, data: record });
 });
 
-app.patch('/api/calls/:id', async (req: Request, res: Response) => {
+app.patch('/api/calls/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const { notes, followUp } = req.body as { notes?: string; followUp?: boolean };
     const updates: Record<string, unknown> = {};
     if (notes    !== undefined) updates.notes    = notes;
     if (followUp !== undefined) updates.followUp = followUp;
-    const record = await updateCall(req.params.id, updates as any);
+    const { updateCallForUser } = await import('./calls');
+    const record = await updateCallForUser(req.userId!, req.params.id, updates as any);
     if (!record) return res.status(404).json({ success: false, error: 'Arama bulunamadı' });
     return res.json({ success: true, data: record });
   } catch (err) {
@@ -413,10 +622,11 @@ app.patch('/api/calls/:id', async (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/generate-summary', async (req: Request, res: Response) => {
+app.post('/api/generate-summary', requireAuth, async (req: Request, res: Response) => {
   try {
     const { vapiCallId } = req.body as { vapiCallId: string };
-    const record = await readCall(vapiCallId);
+    const { readCallForUser } = await import('./calls');
+    const record = await readCallForUser(req.userId!, vapiCallId);
     if (!record) return res.status(404).json({ success: false, error: 'Arama bulunamadı' });
     const history = record.transcript.map(t => ({ role: t.role, content: t.text }));
     const summary = await generateCallSummary(record.customerInfo, history);
@@ -429,31 +639,36 @@ app.post('/api/generate-summary', async (req: Request, res: Response) => {
 
 // ─── İSTATİSTİK ──────────────────────────────────────────────────────────────
 
-app.get('/api/stats', async (req: Request, res: Response) => {
+app.get('/api/stats', requireAuth, async (req: Request, res: Response) => {
   try {
     const period = req.query.period ? parseInt(String(req.query.period), 10) : undefined;
-    return res.json({ success: true, data: await getStats(period && period > 0 ? period : undefined) });
+    return res.json({ success: true, data: await getStats(req.userId!, period && period > 0 ? period : undefined) });
   } catch (err) {
     return res.status(500).json({ success: false, error: String(err) });
   }
 });
 
-// ─── Kredi / abonelik bilgisi (Vapi + ElevenLabs) ─────────────────────────────
-app.get('/api/credits', async (_req: Request, res: Response) => {
+// ─── Kredi / abonelik bilgisi (kişinin kendi Vapi + ElevenLabs) ──────────────
+app.get('/api/credits', requireAuth, async (req: Request, res: Response) => {
+  const { getUserVapiApiKey, getUserElevenLabsApiKey } = await import('./users');
+  const [vapiKey, elKey] = await Promise.all([
+    getUserVapiApiKey(req.userId!),
+    getUserElevenLabsApiKey(req.userId!),
+  ]);
   const [vapi, elevenlabs] = await Promise.all([
-    getVapiCredit(),
-    getElevenLabsCredit(),
+    getVapiCredit(vapiKey || undefined),
+    getElevenLabsCredit(elKey || undefined),
   ]);
   return res.json({ success: true, data: { vapi, elevenlabs } });
 });
 
 // ─── CSV EXPORT ───────────────────────────────────────────────────────────────
 
-app.get('/api/export', async (req: Request, res: Response) => {
+app.get('/api/export', requireAuth, async (req: Request, res: Response) => {
   try {
     const { dateFrom, dateTo, randevu, ilgi, aksiyon, status, scenarioId } = req.query as Record<string, string>;
     const filters: CallFilters = { dateFrom, dateTo, randevu, ilgi, aksiyon, status, scenarioId };
-    const csv = await exportCSV(filters);
+    const csv = await exportCSV(req.userId!, filters);
     res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="propcall-export.csv"' });
     return res.send('﻿' + csv);
   } catch (err) {
@@ -463,23 +678,23 @@ app.get('/api/export', async (req: Request, res: Response) => {
 
 // ─── RANDEVULAR ──────────────────────────────────────────────────────────────
 
-app.get('/api/appointments', async (_req, res) => {
-  try { return res.json({ success: true, data: await getAllAppointments() }); }
+app.get('/api/appointments', requireAuth, async (req, res) => {
+  try { return res.json({ success: true, data: await getAllAppointments(req.userId!) }); }
   catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
 
-app.post('/api/appointments', async (req, res) => {
+app.post('/api/appointments', requireAuth, async (req, res) => {
   try {
     const { customerName, customerPhone, date, time, address, notes } = req.body;
     if (!customerName || !date || !time)
       return res.status(400).json({ success: false, error: 'Ad, tarih ve saat zorunlu' });
-    return res.status(201).json({ success: true, data: await saveAppointment({ customerName, customerPhone, date, time, address, notes }) });
+    return res.status(201).json({ success: true, data: await saveAppointment(req.userId!, { customerName, customerPhone, date, time, address, notes }) });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
 
-app.delete('/api/appointments/:id', async (req, res) => {
+app.delete('/api/appointments/:id', requireAuth, async (req, res) => {
   try {
-    if (!await deleteAppointment(req.params.id))
+    if (!await deleteAppointment(req.userId!, req.params.id))
       return res.status(404).json({ success: false, error: 'Randevu bulunamadı' });
     return res.json({ success: true });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
@@ -487,32 +702,32 @@ app.delete('/api/appointments/:id', async (req, res) => {
 
 // ─── SENARYOLAR ──────────────────────────────────────────────────────────────
 
-app.get('/api/scenarios', async (_req, res) => {
-  try { return res.json({ success: true, data: await getAllScenarios() }); }
+app.get('/api/scenarios', requireAuth, async (req, res) => {
+  try { return res.json({ success: true, data: await getAllScenarios(req.userId!) }); }
   catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
 
-app.post('/api/scenarios', async (req, res) => {
+app.post('/api/scenarios', requireAuth, async (req, res) => {
   try {
     const { name, systemPrompt } = req.body as { name: string; systemPrompt: string };
     if (!name || !systemPrompt)
       return res.status(400).json({ success: false, error: 'Ad ve prompt zorunlu' });
-    return res.status(201).json({ success: true, data: await createScenario(name, systemPrompt) });
+    return res.status(201).json({ success: true, data: await createScenario(req.userId!, name, systemPrompt) });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
 
-app.put('/api/scenarios/:id', async (req, res) => {
+app.put('/api/scenarios/:id', requireAuth, async (req, res) => {
   try {
     const { name, systemPrompt } = req.body as { name: string; systemPrompt: string };
-    const updated = await updateScenario(req.params.id, name, systemPrompt);
+    const updated = await updateScenario(req.userId!, req.params.id, name, systemPrompt);
     if (!updated) return res.status(404).json({ success: false, error: 'Senaryo bulunamadı' });
     return res.json({ success: true, data: updated });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
 
-app.delete('/api/scenarios/:id', async (req, res) => {
+app.delete('/api/scenarios/:id', requireAuth, async (req, res) => {
   try {
-    if (!await deleteScenario(req.params.id))
+    if (!await deleteScenario(req.userId!, req.params.id))
       return res.status(404).json({ success: false, error: 'Senaryo bulunamadı' });
     return res.json({ success: true });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }

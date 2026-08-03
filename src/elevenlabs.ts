@@ -12,9 +12,9 @@ export interface ElevenLabsCreditInfo {
   error?: string;
 }
 
-export async function getElevenLabsCredit(): Promise<ElevenLabsCreditInfo> {
-  const key = process.env.ELEVENLABS_API_KEY;
-  if (!key) return { ok: false, error: 'ELEVENLABS_API_KEY yok' };
+export async function getElevenLabsCredit(apiKey?: string): Promise<ElevenLabsCreditInfo> {
+  const key = apiKey || process.env.ELEVENLABS_API_KEY;
+  if (!key) return { ok: false, error: 'API key yok' };
   try {
     const resp = await fetch(`${ELEVENLABS_BASE}/v1/user/subscription`, {
       headers: { 'xi-api-key': key },
