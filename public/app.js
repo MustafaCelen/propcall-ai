@@ -126,6 +126,9 @@ async function loadCredits() {
         vEl.textContent = '$' + vapi.balance.toFixed(2);
         vEl.className = 'credit-val ' + creditLevelCls(vapi.balance, [1, 5]);
         tips.push('Vapi: $' + vapi.balance.toFixed(2) + (vapi.plan ? ' (' + vapi.plan + ')' : ''));
+      } else if (vapi.link) {
+        vEl.innerHTML = '<a href="' + vapi.link + '" target="_blank" class="credit-dashboard-link" title="Vapi Dashboard\'da görüntüle">Dashboard ↗</a>';
+        vEl.className = 'credit-val credit-unknown';
       } else {
         vEl.textContent = '—';
         vEl.className = 'credit-val credit-unknown';
@@ -670,7 +673,7 @@ function filterHistoryData(arr) {
 async function loadHistory() {
   const params = buildFilterParams();
   state.currentFilters = params;
-  DOM.callsTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Yükleniyor...</td></tr>';
+  DOM.callsTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Yükleniyor...</td></tr>';
   try {
     const qs   = new URLSearchParams(params).toString();
     const resp = await fetch('/api/calls' + (qs ? '?' + qs : ''));
@@ -679,7 +682,7 @@ async function loadHistory() {
     state.historyData = json.data;
     renderTable(filterHistoryData(json.data));
   } catch (err) {
-    DOM.callsTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Hata: ' + err.message + '</td></tr>';
+    DOM.callsTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Hata: ' + err.message + '</td></tr>';
   }
 }
 
@@ -705,7 +708,7 @@ function renderTable(calls) {
   const counter = $('historyCounter');
   if (counter) counter.textContent = calls.length + ' kayıt';
   if (!calls.length) {
-    DOM.callsTableBody.innerHTML = '<tr><td colspan="10" class="table-empty">Kayıt bulunamadı</td></tr>';
+    DOM.callsTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Kayıt bulunamadı</td></tr>';
     return;
   }
   DOM.callsTableBody.innerHTML = calls.map(c => {
@@ -728,8 +731,6 @@ function renderTable(calls) {
       '<td class="tc-cell">' + trIcon + '</td>' +
       '<td>' + randevuBadge(s) + '</td>' +
       '<td>' + ilgiBadge(s && s.ilgi_seviyesi) + '</td>' +
-      '<td class="ozet-cell">' + retStr + '</td>' +
-      '<td class="ozet-cell note-cell">' + noteStr + '</td>' +
       '<td class="action-cell">' + costStr + '<button class="btn-detail" data-id="' + c.vapiCallId + '">›</button></td>' +
       '</tr>';
   }).join('');
@@ -834,14 +835,15 @@ function renderDrawer(call) {
       '</div>';
   }
 
+  const recProxyUrl = '/api/calls/' + encodeURIComponent(call.vapiCallId) + '/recording';
   const recPlayerHtml = call.recordingUrl
     ? '<div class="recording-player">' +
         '<div class="rp-label">🎧 Ses Kaydı</div>' +
-        '<audio controls preload="none" class="rp-audio" src="' + call.recordingUrl + '">' +
-          '<source src="' + call.recordingUrl + '">' +
-          '<a href="' + call.recordingUrl + '" target="_blank" class="recording-link">Tarayıcıda Aç</a>' +
+        '<audio controls preload="none" class="rp-audio" src="' + recProxyUrl + '">' +
+          '<source src="' + recProxyUrl + '">' +
+          '<a href="' + recProxyUrl + '" target="_blank" class="recording-link">Tarayıcıda Aç</a>' +
         '</audio>' +
-        '<a class="rp-ext-link" href="' + call.recordingUrl + '" target="_blank" title="Yeni sekmede aç">↗</a>' +
+        '<a class="rp-ext-link" href="' + recProxyUrl + '" target="_blank" title="Yeni sekmede aç">↗</a>' +
       '</div>'
     : '';
 
@@ -1640,24 +1642,32 @@ function followupCard(c, colorClass, opts) {
   const s    = c.summary;
   const ilgi = s ? s.ilgi_seviyesi : null;
   const ilgiCls = ilgi === 'yüksek' ? 'heat-hot' : ilgi === 'orta' ? 'heat-warm' : ilgi === 'düşük' ? 'heat-mid' : 'heat-cold';
-  const ilgiStr = ilgi || '—';
-  const note = s ? s.geri_donus_notu : null;
-  const mulk = s ? s.mulk_tipi : null;
-  const ago  = timeSince(c.startTime);
+  const ilgiEmoji = ilgi === 'yüksek' ? '🔥' : ilgi === 'orta' ? '⚡' : ilgi === 'düşük' ? '❄️' : '—';
+  const ilgiLabel = ilgi || 'belirsiz';
+  const note    = s ? s.geri_donus_notu : null;
+  const aksiyon = s ? s.tavsiye_edilen_aksiyon : null;
+  const mulk    = s ? s.mulk_tipi : null;
+  const scenario = c.scenarioName || null;
+  const ago     = timeSince(c.startTime);
 
   const unfollowBtn = opts.canUnfollow
     ? '<button class="fu-unfollow-btn" data-id="' + c.vapiCallId + '" title="Takipten çıkart">✓</button>'
     : '';
 
   return '<div class="fu-row fu-' + colorClass + '">' +
-    '<div class="fu-row-heat ' + ilgiCls + '" title="İlgi: ' + ilgiStr + '">' + ilgiStr.slice(0,3) + '</div>' +
+    '<div class="fu-row-heat ' + ilgiCls + '" title="İlgi seviyesi: ' + ilgiLabel + '">' +
+      '<span class="fu-heat-emoji">' + ilgiEmoji + '</span>' +
+      '<span class="fu-heat-label">' + ilgiLabel.slice(0,3) + '</span>' +
+    '</div>' +
     '<div class="fu-row-main">' +
       '<div class="fu-row-line1">' +
         '<span class="fu-name">' + esc(c.customerName) + '</span>' +
         '<span class="fu-phone">' + esc(c.customerPhone) + '</span>' +
         (mulk ? '<span class="fu-tag">' + esc(mulk) + '</span>' : '') +
+        (scenario ? '<span class="fu-tag fu-tag-scenario">' + esc(scenario) + '</span>' : '') +
         '<span class="fu-ago">' + ago + '</span>' +
       '</div>' +
+      (aksiyon ? '<div class="fu-row-action-hint">→ ' + esc(aksiyon) + '</div>' : '') +
       (note ? '<div class="fu-row-note">💡 ' + esc(note) + '</div>' : '') +
     '</div>' +
     '<div class="fu-row-actions">' +
@@ -1956,7 +1966,7 @@ function updateCampaignProgressFromSummary(sum) {
 async function campaignStart() {
   if (!campaign.contacts.length) return;
   campaign.maxConcurrent = parseInt($('campaignConcurrency').value, 10) || 1;
-  const scenarioId      = $('scenarioSelect') ? ($('scenarioSelect').value || undefined) : undefined;
+  const scenarioId      = $('campaignScenario') ? ($('campaignScenario').value || undefined) : undefined;
   const startFromRaw    = parseInt(($('campaignStartFrom')?.value    || ''), 10);
   const callLimitRaw    = parseInt(($('campaignCallLimit')?.value     || ''), 10);
   const answeredLimitRaw = parseInt(($('campaignAnsweredLimit')?.value || ''), 10);
@@ -2026,7 +2036,52 @@ function initScenarios() {
     $('scenarioForm').style.display = 'none';
     $('scenarioEditId').value = '';
   });
+  $('btnVlpReload').addEventListener('click', loadVapiLivePrompt);
+  $('btnVlpSave').addEventListener('click', saveVapiLivePrompt);
   loadScenarios();
+}
+
+async function loadVapiLivePrompt() {
+  const ta = $('vlpPrompt');
+  const nameEl = $('vlpAssistantName');
+  ta.value = '';
+  ta.placeholder = 'Yükleniyor...';
+  ta.disabled = true;
+  try {
+    const r = await fetch('/api/vapi/assistant-prompt');
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    ta.value = j.data.systemPrompt;
+    nameEl.textContent = j.data.name ? '(' + j.data.name + ')' : '';
+  } catch (err) {
+    ta.placeholder = 'Yüklenemedi: ' + err.message;
+    toast('Vapi prompt alınamadı: ' + err.message, 'error');
+  } finally {
+    ta.disabled = false;
+  }
+}
+
+async function saveVapiLivePrompt() {
+  const prompt = $('vlpPrompt').value.trim();
+  if (!prompt) { toast('Prompt boş olamaz', 'error'); return; }
+  const btn = $('btnVlpSave');
+  btn.disabled = true;
+  btn.textContent = 'Kaydediliyor...';
+  try {
+    const r = await fetch('/api/vapi/assistant-prompt', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ systemPrompt: prompt }),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    toast('Vapi asistan promptu güncellendi', 'success');
+  } catch (err) {
+    toast('Hata: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Vapi'ye Kaydet";
+  }
 }
 
 async function loadScenarios() {
@@ -2056,13 +2111,28 @@ function refreshScenarioSelects() {
   const fsel = DOM.filterScenario;
   if (fsel) {
     const fcur = fsel.value;
-    fsel.innerHTML = '<option value="">Tümü</option>';
+    fsel.innerHTML = '<option value="">Tümü</option><option value="__none__">— Varsayılan (Senaryosuz) —</option>';
     scenariosCache.forEach(s => {
       const opt = document.createElement('option');
       opt.value = s.id;
       opt.textContent = s.name;
       if (s.id === fcur) opt.selected = true;
       fsel.appendChild(opt);
+    });
+    fsel.value = fcur;
+  }
+
+  // Campaign (toplu arama) selector
+  const csel = $('campaignScenario');
+  if (csel) {
+    const ccur = csel.value;
+    csel.innerHTML = '<option value="">— Varsayılan prompt —</option>';
+    scenariosCache.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      opt.textContent = s.name;
+      if (s.id === ccur) opt.selected = true;
+      csel.appendChild(opt);
     });
   }
 }
@@ -2072,6 +2142,7 @@ function openScenarioModal() {
   $('scenarioModalOverlay').classList.add('visible');
   $('scenarioForm').style.display = 'none';
   renderScenarioList();
+  loadVapiLivePrompt();
 }
 
 function closeScenarioModal() {

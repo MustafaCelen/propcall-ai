@@ -1,4 +1,21 @@
 services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: propcall123
+      POSTGRES_DB: propcall
+    ports:
+      - "5433:5432"
+    volumes:
+      - propcall-db-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   propcall-ai:
     build: .
     ports:
@@ -7,4 +24,10 @@ services:
       - .env
     volumes:
       - ./data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  propcall-db-data:

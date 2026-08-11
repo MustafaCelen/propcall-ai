@@ -8,7 +8,7 @@ dotenv.config();
 import { initDb } from './db';
 import pool from './db';
 import { generateCallSummary } from './ai';
-import { createVapiCall, endVapiCall, getVapiCredit } from './vapi';
+import { createVapiCall, endVapiCall, getVapiCredit, getAssistantSystemPrompt, updateAssistantSystemPrompt, getSignedRecordingUrl } from './vapi';
 import { getElevenLabsCredit } from './elevenlabs';
 import { getAllAppointments, saveAppointment, deleteAppointment } from './appointments';
 import { getAllScenarios, getScenario, createScenario, updateScenario, deleteScenario } from './scenarios';
@@ -85,6 +85,18 @@ app.delete('/api/call/:vapiCallId', async (req: Request, res: Response) => {
   }
 });
 
+// Ses kaydı: DB'deki ham recordingUrl HIPAA bucket'ında imzasız erişilemiyor —
+// her istekte Vapi'den taze imzalı URL alıp tarayıcıyı oraya yönlendiriyoruz.
+app.get('/api/calls/:vapiCallId/recording', async (req: Request, res: Response) => {
+  try {
+    const url = await getSignedRecordingUrl(req.params.vapiCallId);
+    if (!url) return res.status(404).json({ success: false, error: 'Kayıt bulunamadı' });
+    return res.redirect(302, url);
+  } catch (err) {
+    return res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
 // ─── VAPI: Webhook ────────────────────────────────────────────────────────────
 
 app.post('/webhook', (req: Request, res: Response) => {
@@ -128,7 +140,7 @@ async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
       if (!vapiCallId) break;
       const endedAt   = msg.call?.endedAt || new Date().toISOString();
       const duration  = msg.call?.duration;
-      const endReason = msg.call?.endedReason;
+      const endReason = msg.endedReason || msg.call?.endedReason;
       const status    = endedReasonToStatus(endReason);
       const recording = msg.recordingUrl || msg.artifact?.recordingUrl;
       const newCosts  = parseCosts(msg.costs, msg.cost);
@@ -186,7 +198,7 @@ async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
       if (!vapiCallId) break;
       const existing    = await readCall(vapiCallId);
       const alreadyDone = existing?.status && existing.status !== 'in-progress';
-      const newReason   = msg.call?.endedReason;
+      const newReason   = msg.endedReason || msg.call?.endedReason;
       const s2 = newReason
         ? endedReasonToStatus(newReason)
         : alreadyDone ? existing!.status : 'failed';
@@ -514,6 +526,22 @@ app.delete('/api/scenarios/:id', async (req, res) => {
   try {
     if (!await deleteScenario(req.params.id))
       return res.status(404).json({ success: false, error: 'Senaryo bulunamadı' });
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+// Vapi'deki canlı (base) asistan promptu — tüm senaryosuz aramalarda kullanılan varsayılan prompt
+app.get('/api/vapi/assistant-prompt', async (_req, res) => {
+  try { return res.json({ success: true, data: await getAssistantSystemPrompt() }); }
+  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.put('/api/vapi/assistant-prompt', async (req, res) => {
+  try {
+    const { systemPrompt } = req.body as { systemPrompt: string };
+    if (!systemPrompt?.trim())
+      return res.status(400).json({ success: false, error: 'Prompt zorunlu' });
+    await updateAssistantSystemPrompt(systemPrompt.trim());
     return res.json({ success: true });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });

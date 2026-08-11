@@ -5,3 +5,4 @@ data/
 *.backup.json
 cloudflared.exe
 .claude/
+.DS_Store

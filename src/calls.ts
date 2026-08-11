@@ -36,7 +36,8 @@ export async function getAllCalls(filters?: CallFilters): Promise<CallRecord[]> 
     if (filters.ilgi)                calls = calls.filter(c => c.summary?.ilgi_seviyesi === filters.ilgi);
     if (filters.aksiyon)             calls = calls.filter(c => c.summary?.tavsiye_edilen_aksiyon === filters.aksiyon);
     if (filters.status)              calls = calls.filter(c => c.status === filters.status);
-    if (filters.scenarioId)          calls = calls.filter(c => c.scenarioId === filters.scenarioId);
+    if (filters.scenarioId === '__none__') calls = calls.filter(c => !c.scenarioId);
+    else if (filters.scenarioId)     calls = calls.filter(c => c.scenarioId === filters.scenarioId);
   }
 
   return calls;

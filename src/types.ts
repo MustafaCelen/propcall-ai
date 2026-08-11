@@ -89,10 +89,11 @@ export interface VapiCostItem {
 export interface VapiWebhookPayload {
   message: {
     type: string;
+    endedReason?: string;          // end-of-call-report ve call-ended'da mesaj düzeyinde gelir
     call?: {
       id: string;
       status?: string;
-      endedReason?: string;
+      endedReason?: string;        // bazı Vapi sürümlerinde call içinde de olabilir
       startedAt?: string;
       endedAt?: string;
       duration?: number;

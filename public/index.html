@@ -200,6 +200,7 @@
           <label>Senaryo</label>
           <select id="filterScenario">
             <option value="">Tümü</option>
+            <option value="__none__">— Varsayılan (Senaryosuz) —</option>
           </select>
         </div>
         <div class="filter-group">
@@ -227,8 +228,6 @@
               <th title="Transkript">💬</th>
               <th>Randevu</th>
               <th>İlgi</th>
-              <th>Ret Nedeni</th>
-              <th>Geri Dönüş Notu</th>
               <th></th>
             </tr>
           </thead>
@@ -368,6 +367,12 @@
             <span class="upload-hint">Ad, Telefon, Bölge, Notlar sütunları</span>
           </div>
           <div class="campaign-controls">
+            <div class="concurrency-group" title="Kampanyadaki tüm aramalarda kullanılacak senaryo">
+              <label>Senaryo</label>
+              <select id="campaignScenario">
+                <option value="">— Varsayılan prompt —</option>
+              </select>
+            </div>
             <div class="concurrency-group">
               <label>Eş Zamanlı</label>
               <select id="campaignConcurrency">
@@ -475,6 +480,20 @@
     <button class="modal-close" id="scenarioModalClose">✕</button>
   </div>
   <div class="modal-body">
+    <div class="vapi-live-prompt" id="vapiLivePromptBox">
+      <div class="vlp-header">
+        <span class="vlp-title">📡 Vapi'deki Canlı Asistan Promptu</span>
+        <span class="vlp-name" id="vlpAssistantName"></span>
+      </div>
+      <div class="vlp-hint">Bu prompt, senaryo seçilmeden yapılan tüm aramalarda kullanılır ve doğrudan Vapi'deki asistanı günceller.</div>
+      <textarea id="vlpPrompt" rows="8" placeholder="Yükleniyor..."></textarea>
+      <div class="scenario-form-actions">
+        <button class="btn-secondary" id="btnVlpReload">↻ Vapi'den Yeniden Çek</button>
+        <button class="btn-start" id="btnVlpSave" style="width:auto;padding:10px 20px">Vapi'ye Kaydet</button>
+      </div>
+    </div>
+
+    <div class="modal-section-divider">Yerel Senaryolar</div>
     <div class="scenario-list" id="scenarioList"></div>
     <div class="scenario-form" id="scenarioForm">
       <input type="hidden" id="scenarioEditId"/>

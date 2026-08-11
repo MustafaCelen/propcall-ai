@@ -2,7 +2,7 @@ import { Pool } from 'pg';
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL?.includes('localhost')
+  ssl: /localhost|@db:/.test(process.env.DATABASE_URL ?? '')
     ? false
     : { rejectUnauthorized: false },
   max: 3,
