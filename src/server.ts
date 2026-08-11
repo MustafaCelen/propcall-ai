@@ -141,32 +141,48 @@ async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
       const endedAt   = msg.call?.endedAt || new Date().toISOString();
       const duration  = msg.call?.duration;
       const endReason = msg.endedReason || msg.call?.endedReason;
-      const status    = endedReasonToStatus(endReason);
       const recording = msg.recordingUrl || msg.artifact?.recordingUrl;
       const newCosts  = parseCosts(msg.costs, msg.cost);
-
-      console.log(`[Webhook] end-of-call-report → endedReason: "${endReason}" → status: "${status}" | süre: ${duration ?? '?'}s`);
 
       // Mevcut kaydı bir kez oku — transcript karşılaştırma + cost merge için
       const existing = await readCall(vapiCallId);
       const existingTranscriptLen = existing?.transcript?.length ?? 0;
 
+      // hasUserSpeech: artifact.messages'ta veya streaming transcript'te user rolünde mesaj var mı?
+      const artifactHasUserSpeech = !!(msg.artifact?.messages as any[] | undefined)?.some(m => {
+        const role = String(m?.role || '').toLowerCase();
+        const text = m?.message || m?.content || m?.text || '';
+        return role === 'user' && String(text).trim().length > 0;
+      });
+      const streamingHasUserSpeech = !!existing?.transcript?.some(t => t.role === 'user');
+      const hasUserSpeech = artifactHasUserSpeech || streamingHasUserSpeech;
+
+      const status = endedReasonToStatus(endReason, { hasUserSpeech });
+
+      console.log(`[Webhook] end-of-call-report → endedReason: "${endReason}" → status: "${status}" | süre: ${duration ?? '?'}s | userSpoke: ${hasUserSpeech}`);
+
       // Transcript: Artifact, streaming'den daha fazla geçerli mesaj içeriyorsa güncelle.
       // Aksi takdirde gerçek zamanlı gelen streaming transcript korunur.
       if (msg.artifact?.messages?.length) {
-        const validMessages = (msg.artifact.messages as any[]).filter(m => {
-          if (m.role !== 'assistant' && m.role !== 'user') return false;
+        // Vapi artifact.messages: role 'bot' | 'user' | 'system' | 'tool_calls' vb.
+        // 'bot' = assistant. system/tool mesajlarını atla, geri kalanı normalize et.
+        const validMessages = (msg.artifact.messages as any[]).flatMap(m => {
+          const rawRole = String(m.role || '').toLowerCase();
+          const normalizedRole: 'assistant' | 'user' | null =
+            (rawRole === 'bot' || rawRole === 'assistant') ? 'assistant' :
+            (rawRole === 'user') ? 'user' : null;
+          if (!normalizedRole) return [];
           const text: string = m.message || m.content || m.text || '';
-          return text.trim().length > 0;
+          if (!text.trim().length) return [];
+          return [{ ...m, role: normalizedRole, text }];
         });
 
         if (validMessages.length > existingTranscriptLen) {
           await updateCall(vapiCallId, { transcript: [] } as any);
           for (const m of validMessages) {
-            const text: string = m.message || m.content || m.text || '';
             await appendTranscript(vapiCallId, {
               role: m.role as 'assistant' | 'user',
-              text,
+              text: m.text,
               timestamp: new Date(m.time || m.timestamp || Date.now()).toISOString(),
             });
           }

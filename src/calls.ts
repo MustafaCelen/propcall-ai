@@ -118,9 +118,15 @@ export function callStatusToTurkish(status: string): string {
   }
 }
 
-export function endedReasonToStatus(r?: string): CallRecord['status'] {
+// hasUserSpeech: transcript'te müşteri gerçekten konuştu mu? — silence-timed-out
+// veya ambiguous durumlarda kesinleştirmek için kullanılır.
+export function endedReasonToStatus(
+  r?: string,
+  opts?: { hasUserSpeech?: boolean },
+): CallRecord['status'] {
   if (!r) return 'failed';
   const lower = r.toLowerCase();
+
   // Gerçek konuşma yapılmış aramalar
   if ([
     'customer-ended-call',
@@ -130,19 +136,28 @@ export function endedReasonToStatus(r?: string): CallRecord['status'] {
     'max-duration-exceeded',
     'manual',
   ].includes(lower)) return 'completed';
+
+  // silence-timed-out: kişi telefonu açtı ama bir noktada sessiz kaldı.
+  // Eğer transcript'te user mesajı varsa → konuşma oldu, 'completed' say.
+  // Yoksa (hiç konuşulmadıysa) 'no-answer' say.
+  if (lower.includes('silence-timed-out')) {
+    return opts?.hasUserSpeech ? 'completed' : 'no-answer';
+  }
+
   // Cevapsız / ulaşılamadı
   if ([
     'no-answer',
     'voicemail',
-    'silence-timed-out',       // Bağlandı ama kimse konuşmadı → cevapsız say
     'customer-did-not-answer',
   ].some(k => lower.includes(k))) return 'no-answer';
+
   // Meşgul / reddedildi
   if ([
     'busy',
     'call-rejected',
     'rejected',
   ].some(k => lower.includes(k))) return 'busy';
+
   // Gerçek hata durumları
   return 'failed';
 }
