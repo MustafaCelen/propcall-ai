@@ -131,6 +131,7 @@ export function endedReasonToStatus(
   if ([
     'customer-ended-call',
     'assistant-ended-call',
+    'assistant-said-end-call-phrase',   // endCallPhrases eşleşti — asistan kapanışı düzgün yaptı
     'assistant-forwarded-call',
     'exceeded-max-duration',
     'max-duration-exceeded',

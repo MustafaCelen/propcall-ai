@@ -9,26 +9,41 @@ const client = new Anthropic({
 
 export async function generateCallSummary(
   customer: CustomerInfo,
-  history: Array<{ role: 'assistant' | 'user'; content: string }>
+  history: Array<{ role: 'assistant' | 'user'; content: string }>,
+  scenarioPrompt?: string | null,
 ): Promise<CallSummary> {
   const conversationText = history
     .map((m) => `${m.role === 'assistant' ? 'Asistan' : 'Müşteri'}: ${m.content}`)
     .join('\n\n');
 
+  // BAĞLAM artık sabit değil — aramada gerçekten kullanılan Vapi asistan sistem
+  // promptundan (senaryodan) dinamik olarak çekilir. Böylece analiz kriterleri
+  // her zaman gerçek arama amacına göre uyum sağlar (gayrimenkul, işe alım, vb.).
+  const contextBlock = scenarioPrompt?.trim()
+    ? `BAĞLAM: Bu arama, aşağıdaki asistan sistem promptuna göre yapıldı. Aramanın gerçek amacını,
+neyin teklif edildiğini ve beklenen sonucu BU PROMPTTAN çıkar. Aşağıdaki alan kriterlerini
+bu bağlama göre yorumla — arama gayrimenkul satışı, işe alım, randevu teklifi, ürün tanıtımı
+veya başka bir amaç olabilir; varsayım yapmadan promptu esas al.
+
+--- ASİSTANIN SİSTEM PROMPTU (gerçek script) ---
+${scenarioPrompt.trim()}
+--- PROMPT SONU ---`
+    : `BAĞLAM: Asistanın sistem promptu bulunamadı. Sadece görüşme transkriptinden çıkarım yap,
+aramanın amacını transkriptin kendisinden anla, varsayım yapma.`;
+
   const response = await client.messages.create({
     model: 'claude-sonnet-4-5',
     max_tokens: 600,
-    system: `Sen bir gayrimenkul CRM sistemi için görüşme analisti asistanısın.
-Sana verilen telefon görüşmesi transcript'ini analiz edecek ve SADECE geçerli JSON döndüreceksin, başka hiçbir şey yazmayacaksın.`,
+    system: `Sen bir soğuk arama CRM sistemi için görüşme analisti asistanısın.
+Sana verilen telefon görüşmesi transkriptini, aramanın amacını tanımlayan asistan sistem
+promptunu bağlam olarak kullanarak analiz edeceksin ve SADECE geçerli JSON döndüreceksin,
+başka hiçbir şey yazmayacaksın.`,
     messages: [
       {
         role: 'user',
         content: `Aşağıdaki telefon görüşmesini analiz et.
 
-BAĞLAM: Keller Williams Quantum Team adına yapay zeka asistan soğuk arama yaptı.
-Amacı: Mülk sahibine ücretsiz "Gayrimenkul Röntgeni" (değerleme) randevusu teklif etmek.
-Asistan; niyet, bölge, bütçe veya zaman dilimi SORMADI — sadece randevu teklif etti.
-Bu nedenle yalnızca görüşmeden gerçekten çıkarılabilen bilgileri yaz.
+${contextBlock}
 
 Müşteri: ${customer.name} | Tel: ${customer.phone}${customer.region ? ` | Bölge: ${customer.region}` : ''}
 
@@ -49,37 +64,41 @@ SADECE bu JSON formatında döndür:
 ALAN KRİTERLERİ:
 
 randevu_alindi:
-- true: Müşteri randevuyu açıkça kabul etti ("tamam", "evet", "olur", "ayarlayın" vb.)
+- true: Müşteri asistanın teklif ettiği sonraki adımı (randevu, tanışma görüşmesi, toplantı vb.)
+  açıkça kabul etti ("tamam", "evet", "olur", "ayarlayın", "olabilir" vb.)
 - false: Reddetti, yanıt vermedi veya belirsiz kaldı
 
 ilgi_seviyesi:
-- "yüksek": Randevu aldı VEYA aktif soru sordu, detay istedi
+- "yüksek": Teklifi kabul etti VEYA aktif soru sordu, detay istedi
 - "orta": İlgiliydi ama şu an müsait değil / daha sonra diyebilir
 - "düşük": Kibarca reddetti, yoğun/ilgisiz ama baskı yapmadı
 - "yok": Hiç yanıt vermedi, hemen kapattı, agresif reddetti
 
 ret_nedeni:
 - Reddetmediyse null
-- Reddetmişse kısa ve somut: "meşgul şu an", "satmıyorum zaten", "başka ajansla çalışıyorum",
-  "ilgilenmiyorum", "zamanım yok", "aradığım için rahatsız oldu" vb.
+- Reddetmişse, MÜŞTERİNİN GERÇEKTEN SÖYLEDİĞİ nedeni kısa ve somut yaz. Sabit bir kategori
+  listesine bağlı kalma — transkriptten ve BAĞLAM'daki arama amacından çıkar
+  (örn. "şu an meşgul", "ilgilenmiyor", "başkasıyla çalışıyor", "zamanı yok",
+  "rahatsız oldu", "uygun pozisyon değil" vb. — konuya göre değişir)
 
 mulk_tipi:
-- Müşteri yalnızca kendisi bahsetmişse yaz (konut, daire, villa, arsa, dükkan vb.)
-- Bahsetmediyse null — UYDURMA
+- Görüşmede yan bilgi olarak somut bir detay geçtiyse yaz (BAĞLAM'a göre: mülk tipi,
+  pozisyon/rol, ürün, bölge vb. olabilir)
+- Geçmediyse null — UYDURMA
 
 ozet:
 - Görüşmenin sonucunu 1-2 cümleyle özetle; ne oldu, ne söylendi
 
 tavsiye_edilen_aksiyon:
-- "Ara": İlgi vardı ama randevu alınamadı; tekrar aranmalı
+- "Ara": İlgi vardı ama sonuç alınamadı; tekrar aranmalı
 - "Bekleme listesine al": Şu an değil ama ileride potansiyel var
 - "Uğraşma": Hiç ilgi yok, bağlantı kurulamadı veya agresif reddetti
 
 geri_donus_notu:
 - Ara veya Bekleme için ZORUNLU: 1 cümle, somut ve kişiye özel.
   "Toplantıdaydı, akşam saatini tercih ediyor — yarın 18:00 sonrası dene"
-  "Kiracıya bağlı, 6 ay içinde satışı düşünüyor — Mayıs'ta tekrar ara"
-- Uğraşma veya randevu alındıysa null`,
+  "Şu an başka bir yerde çalışıyor, 3 ay sonra tekrar değerlendirebilir"
+- Uğraşma veya olumlu sonuçlandıysa null`,
       },
     ],
   });

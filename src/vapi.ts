@@ -120,8 +120,16 @@ export async function endVapiCall(vapiCallId: string): Promise<void> {
   }
 }
 
-// Vapi assistant'ın canlı (base) sistem promptunu getir
-export async function getAssistantSystemPrompt(): Promise<{ name: string; systemPrompt: string }> {
+// Vapi assistant'ın canlı (base) sistem promptunu getir — özet üretiminde de
+// kullanıldığı için kısa TTL cache: her arama sonunda Vapi'yi bombalamayalım.
+let systemPromptCache: { name: string; systemPrompt: string } | null = null;
+let systemPromptCachedAt = 0;
+const SYSTEM_PROMPT_TTL_MS = 5 * 60 * 1000;
+
+export async function getAssistantSystemPrompt(forceRefresh = false): Promise<{ name: string; systemPrompt: string }> {
+  if (!forceRefresh && systemPromptCache && Date.now() - systemPromptCachedAt < SYSTEM_PROMPT_TTL_MS) {
+    return systemPromptCache;
+  }
   const assistantId = process.env.VAPI_ASSISTANT_ID;
   if (!assistantId) throw new Error('VAPI_ASSISTANT_ID tanımlanmamış');
 
@@ -132,7 +140,10 @@ export async function getAssistantSystemPrompt(): Promise<{ name: string; system
     model?: { messages?: Array<{ role: string; content: string }> };
   };
   const systemMsg = data.model?.messages?.find(m => m.role === 'system');
-  return { name: data.name || 'Vapi Asistanı', systemPrompt: systemMsg?.content || '' };
+  const result = { name: data.name || 'Vapi Asistanı', systemPrompt: systemMsg?.content || '' };
+  systemPromptCache = result;
+  systemPromptCachedAt = Date.now();
+  return result;
 }
 
 // Vapi assistant'ın canlı (base) sistem promptunu güncelle — tüm aramaları etkiler
@@ -152,7 +163,8 @@ export async function updateAssistantSystemPrompt(systemPrompt: string): Promise
     const errText = await resp.text();
     throw new Error(`Vapi assistant güncelleme hatası: ${resp.status} - ${errText}`);
   }
-  modelConfigCache = null; // provider/model değişmiş olabilir varsayımıyla cache'i temizle
+  modelConfigCache  = null; // provider/model değişmiş olabilir varsayımıyla cache'i temizle
+  systemPromptCache = null; // prompt değişti — bir sonraki özette taze çekilsin
 }
 
 // Vapi hesap kredisi / abonelik bilgisi

@@ -17,7 +17,7 @@ import {
   appendTranscript, updateCosts, saveCallSummary,
   endedReasonToStatus, getStats, exportCSV,
 } from './calls';
-import { VapiCallRequest, VapiWebhookPayload, VapiCostItem, CallFilters } from './types';
+import { VapiCallRequest, VapiWebhookPayload, VapiCostItem, CallFilters, CallRecord } from './types';
 import {
   initCampaignRunner, loadCampaignFromDb, getCampaignState,
   campaignLoad, campaignStart, campaignResume, campaignPause, campaignStop, campaignClear,
@@ -310,6 +310,28 @@ function mergeCosts(
   };
 }
 
+// Özet üretiminde kullanılacak gerçek senaryo promptunu çözer:
+// 1) Arama özel bir senaryoya bağlıysa (lokal scenarios tablosu) → onun promptu
+// 2) Değilse → Vapi'deki canlı (base) asistan promptu (cache'li, 5dk TTL)
+// Böylece analiz kriterleri her zaman aramada GERÇEKTEN kullanılan script'e göre uyum sağlar.
+async function resolveScenarioPromptForSummary(record: CallRecord): Promise<string | null> {
+  if (record.scenarioId) {
+    try {
+      const scenario = await getScenario(record.scenarioId);
+      if (scenario?.systemPrompt) return scenario.systemPrompt;
+    } catch (err) {
+      console.warn('[AI] Senaryo promptu alınamadı, Vapi canlı promptuna düşülüyor:', err);
+    }
+  }
+  try {
+    const { systemPrompt } = await getAssistantSystemPrompt();
+    return systemPrompt || null;
+  } catch (err) {
+    console.warn('[AI] Vapi canlı asistan promptu alınamadı:', err);
+    return null;
+  }
+}
+
 async function generateSummaryForCall(vapiCallId: string, attempt = 1): Promise<void> {
   const record = await readCall(vapiCallId);
   if (!record) return;
@@ -327,7 +349,8 @@ async function generateSummaryForCall(vapiCallId: string, attempt = 1): Promise<
 
   try {
     const history = record.transcript.map(t => ({ role: t.role, content: t.text }));
-    const summary = await generateCallSummary(record.customerInfo, history);
+    const scenarioPrompt = await resolveScenarioPromptForSummary(record);
+    const summary = await generateCallSummary(record.customerInfo, history, scenarioPrompt);
     await saveCallSummary(vapiCallId, summary);
     broadcast('summary-ready', { vapiCallId, summary });
     onCampaignSummaryReady(vapiCallId, summary).catch(console.error);
@@ -447,7 +470,8 @@ app.post('/api/generate-summary', async (req: Request, res: Response) => {
     const record = await readCall(vapiCallId);
     if (!record) return res.status(404).json({ success: false, error: 'Arama bulunamadı' });
     const history = record.transcript.map(t => ({ role: t.role, content: t.text }));
-    const summary = await generateCallSummary(record.customerInfo, history);
+    const scenarioPrompt = await resolveScenarioPromptForSummary(record);
+    const summary = await generateCallSummary(record.customerInfo, history, scenarioPrompt);
     await saveCallSummary(vapiCallId, summary);
     return res.json({ success: true, data: summary });
   } catch (err) {
