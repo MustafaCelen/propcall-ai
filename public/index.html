@@ -486,6 +486,9 @@
         <span class="vlp-name" id="vlpAssistantName"></span>
       </div>
       <div class="vlp-hint">Bu prompt, senaryo seçilmeden yapılan tüm aramalarda kullanılır ve doğrudan Vapi'deki asistanı günceller.</div>
+      <div class="scenario-form-actions" style="margin-bottom:8px">
+        <button class="btn-secondary" data-promptgen-target="vlpPrompt">✨ AI ile Oluştur</button>
+      </div>
       <textarea id="vlpPrompt" rows="8" placeholder="Yükleniyor..."></textarea>
       <div class="scenario-form-actions">
         <button class="btn-secondary" id="btnVlpReload">↻ Vapi'den Yeniden Çek</button>
@@ -502,6 +505,9 @@
         <input type="text" id="scenarioName" placeholder="Değerleme Teklifi v2"/>
       </div>
       <div class="form-group">
+        <div class="scenario-form-actions" style="margin-bottom:8px">
+          <button class="btn-secondary" data-promptgen-target="scenarioPrompt">✨ AI ile Oluştur</button>
+        </div>
         <label>Sistem Promptu</label>
         <textarea id="scenarioPrompt" rows="10" placeholder="[Identity]&#10;Sen bir..."></textarea>
       </div>
@@ -509,6 +515,49 @@
         <button class="btn-secondary" id="btnScenarioCancel">İptal</button>
         <button class="btn-start" id="btnScenarioSave" style="width:auto;padding:10px 20px">Kaydet</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- AI PROMPT GENERATOR MODAL -->
+<div class="modal-overlay" id="promptGenOverlay"></div>
+<div class="modal" id="promptGenModal">
+  <div class="modal-header">
+    <div class="modal-title">✨ AI ile Prompt Oluştur</div>
+    <button class="modal-close" id="promptGenClose">✕</button>
+  </div>
+  <div class="modal-body">
+    <div class="form-group">
+      <label>Şirket / Marka <span class="label-hint">zorunlu</span></label>
+      <input type="text" id="pgCompanyName" placeholder="Keller Williams Gayrimenkul" />
+    </div>
+    <div class="form-group">
+      <label>Aramanın Amacı <span class="label-hint">zorunlu</span></label>
+      <textarea id="pgCallGoal" rows="2" placeholder="Geçmişte ilgi göstermiş kişileri işe alım görüşmesine yeniden davet etmek"></textarea>
+    </div>
+    <div class="form-group">
+      <label>Teklif Edilen Şey <span class="label-hint">opsiyonel</span></label>
+      <input type="text" id="pgOfferDetails" placeholder="Ücretsiz gayrimenkul değerleme / Kariyer fırsatı" />
+    </div>
+    <div class="form-group">
+      <label>Konuşma Tonu <span class="label-hint">opsiyonel</span></label>
+      <input type="text" id="pgTone" placeholder="Sıcak, güven verici, baskıcı olmayan" />
+    </div>
+    <div class="form-group">
+      <label>Detaylar İçin Yönlendirilecek Kişi <span class="label-hint">opsiyonel</span></label>
+      <input type="text" id="pgContactPerson" placeholder="Yeşim Hanım" />
+    </div>
+    <div class="form-group">
+      <label>Maks. Görüşme Süresi (saniye) <span class="label-hint">opsiyonel</span></label>
+      <input type="number" id="pgMaxDuration" placeholder="120" min="30" max="600" />
+    </div>
+    <div class="form-group">
+      <label>Ek Notlar / Kurallar <span class="label-hint">opsiyonel</span></label>
+      <textarea id="pgNotes" rows="2" placeholder="Fiyat konusunda söz verme, hafta sonu aramaları önerme..."></textarea>
+    </div>
+    <div class="scenario-form-actions">
+      <button class="btn-secondary" id="btnPgCancel">İptal</button>
+      <button class="btn-start" id="btnPgGenerate" style="width:auto;padding:10px 20px">Oluştur</button>
     </div>
   </div>
 </div>

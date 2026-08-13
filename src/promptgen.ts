@@ -1,0 +1,78 @@
+// Vapi assistant sistem promptu üretimi — Anthropic Claude ile.
+// Vapi'nin kendi "Generate with AI" özelliği public API'de yok (doğrulandı,
+// OpenAPI spec'te böyle bir endpoint mevcut değil), bu yüzden aynı işlevi
+// kendi Anthropic entegrasyonumuzla, üretimde kanıtlanmış prompt yapısına
+// (Identity/Style/Response Guidelines/Task & Goals/Error Handling) uyarak sağlıyoruz.
+
+import Anthropic from '@anthropic-ai/sdk';
+import { getSetting } from './settings';
+
+export interface PromptGenInput {
+  companyName: string;          // örn. "Keller Williams Gayrimenkul"
+  callGoal: string;             // örn. "Geçmişte ilgi göstermiş kişileri işe alım görüşmesine davet etmek"
+  offerDetails?: string;        // örn. "Ücretsiz gayrimenkul değerleme" / "Kariyer fırsatı"
+  tone?: string;                // örn. "Sıcak ama profesyonel, baskıcı değil"
+  contactPersonName?: string;   // detaylar için yönlendirilecek kişi, varsa
+  maxDurationSeconds?: number;  // örn. 120
+  additionalNotes?: string;     // serbest metin, ekstra kurallar
+}
+
+async function getClient(): Promise<Anthropic> {
+  const apiKey = await getSetting('ANTHROPIC_API_KEY');
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY tanımlanmamış (Admin panelden veya .env ile ekleyin)');
+  return new Anthropic({ apiKey });
+}
+
+export async function generateVapiPrompt(input: PromptGenInput): Promise<string> {
+  const client = await getClient();
+  const maxDuration = input.maxDurationSeconds || 120;
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-5',
+    max_tokens: 1500,
+    system: `Sen Vapi (sesli yapay zeka asistan platformu) için Türkçe soğuk arama sistem promptu yazan bir uzmansın.
+
+Ürettiğin prompt SADECE şu bölümleri, bu sırayla içerir — başka bölüm ekleme:
+
+[Identity]
+[Style]
+[Response Guidelines]
+[Task & Goals]
+[Error Handling / Fallback]
+
+KURALLAR:
+- Sadece Türkçe konuşma talimatı ver
+- [Style] bölümünde: cümlelerin kısa olmasını iste (on-on iki kelimeyi geçmesin), doğal/akıcı/samimi ama
+  resmi ol, dolgu kelime ve gereksiz tekrardan kaçınmayı belirt
+- [Response Guidelines] bölümünde: sayıları kelimeyle ifade etmeyi, taahhüt/fiyat/komisyon gibi
+  konularda söz vermemeyi (varsa yönlendirilecek kişiye yönlendirmeyi), kapanış cümlesinden sonra
+  DERHAL konuşmayı bitirmeyi ve ikinci bir kapanış cümlesi asla üretmemeyi, toplam görüşme süresi ve
+  sessizlik zaman aşımı kurallarını yaz
+- [Task & Goals] bölümünde NUMARALI adımlar yaz:
+  1) Açılış mesajı (tam metin, {{customerName}} değişkenini kullan) + "< Kullanıcı yanıtını bekle >"
+  2) Kullanıcı yanıtına göre EN AZ 3 dallanan akış: olumlu / olumsuz / kararsız-bilgi isteyen
+     Her dal: söylenecek tam cümle + "< Anında konuşmayı sonlandır >" veya "< Yanıtı bekle >" gibi
+     yönerge + "Sonuç: \\"kısa durum kodu\\"" (örn. "İlgileniyor", "Şu anda ilgilenmiyor")
+  3) Süre/sessizlik aşımı durumunda söylenecek kapanış cümlesi
+- [Error Handling / Fallback] bölümünde şu durumları ele al: yanıt anlaşılmadı, yanlış kişi,
+  aranmak istemiyor, konu dışına çıktı — her biri için kısa cevap + "Sonuç:" etiketi
+- Maksimum görüşme süresi olarak verilen saniyeyi kullan, sessizlik zaman aşımını 5 saniye olarak belirt
+- SADECE prompt metnini döndür — açıklama, giriş cümlesi, markdown code fence (\`\`\`) EKLEME`,
+    messages: [{
+      role: 'user',
+      content: `Aşağıdaki bilgilere göre bir Vapi sistem promptu oluştur:
+
+Şirket/Marka: ${input.companyName}
+Aramanın amacı: ${input.callGoal}
+${input.offerDetails ? `Teklif edilen şey: ${input.offerDetails}` : ''}
+${input.tone ? `Konuşma tonu: ${input.tone}` : 'Konuşma tonu: Sıcak, güven verici, baskıcı olmayan'}
+${input.contactPersonName ? `Detaylar için yönlendirilecek kişi: ${input.contactPersonName}` : ''}
+Maksimum görüşme süresi: ${maxDuration} saniye
+${input.additionalNotes ? `Ek notlar/kurallar: ${input.additionalNotes}` : ''}`,
+    }],
+  });
+
+  const content = response.content[0];
+  if (content.type !== 'text') throw new Error('Beklenmeyen yanıt tipi');
+  return content.text.trim();
+}

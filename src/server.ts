@@ -26,6 +26,7 @@ import {
 } from './campaign';
 import { adminLogin, adminLogout, requireAdminAuth } from './admin-auth';
 import { SETTINGS_KEYS, SettingsKey, getSetting, setSetting, getSettingsForAdmin } from './settings';
+import { generateVapiPrompt, PromptGenInput } from './promptgen';
 
 const app  = express();
 const PORT = process.env.PORT || 5000;
@@ -638,6 +639,21 @@ app.put('/api/vapi/assistant-prompt', async (req, res) => {
     await updateAssistantSystemPrompt(systemPrompt.trim());
     return res.json({ success: true });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+// AI ile Vapi sistem promptu üret — Vapi'nin public API'sinde bu özellik
+// olmadığı için (doğrulandı) kendi Anthropic entegrasyonumuzla sağlanıyor.
+app.post('/api/prompt/generate', async (req: Request, res: Response) => {
+  try {
+    const input = req.body as PromptGenInput;
+    if (!input.companyName?.trim() || !input.callGoal?.trim()) {
+      return res.status(400).json({ success: false, error: 'Şirket/marka adı ve aramanın amacı zorunlu' });
+    }
+    const systemPrompt = await generateVapiPrompt(input);
+    return res.json({ success: true, data: { systemPrompt } });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: String(err) });
+  }
 });
 
 // ─── KAMPANYA — Sunucu taraflı çalışır ───────────────────────────────────────

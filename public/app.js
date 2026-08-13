@@ -2038,7 +2038,78 @@ function initScenarios() {
   });
   $('btnVlpReload').addEventListener('click', loadVapiLivePrompt);
   $('btnVlpSave').addEventListener('click', saveVapiLivePrompt);
+  initPromptGenerator();
   loadScenarios();
+}
+
+// ─── AI PROMPT GENERATOR ───────────────────────────────────────────────────
+
+let promptGenTargetId = null;
+
+function initPromptGenerator() {
+  document.querySelectorAll('[data-promptgen-target]').forEach(btn => {
+    btn.addEventListener('click', () => openPromptGenModal(btn.dataset.promptgenTarget));
+  });
+  $('promptGenClose').addEventListener('click', closePromptGenModal);
+  $('promptGenOverlay').addEventListener('click', closePromptGenModal);
+  $('btnPgCancel').addEventListener('click', closePromptGenModal);
+  $('btnPgGenerate').addEventListener('click', runPromptGenerate);
+}
+
+function openPromptGenModal(targetTextareaId) {
+  promptGenTargetId = targetTextareaId;
+  ['pgCompanyName','pgCallGoal','pgOfferDetails','pgTone','pgContactPerson','pgMaxDuration','pgNotes']
+    .forEach(id => { $(id).value = ''; });
+  $('promptGenModal').classList.add('open');
+  $('promptGenOverlay').classList.add('visible');
+  $('pgCompanyName').focus();
+}
+
+function closePromptGenModal() {
+  $('promptGenModal').classList.remove('open');
+  $('promptGenOverlay').classList.remove('visible');
+  promptGenTargetId = null;
+}
+
+async function runPromptGenerate() {
+  const companyName = $('pgCompanyName').value.trim();
+  const callGoal    = $('pgCallGoal').value.trim();
+  if (!companyName || !callGoal) {
+    toast('Şirket adı ve aramanın amacı zorunlu', 'error');
+    return;
+  }
+
+  const btn = $('btnPgGenerate');
+  btn.disabled = true;
+  btn.textContent = 'Oluşturuluyor...';
+
+  try {
+    const body = {
+      companyName,
+      callGoal,
+      offerDetails: $('pgOfferDetails').value.trim() || undefined,
+      tone: $('pgTone').value.trim() || undefined,
+      contactPersonName: $('pgContactPerson').value.trim() || undefined,
+      maxDurationSeconds: parseInt($('pgMaxDuration').value, 10) || undefined,
+      additionalNotes: $('pgNotes').value.trim() || undefined,
+    };
+    const r = await fetch('/api/prompt/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+
+    if (promptGenTargetId) $(promptGenTargetId).value = j.data.systemPrompt;
+    toast('Prompt oluşturuldu — inceleyip kaydedin', 'success');
+    closePromptGenModal();
+  } catch (err) {
+    toast('Prompt oluşturulamadı: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Oluştur';
+  }
 }
 
 async function loadVapiLivePrompt() {
