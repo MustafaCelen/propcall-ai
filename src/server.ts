@@ -9,8 +9,11 @@ dotenv.config();
 import { initDb } from './db';
 import pool from './db';
 import { generateCallSummary } from './ai';
-import { createVapiCall, endVapiCall, getVapiCredit, getAssistantSystemPrompt, updateAssistantSystemPrompt, getSignedRecordingUrl, verifyVapiApiKey } from './vapi';
-import { getElevenLabsCredit } from './elevenlabs';
+import {
+  createVapiCall, endVapiCall, getVapiCredit, getAssistantSystemPrompt, updateAssistantSystemPrompt,
+  getSignedRecordingUrl, verifyVapiApiKey, getAssistantConfig, updateAssistantConfig, AssistantConfigPatch,
+} from './vapi';
+import { getElevenLabsCredit, listElevenLabsVoices } from './elevenlabs';
 import { getAllAppointments, saveAppointment, deleteAppointment } from './appointments';
 import { getAllScenarios, getScenario, createScenario, updateScenario, deleteScenario } from './scenarios';
 import {
@@ -78,6 +81,36 @@ app.post('/api/admin/settings/verify-vapi', requireAdminAuth, async (req: Reques
     if (!value?.trim()) return res.status(400).json({ success: false, error: 'Değer boş olamaz' });
     const result = await verifyVapiApiKey(value.trim());
     return res.json({ success: result.ok, error: result.error });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+// ─── ADMİN PANEL — Asistan Ayarları (model/ses/transkripsiyon/davranış) ──────
+
+app.get('/api/admin/assistant-config', requireAdminAuth, async (_req: Request, res: Response) => {
+  try {
+    const data = await getAssistantConfig();
+    return res.json({ success: true, data });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+app.put('/api/admin/assistant-config', requireAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const patch = req.body as AssistantConfigPatch;
+    await updateAssistantConfig(patch);
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+app.get('/api/admin/elevenlabs-voices', requireAdminAuth, async (_req: Request, res: Response) => {
+  try {
+    const data = await listElevenLabsVoices();
+    return res.json({ success: true, data });
   } catch (err) {
     return res.status(500).json({ success: false, error: String(err) });
   }

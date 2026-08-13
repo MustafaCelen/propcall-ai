@@ -43,3 +43,27 @@ export async function getElevenLabsCredit(): Promise<ElevenLabsCreditInfo> {
     return { ok: false, error: String(err) };
   }
 }
+
+export interface ElevenLabsVoice {
+  voiceId: string;
+  name: string;
+  category?: string;
+  previewUrl?: string;
+}
+
+// Hesaba tanımlı sesleri listele — admin panelde dropdown için
+export async function listElevenLabsVoices(): Promise<ElevenLabsVoice[]> {
+  const key = await getSetting('ELEVENLABS_API_KEY');
+  if (!key) throw new Error('ELEVENLABS_API_KEY tanımlanmamış (Admin panelden ekleyin)');
+
+  const resp = await fetch(`${ELEVENLABS_BASE}/v1/voices`, {
+    headers: { 'xi-api-key': key },
+  });
+  if (!resp.ok) throw new Error(`ElevenLabs ses listesi alınamadı: ${resp.status}`);
+  const data = await resp.json() as {
+    voices?: Array<{ voice_id: string; name: string; category?: string; preview_url?: string }>;
+  };
+  return (data.voices || []).map(v => ({
+    voiceId: v.voice_id, name: v.name, category: v.category, previewUrl: v.preview_url,
+  }));
+}

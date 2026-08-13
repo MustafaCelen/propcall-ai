@@ -52,6 +52,21 @@
     .adm-field-status.ok{color:var(--primary);display:block}
     .adm-field-status.err{color:var(--red);display:block}
     .adm-field-hint{font-size:11px;color:var(--txm);margin-top:4px}
+
+    /* Asistan Ayarları kartları */
+    .adm-section-title{font-size:14px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+    .adm-row{display:flex;gap:12px}
+    .adm-col{flex:1;min-width:0}
+    .adm-mini-label{display:block;font-size:11px;font-weight:600;color:var(--tx2);margin-bottom:5px}
+    #settingsView select, #settingsView textarea, #settingsView input[type="text"], #settingsView input[type="number"] {
+      width:100%;font-size:13px;padding:9px 12px;background:var(--s2);border:1px solid var(--border);
+      border-radius:8px;color:var(--tx);font-family:'Sora',sans-serif;outline:none;transition:border-color .15s;
+    }
+    #settingsView select:focus, #settingsView textarea:focus, #settingsView input:focus{border-color:var(--border-a)}
+    #settingsView .form-group{margin-bottom:12px}
+    #settingsView .form-group:last-of-type{margin-bottom:0}
+    .adm-warn{font-size:11px;color:var(--red);margin-bottom:10px;display:none}
+    .adm-warn.show{display:block}
   </style>
 </head>
 <body>
@@ -80,7 +95,114 @@
     </div>
 
     <div class="adm-card">
+      <div class="adm-section-title">🔑 API Anahtarları</div>
       <div id="fieldsContainer"></div>
+    </div>
+
+    <div class="adm-card">
+      <div class="adm-section-title">🧠 Model (LLM)</div>
+      <div class="adm-row">
+        <div class="adm-col">
+          <label class="adm-mini-label">Sağlayıcı</label>
+          <select id="acModelProvider"></select>
+        </div>
+        <div class="adm-col">
+          <label class="adm-mini-label">Model</label>
+          <select id="acModelName"></select>
+        </div>
+      </div>
+      <div class="adm-field-hint">Konuşma sırasında kullanılan LLM. Groq en düşük gecikmeyi verir (sesli aramada önemli).</div>
+      <button class="adm-save-btn" id="btnSaveModel" style="margin-top:12px">Kaydet</button>
+      <div class="adm-field-status" id="statusModel"></div>
+    </div>
+
+    <div class="adm-card">
+      <div class="adm-section-title">🔊 Ses (ElevenLabs)</div>
+      <div class="adm-warn" id="voiceWarn"></div>
+      <div class="form-group">
+        <label class="adm-mini-label">Ses</label>
+        <select id="acVoiceId"></select>
+      </div>
+      <div class="adm-row">
+        <div class="adm-col">
+          <label class="adm-mini-label">Ses Modeli</label>
+          <select id="acVoiceModel">
+            <option value="eleven_v3">Eleven v3 — en yüksek kalite</option>
+            <option value="eleven_multilingual_v2">Multilingual v2 — dengeli</option>
+            <option value="eleven_turbo_v2_5">Turbo v2.5 — hızlı</option>
+            <option value="eleven_flash_v2_5">Flash v2.5 — en düşük gecikme</option>
+          </select>
+        </div>
+        <div class="adm-col">
+          <label class="adm-mini-label">Hız (0.7 – 1.2)</label>
+          <input type="number" id="acVoiceSpeed" min="0.7" max="1.2" step="0.05" />
+        </div>
+      </div>
+      <button class="adm-save-btn" id="btnSaveVoice" style="margin-top:12px">Kaydet</button>
+      <div class="adm-field-status" id="statusVoice"></div>
+    </div>
+
+    <div class="adm-card">
+      <div class="adm-section-title">🎙️ Transkripsiyon (STT)</div>
+      <div class="adm-row">
+        <div class="adm-col">
+          <label class="adm-mini-label">Sağlayıcı</label>
+          <select id="acTranscriberProvider">
+            <option value="deepgram">Deepgram</option>
+          </select>
+        </div>
+        <div class="adm-col">
+          <label class="adm-mini-label">Model</label>
+          <select id="acTranscriberModel">
+            <option value="nova-2">Nova-2</option>
+            <option value="nova-3">Nova-3 — en yeni</option>
+          </select>
+        </div>
+      </div>
+      <div class="adm-row" style="margin-top:12px">
+        <div class="adm-col">
+          <label class="adm-mini-label">Confidence Threshold (0–1)</label>
+          <input type="number" id="acConfidenceThreshold" min="0" max="1" step="0.05" />
+          <div class="adm-field-hint">Düşük değer gürültüyü de "konuşma" sayar. Önerilen: 0.6–0.7</div>
+        </div>
+        <div class="adm-col" style="display:flex;flex-direction:column;justify-content:flex-end">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;padding-bottom:9px">
+            <input type="checkbox" id="acBackgroundDenoising" style="width:auto" />
+            Background Denoising
+          </label>
+        </div>
+      </div>
+      <button class="adm-save-btn" id="btnSaveTranscriber" style="margin-top:12px">Kaydet</button>
+      <div class="adm-field-status" id="statusTranscriber"></div>
+    </div>
+
+    <div class="adm-card">
+      <div class="adm-section-title">⏱️ Konuşma Davranışı</div>
+      <div class="form-group">
+        <label class="adm-mini-label">Kapanış Kelimeleri <span style="font-weight:400;color:var(--txm)">(virgülle ayır)</span></label>
+        <textarea id="acEndCallPhrases" rows="3" placeholder="güle güle, hoşça kal, iyi günler..."></textarea>
+      </div>
+      <div class="form-group">
+        <label class="adm-mini-label">Kapanış Mesajı <span style="font-weight:400;color:var(--txm)">(opsiyonel)</span></label>
+        <input type="text" id="acEndCallMessage" placeholder="İyi günler dilerim, görüşmek üzere." />
+      </div>
+      <div class="adm-row">
+        <div class="adm-col">
+          <label class="adm-mini-label">Maks. Süre (sn)</label>
+          <input type="number" id="acMaxDuration" min="30" max="600" />
+        </div>
+        <div class="adm-col">
+          <label class="adm-mini-label">Sessizlik Aşımı (sn)</label>
+          <input type="number" id="acSilenceTimeout" min="3" max="60" />
+        </div>
+        <div class="adm-col">
+          <label class="adm-mini-label">Kesme Hassasiyeti</label>
+          <input type="number" id="acStopWords" min="1" max="10" />
+        </div>
+      </div>
+      <div class="adm-field-hint">Kesme hassasiyeti: kaç kelime duyunca asistan susar. Düşük = çabuk susar. Önerilen: 4–5</div>
+      <button class="adm-save-btn" id="btnSaveBehavior" style="margin-top:12px">Kaydet</button>
+      <div class="adm-field-status" id="statusBehavior"></div>
     </div>
   </div>
 
@@ -99,7 +221,7 @@ function $(id) { return document.getElementById(id); }
 
 async function checkSession() {
   const r = await fetch('/api/admin/session');
-  if (r.ok) { showSettings(); loadSettings(); }
+  if (r.ok) { showSettings(); loadSettings(); loadAssistantConfig(); }
   else { showLogin(); }
 }
 
@@ -131,6 +253,7 @@ async function doLogin() {
   $('pwInput').value = '';
   showSettings();
   loadSettings();
+  loadAssistantConfig();
 }
 
 $('btnLogout').addEventListener('click', async () => {
@@ -230,6 +353,154 @@ async function saveField(key) {
   input.value = '';
   loadSettings(); // maskeli değeri + kaynağı tazele
 }
+
+// ─── ASİSTAN AYARLARI (model / ses / transkripsiyon / davranış) ────────────
+
+const MODEL_OPTIONS = {
+  groq: [
+    { value: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile' },
+    { value: 'llama-3.1-8b-instant',    label: 'Llama 3.1 8B Instant — hızlı' },
+  ],
+  openai: [
+    { value: 'gpt-4o',      label: 'GPT-4o' },
+    { value: 'gpt-4o-mini', label: 'GPT-4o mini — hızlı' },
+  ],
+  anthropic: [
+    { value: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet' },
+    { value: 'claude-3-5-haiku-20241022',  label: 'Claude 3.5 Haiku — hızlı' },
+  ],
+};
+
+function populateModelDropdowns(selectedProvider, selectedModel) {
+  const providerSel = $('acModelProvider');
+  providerSel.innerHTML = Object.keys(MODEL_OPTIONS).map(p =>
+    `<option value="${p}"${p === selectedProvider ? ' selected' : ''}>${p}</option>`
+  ).join('');
+  updateModelNameOptions(selectedModel);
+}
+
+function updateModelNameOptions(selected) {
+  const provider = $('acModelProvider').value;
+  const opts = MODEL_OPTIONS[provider] || [];
+  $('acModelName').innerHTML = opts.map(o =>
+    `<option value="${o.value}"${o.value === selected ? ' selected' : ''}>${o.label}</option>`
+  ).join('');
+}
+
+$('acModelProvider').addEventListener('change', () => updateModelNameOptions());
+
+async function loadAssistantConfig() {
+  try {
+    const r = await fetch('/api/admin/assistant-config');
+    if (r.status === 401) { showLogin(); return; }
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    const d = j.data;
+
+    populateModelDropdowns(d.modelProvider, d.modelName);
+
+    $('acVoiceModel').value = d.voiceModel || 'eleven_v3';
+    $('acVoiceSpeed').value = d.voiceSpeed || 1;
+
+    $('acTranscriberModel').value = d.transcriberModel || 'nova-3';
+    $('acConfidenceThreshold').value = d.confidenceThreshold;
+    $('acBackgroundDenoising').checked = d.backgroundDenoisingEnabled;
+
+    $('acEndCallPhrases').value = (d.endCallPhrases || []).join(', ');
+    $('acEndCallMessage').value = d.endCallMessage || '';
+    $('acMaxDuration').value = d.maxDurationSeconds;
+    $('acSilenceTimeout').value = d.silenceTimeoutSeconds;
+    $('acStopWords').value = d.stopSpeakingNumWords;
+
+    loadVoices(d.voiceId);
+  } catch (err) {
+    const w = $('voiceWarn');
+    w.textContent = 'Asistan ayarları alınamadı: ' + err.message;
+    w.classList.add('show');
+  }
+}
+
+async function loadVoices(selectedVoiceId) {
+  const sel = $('acVoiceId');
+  const warn = $('voiceWarn');
+  warn.classList.remove('show');
+  sel.innerHTML = '<option>Yükleniyor...</option>';
+  try {
+    const r = await fetch('/api/admin/elevenlabs-voices');
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    const voices = j.data;
+    sel.innerHTML = voices.map(v =>
+      `<option value="${v.voiceId}"${v.voiceId === selectedVoiceId ? ' selected' : ''}>${v.name}${v.category ? ' — ' + v.category : ''}</option>`
+    ).join('');
+    if (selectedVoiceId && !voices.some(v => v.voiceId === selectedVoiceId)) {
+      sel.insertAdjacentHTML('afterbegin', `<option value="${selectedVoiceId}" selected>Mevcut ses (${selectedVoiceId})</option>`);
+    }
+  } catch (err) {
+    sel.innerHTML = `<option value="${selectedVoiceId || ''}">${selectedVoiceId || 'Ses seçilmemiş'}</option>`;
+    warn.textContent = 'ElevenLabs sesleri yüklenemedi (' + err.message + ') — yukarıdan ElevenLabs API Key girin.';
+    warn.classList.add('show');
+  }
+}
+
+async function saveAssistantConfig(patch, statusId, btnId) {
+  const status = $(statusId);
+  const btn = $(btnId);
+  btn.disabled = true;
+  status.className = 'adm-field-status';
+  status.textContent = '';
+  try {
+    const r = await fetch('/api/admin/assistant-config', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    status.textContent = '✓ Kaydedildi, anında geçerli';
+    status.className = 'adm-field-status ok';
+  } catch (err) {
+    status.textContent = '✗ ' + err.message;
+    status.className = 'adm-field-status err';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$('btnSaveModel').addEventListener('click', () => {
+  saveAssistantConfig({
+    modelProvider: $('acModelProvider').value,
+    modelName: $('acModelName').value,
+  }, 'statusModel', 'btnSaveModel');
+});
+
+$('btnSaveVoice').addEventListener('click', () => {
+  saveAssistantConfig({
+    voiceProvider: '11labs',
+    voiceId: $('acVoiceId').value,
+    voiceModel: $('acVoiceModel').value,
+    voiceSpeed: parseFloat($('acVoiceSpeed').value) || 1,
+  }, 'statusVoice', 'btnSaveVoice');
+});
+
+$('btnSaveTranscriber').addEventListener('click', () => {
+  saveAssistantConfig({
+    transcriberProvider: 'deepgram',
+    transcriberModel: $('acTranscriberModel').value,
+    confidenceThreshold: parseFloat($('acConfidenceThreshold').value),
+    backgroundDenoisingEnabled: $('acBackgroundDenoising').checked,
+  }, 'statusTranscriber', 'btnSaveTranscriber');
+});
+
+$('btnSaveBehavior').addEventListener('click', () => {
+  const phrases = $('acEndCallPhrases').value.split(',').map(s => s.trim()).filter(Boolean);
+  saveAssistantConfig({
+    endCallPhrases: phrases,
+    endCallMessage: $('acEndCallMessage').value.trim(),
+    maxDurationSeconds: parseInt($('acMaxDuration').value, 10),
+    silenceTimeoutSeconds: parseInt($('acSilenceTimeout').value, 10),
+    stopSpeakingNumWords: parseInt($('acStopWords').value, 10),
+  }, 'statusBehavior', 'btnSaveBehavior');
+});
 
 checkSession();
 </script>

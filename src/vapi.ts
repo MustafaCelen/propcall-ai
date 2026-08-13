@@ -195,3 +195,139 @@ export async function verifyVapiApiKey(apiKey: string): Promise<{ ok: boolean; e
     return { ok: false, error: String(err) };
   }
 }
+
+// ─── Asistan Ayarları (Admin panel) ────────────────────────────────────────
+// Model/ses/transkripsiyon/konuşma davranışı — prompt dışındaki teknik ayarlar.
+
+export interface AssistantConfigView {
+  name: string;
+  modelProvider: string;
+  modelName: string;
+  voiceProvider: string;
+  voiceId: string;
+  voiceModel: string;
+  voiceSpeed: number;
+  transcriberProvider: string;
+  transcriberModel: string;
+  transcriberLanguage: string;
+  confidenceThreshold: number;
+  backgroundDenoisingEnabled: boolean;
+  endCallPhrases: string[];
+  endCallMessage: string;
+  maxDurationSeconds: number;
+  silenceTimeoutSeconds: number;
+  stopSpeakingNumWords: number;
+}
+
+export async function getAssistantConfig(): Promise<AssistantConfigView> {
+  const assistantId = await getSetting('VAPI_ASSISTANT_ID');
+  if (!assistantId) throw new Error('VAPI_ASSISTANT_ID tanımlanmamış');
+
+  const resp = await fetch(`${VAPI_BASE_URL}/assistant/${assistantId}`, { headers: await getHeaders() });
+  if (!resp.ok) throw new Error(`Vapi assistant bilgisi alınamadı: ${resp.status}`);
+  const d = await resp.json() as any;
+
+  return {
+    name: d.name || '',
+    modelProvider: d.model?.provider || '',
+    modelName: d.model?.model || '',
+    voiceProvider: d.voice?.provider || '',
+    voiceId: d.voice?.voiceId || '',
+    voiceModel: d.voice?.model || '',
+    voiceSpeed: d.voice?.speed ?? 1,
+    transcriberProvider: d.transcriber?.provider || '',
+    transcriberModel: d.transcriber?.model || '',
+    transcriberLanguage: d.transcriber?.language || '',
+    confidenceThreshold: d.transcriber?.confidenceThreshold ?? 0.4,
+    backgroundDenoisingEnabled: !!d.backgroundDenoisingEnabled,
+    endCallPhrases: d.endCallPhrases || [],
+    endCallMessage: d.endCallMessage || '',
+    maxDurationSeconds: d.maxDurationSeconds ?? 120,
+    silenceTimeoutSeconds: d.silenceTimeoutSeconds ?? 10,
+    stopSpeakingNumWords: d.stopSpeakingPlan?.numWords ?? 3,
+  };
+}
+
+export interface AssistantConfigPatch {
+  modelProvider?: string;
+  modelName?: string;
+  voiceProvider?: string;
+  voiceId?: string;
+  voiceModel?: string;
+  voiceSpeed?: number;
+  transcriberProvider?: string;
+  transcriberModel?: string;
+  confidenceThreshold?: number;
+  backgroundDenoisingEnabled?: boolean;
+  endCallPhrases?: string[];
+  endCallMessage?: string;
+  maxDurationSeconds?: number;
+  silenceTimeoutSeconds?: number;
+  stopSpeakingNumWords?: number;
+}
+
+// Vapi PATCH'i iç içe objelerde (model/voice/transcriber/stopSpeakingPlan) kısmi
+// alanı değil TÜM objeyi bekliyor — bu yüzden önce mevcut config'i çekip
+// sadece değişen alanları üstüne yazıp tam objeyi geri gönderiyoruz. Aksi halde
+// örn. sadece confidenceThreshold güncellenirken transcriber.language sıfırlanabilir.
+export async function updateAssistantConfig(patch: AssistantConfigPatch): Promise<void> {
+  const assistantId = await getSetting('VAPI_ASSISTANT_ID');
+  if (!assistantId) throw new Error('VAPI_ASSISTANT_ID tanımlanmamış');
+
+  const current = await fetch(`${VAPI_BASE_URL}/assistant/${assistantId}`, { headers: await getHeaders() })
+    .then(r => r.json()) as any;
+
+  const body: Record<string, unknown> = {};
+
+  if (patch.modelProvider !== undefined || patch.modelName !== undefined) {
+    body.model = {
+      ...current.model,
+      provider: patch.modelProvider ?? current.model?.provider,
+      model:    patch.modelName    ?? current.model?.model,
+    };
+  }
+
+  if (patch.voiceProvider !== undefined || patch.voiceId !== undefined
+      || patch.voiceModel !== undefined || patch.voiceSpeed !== undefined) {
+    body.voice = {
+      ...current.voice,
+      provider: patch.voiceProvider ?? current.voice?.provider,
+      voiceId:  patch.voiceId       ?? current.voice?.voiceId,
+      model:    patch.voiceModel    ?? current.voice?.model,
+      speed:    patch.voiceSpeed    ?? current.voice?.speed,
+    };
+  }
+
+  if (patch.transcriberProvider !== undefined || patch.transcriberModel !== undefined
+      || patch.confidenceThreshold !== undefined) {
+    body.transcriber = {
+      ...current.transcriber,
+      provider:            patch.transcriberProvider  ?? current.transcriber?.provider,
+      model:               patch.transcriberModel      ?? current.transcriber?.model,
+      confidenceThreshold: patch.confidenceThreshold   ?? current.transcriber?.confidenceThreshold,
+    };
+  }
+
+  if (patch.backgroundDenoisingEnabled !== undefined) {
+    body.backgroundDenoisingEnabled = patch.backgroundDenoisingEnabled;
+  }
+  if (patch.endCallPhrases !== undefined) body.endCallPhrases = patch.endCallPhrases;
+  if (patch.endCallMessage !== undefined) body.endCallMessage = patch.endCallMessage;
+  if (patch.maxDurationSeconds !== undefined) body.maxDurationSeconds = patch.maxDurationSeconds;
+  if (patch.silenceTimeoutSeconds !== undefined) body.silenceTimeoutSeconds = patch.silenceTimeoutSeconds;
+  if (patch.stopSpeakingNumWords !== undefined) {
+    body.stopSpeakingPlan = { ...current.stopSpeakingPlan, numWords: patch.stopSpeakingNumWords };
+  }
+
+  const resp = await fetch(`${VAPI_BASE_URL}/assistant/${assistantId}`, {
+    method: 'PATCH',
+    headers: await getHeaders(),
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`Vapi assistant güncelleme hatası: ${resp.status} - ${errText}`);
+  }
+  modelConfigCache  = null;
+  systemPromptCache = null;
+}
