@@ -51,6 +51,7 @@ export interface CallRecord {
   createdAt: string;
   scenarioId?: string;
   scenarioName?: string;
+  campaignId?: string;
 }
 
 export interface Appointment {

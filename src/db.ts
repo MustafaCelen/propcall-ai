@@ -47,6 +47,29 @@ export async function initDb(): Promise<void> {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
 
+    -- Kalıcı kampanya kayıtları — geçmiş kampanyalar karşılaştırılabilir, silinmez.
+    -- campaign_state (yukarıdaki) artık kullanılmıyor, geriye dönük uyumluluk için duruyor.
+    CREATE TABLE IF NOT EXISTS campaigns (
+      id               TEXT PRIMARY KEY,
+      name             TEXT NOT NULL,
+      scenario_id      TEXT,
+      scenario_name    TEXT,
+      status           TEXT NOT NULL DEFAULT 'draft', -- draft|running|paused|completed|stopped
+      max_concurrent   INT  NOT NULL DEFAULT 1,
+      start_from_index INT  NOT NULL DEFAULT 0,
+      call_limit       INT  NOT NULL DEFAULT 0,
+      answered_limit   INT  NOT NULL DEFAULT 0,
+      contacts         JSONB NOT NULL DEFAULT '[]',
+      created_at       TIMESTAMPTZ DEFAULT NOW(),
+      started_at       TIMESTAMPTZ,
+      completed_at     TIMESTAMPTZ,
+      updated_at       TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_campaigns_status     ON campaigns (status);
+    CREATE INDEX IF NOT EXISTS idx_campaigns_created_at ON campaigns (created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_calls_campaign_id    ON calls ((data ->> 'campaignId'));
+
     -- Admin panelden girilen API key'leri (şifreli) — .env yerine canlı override
     CREATE TABLE IF NOT EXISTS app_settings (
       key        TEXT PRIMARY KEY,

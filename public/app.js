@@ -93,6 +93,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initDrawer();
   initAppointments();
   initCampaign();
+  initCampaignHistory();
   initScenarios();
   initCredits();
   connectSSE();
@@ -180,13 +181,15 @@ function initTabs() {
 function switchTab(name) {
   DOM.tabBtns.forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   DOM.tabContents.forEach(c => {
-    const match = (name === 'live'     && c.id === 'tabLive')     ||
-                  (name === 'history'  && c.id === 'tabHistory')  ||
-                  (name === 'stats'    && c.id === 'tabStats')    ||
-                  (name === 'campaign' && c.id === 'tabCampaign') ||
-                  (name === 'followup' && c.id === 'tabFollowup');
+    const match = (name === 'live'            && c.id === 'tabLive')            ||
+                  (name === 'history'         && c.id === 'tabHistory')         ||
+                  (name === 'stats'           && c.id === 'tabStats')           ||
+                  (name === 'campaign'        && c.id === 'tabCampaign')        ||
+                  (name === 'campaignHistory' && c.id === 'tabCampaignHistory') ||
+                  (name === 'followup'        && c.id === 'tabFollowup');
     c.classList.toggle('active', match);
   });
+  if (name === 'campaignHistory') loadCampaignHistory();
   if (name === 'history') loadHistory();
   if (name === 'stats')   loadStats();
   if (name === 'followup') loadFollowup();
@@ -289,6 +292,7 @@ function connectSSE() {
     campaign.running = false;
     syncCampaignButtons();
     updateCampaignProgress();
+    if (document.querySelector('#tabCampaignHistory.active')) loadCampaignHistory();
     // Tamamlanma banner'ı
     const bar = $('campaignProgressBar');
     if (bar) {
@@ -1965,6 +1969,15 @@ function updateCampaignProgressFromSummary(sum) {
 
 async function campaignStart() {
   if (!campaign.contacts.length) return;
+  const nameInput = $('campaignName');
+  const name = nameInput ? nameInput.value.trim() : '';
+  if (!name) {
+    if (nameInput) { nameInput.classList.add('invalid'); nameInput.focus(); }
+    toast('Kampanya adı zorunlu — geçmişte tanımak için gerekli', 'error');
+    return;
+  }
+  if (nameInput) nameInput.classList.remove('invalid');
+
   campaign.maxConcurrent = parseInt($('campaignConcurrency').value, 10) || 1;
   const scenarioId      = $('campaignScenario') ? ($('campaignScenario').value || undefined) : undefined;
   const startFromRaw    = parseInt(($('campaignStartFrom')?.value    || ''), 10);
@@ -1984,6 +1997,7 @@ async function campaignStart() {
         startFromIndex,
         callLimit,
         answeredLimit,
+        name,
       }),
     });
     const json = await resp.json();
@@ -2021,6 +2035,153 @@ async function campaignStop() {
   } catch(err) {
     toast('Hata: ' + err.message, 'error');
   }
+}
+
+// ─── KAMPANYA GEÇMİŞİ ──────────────────────────────────────────────────────
+
+function initCampaignHistory() {
+  const refreshBtn = $('btnChRefresh');
+  if (refreshBtn) refreshBtn.addEventListener('click', loadCampaignHistory);
+  const closeBtn = $('campaignDetailClose');
+  if (closeBtn) closeBtn.addEventListener('click', closeCampaignDetail);
+  const overlay = $('campaignDetailOverlay');
+  if (overlay) overlay.addEventListener('click', closeCampaignDetail);
+}
+
+async function loadCampaignHistory() {
+  const body = $('campaignHistoryBody');
+  if (!body) return;
+  body.innerHTML = '<tr><td colspan="10" class="table-empty">Yükleniyor...</td></tr>';
+  try {
+    const resp = await fetch('/api/campaigns');
+    const json = await resp.json();
+    if (!json.success) throw new Error(json.error);
+    renderCampaignHistoryTable(json.data);
+  } catch (err) {
+    body.innerHTML = '<tr><td colspan="10" class="table-empty">Hata: ' + err.message + '</td></tr>';
+  }
+}
+
+const CH_STATUS_LABEL = {
+  draft: 'Taslak', running: 'Çalışıyor', paused: 'Duraklatıldı',
+  completed: 'Tamamlandı', stopped: 'Durduruldu',
+};
+
+function renderCampaignHistoryTable(rows) {
+  const body = $('campaignHistoryBody');
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="10" class="table-empty">Henüz kampanya yok — Toplu Arama sekmesinden başlatın</td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map(r => {
+    const rdvCls = r.randevuRate >= 15 ? 'sp-good' : r.randevuRate >= 5 ? 'sp-mid' : 'sp-low';
+    return '<tr class="call-row" data-id="' + r.id + '">' +
+      '<td><div class="tbl-name">' + esc(r.name) + '</div></td>' +
+      '<td class="ozet-cell">' + esc(r.scenarioName || 'Varsayılan') + '</td>' +
+      '<td><span class="ch-status-tag ch-status-' + r.status + '">' + (CH_STATUS_LABEL[r.status] || r.status) + '</span></td>' +
+      '<td>' + r.totalContacts + '</td>' +
+      '<td>' + r.callsMade + '</td>' +
+      '<td><span class="sp-rate ' + rdvCls + '">' + r.randevu + ' (%' + r.randevuRate + ')</span></td>' +
+      '<td class="dur-cell">' + (r.avgDuration ? fmtDuration(r.avgDuration) : '—') + '</td>' +
+      '<td class="dur-cell">$' + (r.totalCost || 0).toFixed(2) + '</td>' +
+      '<td>' + fmtDateTime(r.createdAt) + '</td>' +
+      '<td><button class="btn-ch-detail" data-id="' + r.id + '">Detay ›</button></td>' +
+      '</tr>';
+  }).join('');
+
+  body.querySelectorAll('.btn-ch-detail').forEach(btn => {
+    btn.addEventListener('click', e => { e.stopPropagation(); openCampaignDetail(btn.dataset.id); });
+  });
+  body.querySelectorAll('.call-row').forEach(row => {
+    row.addEventListener('click', () => openCampaignDetail(row.dataset.id));
+  });
+}
+
+async function openCampaignDetail(id) {
+  $('campaignDetailModal').classList.add('open');
+  $('campaignDetailOverlay').classList.add('visible');
+  $('cdTitle').textContent = 'Yükleniyor...';
+  $('cdSub').textContent = '';
+  $('cdBody').innerHTML = '<div class="drawer-loading">⏳ Yükleniyor...</div>';
+
+  try {
+    const resp = await fetch('/api/campaigns/' + id);
+    const json = await resp.json();
+    if (!json.success) throw new Error(json.error);
+    renderCampaignDetail(json.data);
+  } catch (err) {
+    $('cdBody').innerHTML = '<div class="drawer-error">Hata: ' + err.message + '</div>';
+  }
+}
+
+function closeCampaignDetail() {
+  $('campaignDetailModal').classList.remove('open');
+  $('campaignDetailOverlay').classList.remove('visible');
+}
+
+function renderCampaignDetail(data) {
+  const { campaign: c, stats: s } = data;
+  $('cdTitle').textContent = c.name;
+  $('cdSub').textContent = (c.scenarioName || 'Varsayılan prompt') + ' · ' + fmtDateTime(c.createdAt) +
+    ' · ' + (CH_STATUS_LABEL[c.status] || c.status);
+
+  const kpis = [
+    { label: 'Toplam Arama', value: s.totalCalls, hl: false },
+    { label: 'Cevaplanan',   value: s.completedCalls + ' (%' + s.answerRate + ')', hl: false },
+    { label: 'Randevu',      value: s.randevuCount + ' (%' + s.randevuRate + ')', hl: true },
+    { label: 'Ort. Süre',    value: s.avgDuration ? fmtDuration(s.avgDuration) : '—', hl: false },
+    { label: 'Maliyet',      value: '$' + (s.totalCost || 0).toFixed(2), hl: false },
+  ];
+  const kpiHtml = '<div class="cd-kpis">' + kpis.map(k =>
+    '<div class="cd-kpi' + (k.hl ? ' hl' : '') + '">' +
+      '<div class="cd-kpi-label">' + k.label + '</div>' +
+      '<div class="cd-kpi-value">' + k.value + '</div>' +
+    '</div>'
+  ).join('') + '</div>';
+
+  const ilgiColors = { yüksek: '#00C896', orta: '#4A9EFF', düşük: '#FFD060', yok: '#4A5068' };
+  const ilgiMax = Math.max(1, ...(s.ilgiDistribution || []).map(x => x.count));
+  const ilgiHtml = (s.ilgiDistribution || []).map(x =>
+    '<div class="cd-bar-row">' +
+      '<span class="cd-bar-label">' + esc(x.seviye) + '</span>' +
+      '<div class="cd-bar-track"><div class="cd-bar-fill" style="width:' + (x.count / ilgiMax * 100) +
+        '%;background:' + (ilgiColors[x.seviye] || '#4A5068') + '"></div></div>' +
+      '<span class="cd-bar-count">' + x.count + '</span>' +
+    '</div>'
+  ).join('');
+
+  const retMax = Math.max(1, ...(s.retNedeniDistribution || []).map(x => x.count));
+  const retHtml = (s.retNedeniDistribution || []).length
+    ? s.retNedeniDistribution.map(x =>
+        '<div class="cd-bar-row">' +
+          '<span class="cd-bar-label" title="' + esc(x.neden) + '">' + esc(x.neden.slice(0, 14)) + '</span>' +
+          '<div class="cd-bar-track"><div class="cd-bar-fill" style="width:' + (x.count / retMax * 100) + '%;background:#FF5370"></div></div>' +
+          '<span class="cd-bar-count">' + x.count + '</span>' +
+        '</div>'
+      ).join('')
+    : '<div class="fu-empty">Ret nedeni kaydı yok</div>';
+
+  const statusLabels = { completed: 'Tamamlandı', 'no-answer': 'Cevapsız', busy: 'Meşgul', failed: 'Hata', 'in-progress': 'Devam Ediyor' };
+  const statusHtml = (s.statusBreakdown || []).map(x =>
+    '<span class="status-tag s-' + x.status + '" style="margin-right:6px;margin-bottom:6px;display:inline-block">' +
+      (statusLabels[x.status] || x.status) + ': ' + x.count +
+    '</span>'
+  ).join('') || '<div class="fu-empty">Kayıt yok</div>';
+
+  $('cdBody').innerHTML =
+    kpiHtml +
+    '<div class="drawer-section">' +
+      '<div class="cd-section-title">İlgi Seviyesi Dağılımı</div>' +
+      (ilgiHtml || '<div class="fu-empty">Henüz özet yok</div>') +
+    '</div>' +
+    '<div class="drawer-section">' +
+      '<div class="cd-section-title">En Sık Ret Nedenleri</div>' +
+      retHtml +
+    '</div>' +
+    '<div class="drawer-section">' +
+      '<div class="cd-section-title">Durum Dağılımı</div>' +
+      '<div>' + statusHtml + '</div>' +
+    '</div>';
 }
 
 // ─── SCENARIOS ───────────────────────────────────────────────────────────────

@@ -19,7 +19,7 @@ import { getAllScenarios, getScenario, createScenario, updateScenario, deleteSce
 import {
   getAllCalls, readCall, createCall, updateCall,
   appendTranscript, updateCosts, saveCallSummary,
-  endedReasonToStatus, getStats, exportCSV,
+  endedReasonToStatus, getStats, exportCSV, getCampaignStats,
 } from './calls';
 import { VapiCallRequest, VapiWebhookPayload, VapiCostItem, CallFilters, CallRecord } from './types';
 import {
@@ -27,6 +27,7 @@ import {
   campaignLoad, campaignStart, campaignResume, campaignPause, campaignStop, campaignClear,
   onCampaignCallEnded, onCampaignSummaryReady,
 } from './campaign';
+import { listCampaigns, getCampaign } from './campaigns';
 import { adminLogin, adminLogout, requireAdminAuth } from './admin-auth';
 import { SETTINGS_KEYS, SettingsKey, getSetting, setSetting, getSettingsForAdmin } from './settings';
 import { generateVapiPrompt, PromptGenInput } from './promptgen';
@@ -689,7 +690,24 @@ app.post('/api/prompt/generate', async (req: Request, res: Response) => {
   }
 });
 
-// ─── KAMPANYA — Sunucu taraflı çalışır ───────────────────────────────────────
+// ─── KAMPANYA GEÇMİŞİ — kalıcı kayıtlar + kampanya-bazlı analiz ──────────────
+
+app.get('/api/campaigns', async (_req: Request, res: Response) => {
+  try {
+    return res.json({ success: true, data: await listCampaigns() });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.get('/api/campaigns/:id', async (req: Request, res: Response) => {
+  try {
+    const campaign = await getCampaign(req.params.id);
+    if (!campaign) return res.status(404).json({ success: false, error: 'Kampanya bulunamadı' });
+    const stats = await getCampaignStats(req.params.id);
+    return res.json({ success: true, data: { campaign, stats } });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+// ─── KAMPANYA — Sunucu taraflı çalışır (canlı dialer) ────────────────────────
 
 app.get('/api/campaign', (_req: Request, res: Response) => {
   try {
@@ -700,21 +718,23 @@ app.get('/api/campaign', (_req: Request, res: Response) => {
 // Kişi listesini yükle (henüz başlatma)
 app.post('/api/campaign/load', async (req: Request, res: Response) => {
   try {
-    const { contacts, maxConcurrent, scenarioId } = req.body;
+    const { contacts, maxConcurrent, scenarioId, name } = req.body;
     if (!Array.isArray(contacts) || !contacts.length)
       return res.status(400).json({ success: false, error: 'Kişi listesi zorunlu' });
-    await campaignLoad(contacts, maxConcurrent || 1, scenarioId);
+    await campaignLoad(contacts, maxConcurrent || 1, scenarioId, undefined, undefined, undefined, name);
     return res.json({ success: true });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
 
 app.post('/api/campaign/start', async (req: Request, res: Response) => {
   try {
-    const { contacts, maxConcurrent, scenarioId, startFromIndex, callLimit, answeredLimit } = req.body;
+    const { contacts, maxConcurrent, scenarioId, startFromIndex, callLimit, answeredLimit, name } = req.body;
     if (contacts?.length) {
+      if (!name?.trim())
+        return res.status(400).json({ success: false, error: 'Kampanya adı zorunlu' });
       await campaignLoad(
         contacts, maxConcurrent || 1, scenarioId,
-        startFromIndex || 0, callLimit || 0, answeredLimit || 0,
+        startFromIndex || 0, callLimit || 0, answeredLimit || 0, name,
       );
     }
     await campaignStart();

@@ -99,6 +99,7 @@
       <button class="tab-btn" data-tab="history">Geçmiş Aramalar</button>
       <button class="tab-btn" data-tab="stats">İstatistikler</button>
       <button class="tab-btn" data-tab="campaign">📋 Toplu Arama</button>
+      <button class="tab-btn" data-tab="campaignHistory">📊 Kampanya Geçmişi</button>
     </div>
 
     <!-- ── TAB 1: CANLI ──────────────────────────────────── -->
@@ -367,6 +368,10 @@
             <span class="upload-hint">Ad, Telefon, Bölge, Notlar sütunları</span>
           </div>
           <div class="campaign-controls">
+            <div class="concurrency-group" title="Bu kampanyayı geçmişte tanıyacağınız isim — zorunlu">
+              <label>Kampanya Adı</label>
+              <input type="text" id="campaignName" class="camp-name-input" placeholder="Örn: Ağustos KW Büyüme — Batch 2" />
+            </div>
             <div class="concurrency-group" title="Kampanyadaki tüm aramalarda kullanılacak senaryo">
               <label>Senaryo</label>
               <select id="campaignScenario">
@@ -443,7 +448,51 @@
       </div>
     </div>
 
+    <!-- ── TAB 5: KAMPANYA GEÇMİŞİ ─────────────────────────── -->
+    <div class="tab-content" id="tabCampaignHistory">
+      <div class="ch-toolbar">
+        <span class="ch-hint">Geçmiş kampanyalar — senaryo bazında karşılaştırın, hangi listenin daha çok randevu getirdiğini görün.</span>
+        <button class="btn-secondary" id="btnChRefresh">↻ Yenile</button>
+      </div>
+      <div class="table-wrapper">
+        <table class="calls-table">
+          <thead>
+            <tr>
+              <th>Kampanya</th>
+              <th>Senaryo</th>
+              <th>Durum</th>
+              <th>Kişi</th>
+              <th>Arandı</th>
+              <th>Randevu</th>
+              <th>Ort. Süre</th>
+              <th>Maliyet</th>
+              <th>Tarih</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="campaignHistoryBody">
+            <tr><td colspan="10" class="table-empty">Yükleniyor...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
   </main>
+</div>
+
+<!-- KAMPANYA DETAY MODAL -->
+<div class="modal-overlay" id="campaignDetailOverlay"></div>
+<div class="modal" id="campaignDetailModal">
+  <div class="modal-header">
+    <div>
+      <div class="modal-title" id="cdTitle">Kampanya Detayı</div>
+      <div class="cd-sub" id="cdSub"></div>
+    </div>
+    <button class="modal-close" id="campaignDetailClose">✕</button>
+  </div>
+  <div class="modal-body" id="cdBody">
+    <div class="drawer-loading">⏳ Yükleniyor...</div>
+  </div>
 </div>
 
 <!-- DRAWER OVERLAY -->

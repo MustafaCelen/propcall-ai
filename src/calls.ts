@@ -48,6 +48,7 @@ export async function createCall(
   customer: CustomerInfo,
   scenarioId?: string,
   scenarioName?: string,
+  campaignId?: string,
 ): Promise<CallRecord> {
   const record: CallRecord = {
     callId:        `call_${Date.now()}`,
@@ -63,6 +64,7 @@ export async function createCall(
     createdAt:     new Date().toISOString(),
     scenarioId,
     scenarioName,
+    campaignId,
   };
   await writeCall(record);
   return record;
@@ -161,6 +163,81 @@ export function endedReasonToStatus(
 
   // Gerçek hata durumları
   return 'failed';
+}
+
+export interface CampaignStatsData {
+  totalCalls: number;
+  completedCalls: number;
+  answerRate: number;
+  avgDuration: number;
+  totalCost: number;
+  randevuCount: number;
+  randevuRate: number;
+  ilgiDistribution: Array<{ seviye: string; count: number }>;
+  retNedeniDistribution: Array<{ neden: string; count: number }>;
+  statusBreakdown: Array<{ status: string; count: number }>;
+}
+
+// Tek bir kampanyaya ait aramaların analizi — getStats ile aynı SQL desenini
+// kullanır ama tarih aralığı yerine campaignId ile filtreler.
+export async function getCampaignStats(campaignId: string): Promise<CampaignStatsData> {
+  const [mainRow, ilgiRows, retRows, statusRows] = await Promise.all([
+    pool.query<{
+      total_calls: string; completed_calls: string; avg_duration: string;
+      total_cost: string; randevu_count: string; with_summary: string;
+    }>(
+      `SELECT
+         COUNT(*)::int                                                       AS total_calls,
+         COUNT(*) FILTER (WHERE status = 'completed')::int                  AS completed_calls,
+         COALESCE(ROUND(AVG((data->>'duration')::float)
+           FILTER (WHERE status != 'in-progress'))::int, 0)                 AS avg_duration,
+         COALESCE(SUM((data->'costs'->>'total')::float), 0)                AS total_cost,
+         COUNT(*) FILTER (WHERE (data->'summary'->>'randevu_alindi')::boolean
+           = true)::int                                                      AS randevu_count,
+         COUNT(*) FILTER (WHERE data->'summary' IS NOT NULL
+           AND status != 'in-progress')::int                                AS with_summary
+       FROM calls WHERE data->>'campaignId' = $1`,
+      [campaignId],
+    ),
+    pool.query<{ seviye: string; count: string }>(
+      `SELECT COALESCE(data->'summary'->>'ilgi_seviyesi','yok') AS seviye, COUNT(*)::int AS count
+       FROM calls WHERE data->>'campaignId' = $1
+         AND data->'summary' IS NOT NULL AND status != 'in-progress'
+       GROUP BY seviye`,
+      [campaignId],
+    ),
+    pool.query<{ neden: string; count: string }>(
+      `SELECT data->'summary'->>'ret_nedeni' AS neden, COUNT(*)::int AS count
+       FROM calls WHERE data->>'campaignId' = $1 AND data->'summary'->>'ret_nedeni' IS NOT NULL
+       GROUP BY neden ORDER BY count DESC LIMIT 8`,
+      [campaignId],
+    ),
+    pool.query<{ status: string; count: string }>(
+      `SELECT status, COUNT(*)::int AS count FROM calls WHERE data->>'campaignId' = $1 GROUP BY status`,
+      [campaignId],
+    ),
+  ]);
+
+  const m = mainRow.rows[0];
+  const totalCalls     = Number(m?.total_calls ?? 0);
+  const completedCalls = Number(m?.completed_calls ?? 0);
+  const withSummary    = Number(m?.with_summary ?? 0);
+  const randevuCount   = Number(m?.randevu_count ?? 0);
+
+  const ilgiOrder = ['yüksek', 'orta', 'düşük', 'yok'];
+  const ilgiMap   = Object.fromEntries(ilgiRows.rows.map(r => [r.seviye, Number(r.count)]));
+
+  return {
+    totalCalls, completedCalls,
+    answerRate:  totalCalls ? Math.round(completedCalls / totalCalls * 100) : 0,
+    avgDuration: Number(m?.avg_duration ?? 0),
+    totalCost:   Math.round(Number(m?.total_cost ?? 0) * 10000) / 10000,
+    randevuCount,
+    randevuRate: withSummary ? Math.round(randevuCount / withSummary * 100) : 0,
+    ilgiDistribution: ilgiOrder.map(s => ({ seviye: s, count: ilgiMap[s] || 0 })),
+    retNedeniDistribution: retRows.rows.map(r => ({ neden: r.neden, count: Number(r.count) })),
+    statusBreakdown: statusRows.rows.map(r => ({ status: r.status, count: Number(r.count) })),
+  };
 }
 
 export async function getStats(periodDays?: number): Promise<StatsData> {
