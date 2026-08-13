@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin — PropCall AI</title>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    html,body{height:100%;overflow-y:auto}
+    body{background:var(--bg);min-height:100vh;padding:40px 20px}
+    .adm-wrap{max-width:600px;margin:0 auto}
+    .adm-header{text-align:center;margin-bottom:28px}
+    .adm-logo{width:52px;height:52px;background:var(--primary);border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:24px;margin:0 auto 12px}
+    .adm-title{font-size:20px;font-weight:700}
+    .adm-sub{font-size:13px;color:var(--tx2);margin-top:4px}
+
+    .adm-card{background:var(--s1);border:1px solid var(--border);border-radius:14px;padding:26px;margin-bottom:16px}
+
+    /* Login formu */
+    #loginView{max-width:380px;margin:60px auto 0}
+    #loginView .adm-card{text-align:center}
+    #loginView input{margin:16px 0 12px;text-align:center;font-size:15px;letter-spacing:2px}
+    .adm-btn{width:100%;background:var(--primary);color:#000;border:none;border-radius:8px;padding:11px 20px;font-size:14px;font-weight:700;cursor:pointer;transition:opacity .15s;font-family:'Sora',sans-serif}
+    .adm-btn:hover:not(:disabled){opacity:.85}
+    .adm-btn:disabled{opacity:.4;cursor:not-allowed}
+    .adm-err{color:var(--red);font-size:12px;margin-top:10px;display:none}
+    .adm-err.show{display:block}
+
+    /* Ayarlar */
+    #settingsView{display:none}
+    .adm-topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+    .adm-logout{background:transparent;border:1px solid var(--border);color:var(--tx2);border-radius:8px;padding:7px 14px;font-size:12px;cursor:pointer;transition:all .15s}
+    .adm-logout:hover{border-color:var(--red);color:var(--red)}
+
+    .adm-field{margin-bottom:18px}
+    .adm-field:last-child{margin-bottom:0}
+    .adm-label-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+    .adm-label{font-size:13px;font-weight:600;color:var(--tx)}
+    .adm-source{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px}
+    .adm-source.db{background:rgba(0,200,150,.15);color:var(--primary)}
+    .adm-source.env{background:rgba(74,158,255,.15);color:var(--blue)}
+    .adm-source.none{background:rgba(255,83,112,.15);color:var(--red)}
+
+    .adm-input-row{display:flex;gap:8px}
+    .adm-input-row input{flex:1;font-size:13px;padding:9px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;color:var(--tx);font-family:'JetBrains Mono',monospace;outline:none;transition:border-color .15s}
+    .adm-input-row input:focus{border-color:var(--border-a)}
+    .adm-save-btn{background:var(--s2);border:1px solid var(--border);color:var(--tx2);border-radius:8px;padding:9px 14px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap}
+    .adm-save-btn:hover:not(:disabled){border-color:var(--primary);color:var(--primary)}
+    .adm-save-btn:disabled{opacity:.4;cursor:not-allowed}
+
+    .adm-field-status{margin-top:6px;font-size:11px;display:none}
+    .adm-field-status.ok{color:var(--primary);display:block}
+    .adm-field-status.err{color:var(--red);display:block}
+    .adm-field-hint{font-size:11px;color:var(--txm);margin-top:4px}
+  </style>
+</head>
+<body>
+<div class="adm-wrap">
+
+  <div class="adm-header">
+    <div class="adm-logo">🔑</div>
+    <div class="adm-title">Admin Panel</div>
+    <div class="adm-sub">API Anahtarları Yönetimi</div>
+  </div>
+
+  <!-- LOGIN -->
+  <div id="loginView">
+    <div class="adm-card">
+      <input type="password" id="pwInput" placeholder="Şifre" autocomplete="current-password" />
+      <button class="adm-btn" id="btnLogin">Giriş Yap</button>
+      <div class="adm-err" id="loginErr"></div>
+    </div>
+  </div>
+
+  <!-- SETTINGS -->
+  <div id="settingsView">
+    <div class="adm-topbar">
+      <span style="font-size:12px;color:var(--txm)">Değişiklikler restart gerekmeden anında geçerli olur.</span>
+      <button class="adm-logout" id="btnLogout">Çıkış</button>
+    </div>
+
+    <div class="adm-card">
+      <div id="fieldsContainer"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const FIELD_META = {
+  ANTHROPIC_API_KEY:    { label: '🤖 Anthropic API Key',      hint: 'Görüşme özeti üretimi için (Claude)',            secret: true },
+  VAPI_API_KEY:         { label: '📞 Vapi API Key',            hint: 'Arama başlatma ve yönetimi için',                secret: true, verifiable: true },
+  VAPI_PHONE_NUMBER_ID: { label: '☎️ Vapi Telefon Numarası ID', hint: 'Vapi Dashboard → Phone Numbers',                secret: false },
+  VAPI_ASSISTANT_ID:    { label: '🧠 Vapi Assistant ID',        hint: 'Vapi Dashboard → Assistants',                    secret: false },
+  ELEVENLABS_API_KEY:   { label: '🔊 ElevenLabs API Key',       hint: 'Ses kotası görüntüleme için (opsiyonel)',        secret: true },
+};
+
+function $(id) { return document.getElementById(id); }
+
+async function checkSession() {
+  const r = await fetch('/api/admin/session');
+  if (r.ok) { showSettings(); loadSettings(); }
+  else { showLogin(); }
+}
+
+function showLogin() {
+  $('loginView').style.display = 'block';
+  $('settingsView').style.display = 'none';
+}
+function showSettings() {
+  $('loginView').style.display = 'none';
+  $('settingsView').style.display = 'block';
+}
+
+$('btnLogin').addEventListener('click', doLogin);
+$('pwInput').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+
+async function doLogin() {
+  const password = $('pwInput').value;
+  $('loginErr').classList.remove('show');
+  const r = await fetch('/api/admin/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+  const j = await r.json();
+  if (!j.success) {
+    $('loginErr').textContent = j.error || 'Giriş başarısız';
+    $('loginErr').classList.add('show');
+    return;
+  }
+  $('pwInput').value = '';
+  showSettings();
+  loadSettings();
+}
+
+$('btnLogout').addEventListener('click', async () => {
+  await fetch('/api/admin/logout', { method: 'POST' });
+  showLogin();
+});
+
+async function loadSettings() {
+  const r = await fetch('/api/admin/settings');
+  if (r.status === 401) { showLogin(); return; }
+  const j = await r.json();
+  if (!j.success) return;
+  renderFields(j.data);
+}
+
+function sourceLabel(source) {
+  if (source === 'db')   return '<span class="adm-source db">Admin panelden</span>';
+  if (source === 'env')  return '<span class="adm-source env">.env dosyasından</span>';
+  return '<span class="adm-source none">Tanımsız</span>';
+}
+
+function renderFields(data) {
+  const container = $('fieldsContainer');
+  container.innerHTML = Object.keys(FIELD_META).map(key => {
+    const meta = FIELD_META[key];
+    const info = data[key] || { value: '', source: 'none', hasValue: false };
+    const placeholder = info.hasValue
+      ? (meta.secret ? info.value : info.value)
+      : 'Henüz girilmedi...';
+    return `
+      <div class="adm-field" data-key="${key}">
+        <div class="adm-label-row">
+          <span class="adm-label">${meta.label}</span>
+          ${sourceLabel(info.source)}
+        </div>
+        <div class="adm-input-row">
+          <input type="${meta.secret ? 'password' : 'text'}" data-input="${key}"
+                 placeholder="${placeholder}" autocomplete="off" />
+          <button class="adm-save-btn" data-save="${key}">Kaydet</button>
+        </div>
+        <div class="adm-field-hint">${meta.hint}</div>
+        <div class="adm-field-status" data-status="${key}"></div>
+      </div>
+    `;
+  }).join('');
+
+  container.querySelectorAll('[data-save]').forEach(btn => {
+    btn.addEventListener('click', () => saveField(btn.dataset.save));
+  });
+}
+
+async function saveField(key) {
+  const input  = document.querySelector(`[data-input="${key}"]`);
+  const btn    = document.querySelector(`[data-save="${key}"]`);
+  const status = document.querySelector(`[data-status="${key}"]`);
+  const value  = input.value.trim();
+
+  if (!value) { status.textContent = 'Değer boş olamaz'; status.className = 'adm-field-status err'; return; }
+
+  btn.disabled = true;
+  status.className = 'adm-field-status';
+  status.textContent = '';
+
+  // Vapi key ise önce doğrula
+  if (FIELD_META[key].verifiable) {
+    btn.textContent = 'Doğrulanıyor...';
+    const vr = await fetch('/api/admin/settings/verify-vapi', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value }),
+    }).then(r => r.json());
+    if (!vr.success) {
+      status.textContent = '✗ Geçersiz key: ' + (vr.error || 'doğrulanamadı');
+      status.className = 'adm-field-status err';
+      btn.disabled = false;
+      btn.textContent = 'Kaydet';
+      return;
+    }
+  }
+
+  btn.textContent = 'Kaydediliyor...';
+  const r = await fetch('/api/admin/settings', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key, value }),
+  });
+  const j = await r.json();
+  btn.disabled = false;
+  btn.textContent = 'Kaydet';
+
+  if (!j.success) {
+    status.textContent = '✗ ' + (j.error || 'Kaydedilemedi');
+    status.className = 'adm-field-status err';
+    return;
+  }
+
+  status.textContent = '✓ Kaydedildi, anında geçerli';
+  status.className = 'adm-field-status ok';
+  input.value = '';
+  loadSettings(); // maskeli değeri + kaynağı tazele
+}
+
+checkSession();
+</script>
+</body>
+</html>

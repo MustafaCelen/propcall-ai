@@ -1,12 +1,13 @@
 // PropCall AI - Vapi API entegrasyonu
 
 import { CustomerInfo } from './types';
+import { getSetting } from './settings';
 
 const VAPI_BASE_URL = 'https://api.vapi.ai';
 
-function getHeaders(): Record<string, string> {
-  const apiKey = process.env.VAPI_API_KEY;
-  if (!apiKey) throw new Error('VAPI_API_KEY tanımlanmamış');
+async function getHeaders(): Promise<Record<string, string>> {
+  const apiKey = await getSetting('VAPI_API_KEY');
+  if (!apiKey) throw new Error('VAPI_API_KEY tanımlanmamış (Admin panelden veya .env ile ekleyin)');
   return {
     Authorization: `Bearer ${apiKey}`,
     'Content-Type': 'application/json',
@@ -33,7 +34,7 @@ async function getAssistantModelConfig(assistantId: string): Promise<{ provider:
   if (modelConfigCache && Date.now() - modelConfigCachedAt < MODEL_CONFIG_TTL_MS) {
     return modelConfigCache;
   }
-  const resp = await fetch(`${VAPI_BASE_URL}/assistant/${assistantId}`, { headers: getHeaders() });
+  const resp = await fetch(`${VAPI_BASE_URL}/assistant/${assistantId}`, { headers: await getHeaders() });
   if (!resp.ok) throw new Error(`Vapi assistant bilgisi alınamadı: ${resp.status}`);
   const data = await resp.json() as { model?: { provider?: string; model?: string } };
   if (!data.model?.provider || !data.model?.model) {
@@ -46,11 +47,11 @@ async function getAssistantModelConfig(assistantId: string): Promise<{ provider:
 
 // Vapi üzerinden outbound arama başlat
 export async function createVapiCall(customer: CustomerInfo, systemPrompt?: string): Promise<VapiCallResponse> {
-  const phoneNumberId = process.env.VAPI_PHONE_NUMBER_ID;
-  const assistantId = process.env.VAPI_ASSISTANT_ID;
+  const phoneNumberId = await getSetting('VAPI_PHONE_NUMBER_ID');
+  const assistantId   = await getSetting('VAPI_ASSISTANT_ID');
 
-  if (!phoneNumberId) throw new Error('VAPI_PHONE_NUMBER_ID tanımlanmamış');
-  if (!assistantId) throw new Error('VAPI_ASSISTANT_ID tanımlanmamış');
+  if (!phoneNumberId) throw new Error('VAPI_PHONE_NUMBER_ID tanımlanmamış (Admin panelden veya .env ile ekleyin)');
+  if (!assistantId)   throw new Error('VAPI_ASSISTANT_ID tanımlanmamış (Admin panelden veya .env ile ekleyin)');
 
   const assistantOverrides: Record<string, unknown> = {
     variableValues: {
@@ -83,7 +84,7 @@ export async function createVapiCall(customer: CustomerInfo, systemPrompt?: stri
 
   const response = await fetch(`${VAPI_BASE_URL}/call`, {
     method: 'POST',
-    headers: getHeaders(),
+    headers: await getHeaders(),
     body: JSON.stringify(body),
   });
 
@@ -100,7 +101,7 @@ export async function createVapiCall(customer: CustomerInfo, systemPrompt?: stri
 // /call/:id/mono-recording endpoint'i 302 ile imzalı URL'ye yönlendirir).
 export async function getSignedRecordingUrl(vapiCallId: string): Promise<string | null> {
   const resp = await fetch(`${VAPI_BASE_URL}/call/${vapiCallId}/mono-recording`, {
-    headers: getHeaders(),
+    headers: await getHeaders(),
     redirect: 'manual',
   });
   const location = resp.headers.get('location');
@@ -111,7 +112,7 @@ export async function getSignedRecordingUrl(vapiCallId: string): Promise<string 
 export async function endVapiCall(vapiCallId: string): Promise<void> {
   const response = await fetch(`${VAPI_BASE_URL}/call/${vapiCallId}`, {
     method: 'DELETE',
-    headers: getHeaders(),
+    headers: await getHeaders(),
   });
 
   if (!response.ok && response.status !== 404) {
@@ -130,10 +131,10 @@ export async function getAssistantSystemPrompt(forceRefresh = false): Promise<{ 
   if (!forceRefresh && systemPromptCache && Date.now() - systemPromptCachedAt < SYSTEM_PROMPT_TTL_MS) {
     return systemPromptCache;
   }
-  const assistantId = process.env.VAPI_ASSISTANT_ID;
-  if (!assistantId) throw new Error('VAPI_ASSISTANT_ID tanımlanmamış');
+  const assistantId = await getSetting('VAPI_ASSISTANT_ID');
+  if (!assistantId) throw new Error('VAPI_ASSISTANT_ID tanımlanmamış (Admin panelden veya .env ile ekleyin)');
 
-  const resp = await fetch(`${VAPI_BASE_URL}/assistant/${assistantId}`, { headers: getHeaders() });
+  const resp = await fetch(`${VAPI_BASE_URL}/assistant/${assistantId}`, { headers: await getHeaders() });
   if (!resp.ok) throw new Error(`Vapi assistant bilgisi alınamadı: ${resp.status}`);
   const data = await resp.json() as {
     name?: string;
@@ -148,13 +149,13 @@ export async function getAssistantSystemPrompt(forceRefresh = false): Promise<{ 
 
 // Vapi assistant'ın canlı (base) sistem promptunu güncelle — tüm aramaları etkiler
 export async function updateAssistantSystemPrompt(systemPrompt: string): Promise<void> {
-  const assistantId = process.env.VAPI_ASSISTANT_ID;
-  if (!assistantId) throw new Error('VAPI_ASSISTANT_ID tanımlanmamış');
+  const assistantId = await getSetting('VAPI_ASSISTANT_ID');
+  if (!assistantId) throw new Error('VAPI_ASSISTANT_ID tanımlanmamış (Admin panelden veya .env ile ekleyin)');
 
   const { provider, model } = await getAssistantModelConfig(assistantId);
   const resp = await fetch(`${VAPI_BASE_URL}/assistant/${assistantId}`, {
     method: 'PATCH',
-    headers: getHeaders(),
+    headers: await getHeaders(),
     body: JSON.stringify({
       model: { provider, model, messages: [{ role: 'system', content: systemPrompt }] },
     }),
@@ -180,4 +181,17 @@ export interface VapiCreditInfo {
 export async function getVapiCredit(): Promise<VapiCreditInfo> {
   // Vapi REST API'si kredi/abonelik sorgusunu desteklemiyor; dashboard linki döndür.
   return { ok: false, error: 'dashboard', link: 'https://dashboard.vapi.ai' };
+}
+
+// Admin panelden girilen VAPI_API_KEY'i hemen doğrula — kaydetmeden önce test amaçlı
+export async function verifyVapiApiKey(apiKey: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const resp = await fetch(`${VAPI_BASE_URL}/assistant`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    if (!resp.ok) return { ok: false, error: `HTTP ${resp.status}` };
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
 }

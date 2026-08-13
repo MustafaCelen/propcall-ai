@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import path from 'path';
 import dotenv from 'dotenv';
 
@@ -8,7 +9,7 @@ dotenv.config();
 import { initDb } from './db';
 import pool from './db';
 import { generateCallSummary } from './ai';
-import { createVapiCall, endVapiCall, getVapiCredit, getAssistantSystemPrompt, updateAssistantSystemPrompt, getSignedRecordingUrl } from './vapi';
+import { createVapiCall, endVapiCall, getVapiCredit, getAssistantSystemPrompt, updateAssistantSystemPrompt, getSignedRecordingUrl, verifyVapiApiKey } from './vapi';
 import { getElevenLabsCredit } from './elevenlabs';
 import { getAllAppointments, saveAppointment, deleteAppointment } from './appointments';
 import { getAllScenarios, getScenario, createScenario, updateScenario, deleteScenario } from './scenarios';
@@ -23,14 +24,67 @@ import {
   campaignLoad, campaignStart, campaignResume, campaignPause, campaignStop, campaignClear,
   onCampaignCallEnded, onCampaignSummaryReady,
 } from './campaign';
+import { adminLogin, adminLogout, requireAdminAuth } from './admin-auth';
+import { SETTINGS_KEYS, SettingsKey, getSetting, setSetting, getSettingsForAdmin } from './settings';
 
 const app  = express();
 const PORT = process.env.PORT || 5000;
 const HOST = '0.0.0.0';
 
 app.use(cors());
+app.use(cookieParser());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
+
+// ─── ADMİN PANEL — API key yönetimi ───────────────────────────────────────────
+
+app.post('/api/admin/login',  adminLogin);
+app.post('/api/admin/logout', adminLogout);
+
+app.get('/api/admin/session', requireAdminAuth, (_req: Request, res: Response) => {
+  res.json({ success: true });
+});
+
+app.get('/api/admin/settings', requireAdminAuth, async (_req: Request, res: Response) => {
+  try {
+    const data = await getSettingsForAdmin();
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+app.put('/api/admin/settings', requireAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const { key, value } = req.body as { key: SettingsKey; value: string };
+    if (!SETTINGS_KEYS.includes(key)) {
+      return res.status(400).json({ success: false, error: 'Geçersiz anahtar' });
+    }
+    if (typeof value !== 'string' || !value.trim()) {
+      return res.status(400).json({ success: false, error: 'Değer boş olamaz' });
+    }
+    await setSetting(key, value.trim());
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+// Kaydetmeden önce Vapi key'ini hızlıca doğrula
+app.post('/api/admin/settings/verify-vapi', requireAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const { value } = req.body as { value: string };
+    if (!value?.trim()) return res.status(400).json({ success: false, error: 'Değer boş olamaz' });
+    const result = await verifyVapiApiKey(value.trim());
+    return res.json({ success: result.ok, error: result.error });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+app.get('/admin', (_req: Request, res: Response) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'admin.html'));
+});
 
 // ─── SSE ─────────────────────────────────────────────────────────────────────
 
@@ -668,11 +722,15 @@ initDb()
   .then(async () => {
     initCampaignRunner(broadcast);
     await loadCampaignFromDb();
+    const [anthropicKey, vapiKey] = await Promise.all([
+      getSetting('ANTHROPIC_API_KEY'),
+      getSetting('VAPI_API_KEY'),
+    ]);
     app.listen(Number(PORT), HOST, () => {
       console.log(`\n✅ PropCall AI sunucusu başlatıldı`);
       console.log(`   → http://${HOST}:${PORT}`);
-      console.log(`   → Anthropic: ${process.env.ANTHROPIC_API_KEY ? '✓' : '✗'}`);
-      console.log(`   → Vapi:      ${process.env.VAPI_API_KEY ? '✓' : '✗'}`);
+      console.log(`   → Anthropic: ${anthropicKey ? '✓' : '✗ (Admin panelden ekleyin: /admin)'}`);
+      console.log(`   → Vapi:      ${vapiKey ? '✓' : '✗ (Admin panelden ekleyin: /admin)'}`);
       console.log(`   → Database:  ${process.env.DATABASE_URL ? '✓' : '✗'}\n`);
     });
   })

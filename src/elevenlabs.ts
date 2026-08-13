@@ -1,5 +1,7 @@
 // ElevenLabs abonelik / karakter kotası bilgisi
 
+import { getSetting } from './settings';
+
 const ELEVENLABS_BASE = 'https://api.elevenlabs.io';
 
 export interface ElevenLabsCreditInfo {
@@ -13,7 +15,7 @@ export interface ElevenLabsCreditInfo {
 }
 
 export async function getElevenLabsCredit(): Promise<ElevenLabsCreditInfo> {
-  const key = process.env.ELEVENLABS_API_KEY;
+  const key = await getSetting('ELEVENLABS_API_KEY');
   if (!key) return { ok: false, error: 'ELEVENLABS_API_KEY yok' };
   try {
     const resp = await fetch(`${ELEVENLABS_BASE}/v1/user/subscription`, {

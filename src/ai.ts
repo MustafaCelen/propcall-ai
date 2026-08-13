@@ -2,16 +2,22 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { CustomerInfo, CallSummary } from './types';
+import { getSetting } from './settings';
 
-const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
+// Client her çağrıda taze key ile yaratılır — admin panelden key değişse bile
+// restart gerekmeden bir sonraki özet yeni key'i kullanır.
+async function getClient(): Promise<Anthropic> {
+  const apiKey = await getSetting('ANTHROPIC_API_KEY');
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY tanımlanmamış (Admin panelden veya .env ile ekleyin)');
+  return new Anthropic({ apiKey });
+}
 
 export async function generateCallSummary(
   customer: CustomerInfo,
   history: Array<{ role: 'assistant' | 'user'; content: string }>,
   scenarioPrompt?: string | null,
 ): Promise<CallSummary> {
+  const client = await getClient();
   const conversationText = history
     .map((m) => `${m.role === 'assistant' ? 'Asistan' : 'Müşteri'}: ${m.content}`)
     .join('\n\n');

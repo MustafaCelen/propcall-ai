@@ -47,6 +47,20 @@ export async function initDb(): Promise<void> {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
 
+    -- Admin panelden girilen API key'leri (şifreli) — .env yerine canlı override
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key        TEXT PRIMARY KEY,
+      value_enc  TEXT NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    -- Admin panel için basit şifre-korumalı oturum
+    CREATE TABLE IF NOT EXISTS admin_sessions (
+      id         TEXT PRIMARY KEY,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
     CREATE INDEX IF NOT EXISTS idx_calls_start_time      ON calls (start_time DESC NULLS LAST);
     CREATE INDEX IF NOT EXISTS idx_calls_status          ON calls (status);
     CREATE INDEX IF NOT EXISTS idx_calls_customer_phone  ON calls ((data ->> 'customerPhone'));
