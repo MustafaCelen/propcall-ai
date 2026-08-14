@@ -328,7 +328,7 @@ function initCallButtons() {
 async function startCall() {
   const name  = DOM.customerName.value.trim();
   const rawPhone = DOM.customerPhone.value.trim();
-  const phone = rawPhone && !rawPhone.startsWith('+') ? '+' + rawPhone : rawPhone;
+  const phone = cleanPhone(rawPhone);
   if (!name || !phone) {
     toast('Ad ve telefon zorunlu', 'error');
     return;
@@ -1801,14 +1801,28 @@ function onFileSelected(e) {
   e.target.value = '';
 }
 
-// Yaygın CSV/Excel formatlama karakterlerini (boşluk, tire, parantez, nokta) temizler
-// ve başına + ekler. Bunu yapmazsak "0532 123 45 67" gibi normal görünen bir numara
-// bile bozuk kaydedilip kampanya ortasında sessizce arama hatasına yol açabiliyordu.
+// Türkiye numaralarını hangi formatta girilirse girilsin (0532..., 532...,
+// 90532..., +90532... — boşluklu/tireli fark etmez) doğru +90XXXXXXXXXX
+// formatına çevirir. Tanınmayan (yabancı/eksik haneli) girişlerde elimizdeki
+// en iyi tahminle + ekleyip bırakır — isValidPhone sonrasında geçersizse eler.
 function cleanPhone(raw) {
   let p = String(raw == null ? '' : raw).trim();
   p = p.replace(/[\s\-().]/g, '');
-  if (p && !p.startsWith('+')) p = '+' + p;
-  return p;
+  if (!p) return '';
+
+  // "00" uluslararası çevir öneki → +
+  if (p.startsWith('00')) p = '+' + p.slice(2);
+  if (p.startsWith('+')) return p; // zaten uluslararası formatta, dokunma
+
+  const digits = p.replace(/\D/g, '');
+  if (!digits) return '';
+
+  if (digits.startsWith('90') && digits.length === 12) return '+' + digits;       // 90532...
+  if (digits.startsWith('0')  && digits.length === 11) return '+90' + digits.slice(1); // 0532...
+  if (digits.length === 10) return '+90' + digits;                                 // 532...
+
+  // Türkiye kalıplarından hiçbirine uymadı — yabancı numara olabilir, olduğu gibi + ekle
+  return '+' + digits;
 }
 function isValidPhone(p) {
   return /^\+\d{10,15}$/.test(p);
