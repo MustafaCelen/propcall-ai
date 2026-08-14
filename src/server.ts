@@ -31,6 +31,7 @@ import { listCampaigns, getCampaign } from './campaigns';
 import { adminLogin, adminLogout, requireAdminAuth } from './admin-auth';
 import { SETTINGS_KEYS, SettingsKey, getSetting, setSetting, getSettingsForAdmin } from './settings';
 import { generateVapiPrompt, PromptGenInput } from './promptgen';
+import { simulateScenario } from './scenariotest';
 
 const app  = express();
 const PORT = process.env.PORT || 5000;
@@ -720,6 +721,21 @@ app.post('/api/prompt/generate', async (req: Request, res: Response) => {
     }
     const systemPrompt = await generateVapiPrompt(input);
     return res.json({ success: true, data: { systemPrompt } });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+// Bir sistem promptunu gerçek para harcamadan (Vapi araması yapmadan) test et —
+// Claude hem asistanı hem 3 farklı müşteri tepkisini simüle eder.
+app.post('/api/prompt/simulate', async (req: Request, res: Response) => {
+  try {
+    const { systemPrompt, customerName } = req.body as { systemPrompt: string; customerName?: string };
+    if (!systemPrompt?.trim()) {
+      return res.status(400).json({ success: false, error: 'Sistem promptu zorunlu' });
+    }
+    const scenarios = await simulateScenario(systemPrompt, customerName);
+    return res.json({ success: true, data: { scenarios } });
   } catch (err) {
     return res.status(500).json({ success: false, error: String(err) });
   }

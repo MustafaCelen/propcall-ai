@@ -679,3 +679,29 @@ mark.tr-highlight{background:rgba(0,200,150,.3);color:var(--tx);border-radius:2p
 .cd-bar-track{flex:1;height:8px;background:var(--s3);border-radius:4px;overflow:hidden}
 .cd-bar-fill{height:100%;border-radius:4px;background:var(--primary)}
 .cd-bar-count{width:36px;text-align:right;flex-shrink:0;font-family:'JetBrains Mono',monospace;color:var(--txm)}
+
+/* ── CSV İÇE AKTARMA SONUÇ RAPORU ── */
+.import-summary{margin:0 16px 12px;background:var(--s1);border:1px solid var(--border);border-radius:var(--rs);padding:10px 14px}
+.import-summary.has-issues{border-color:rgba(255,159,64,.35)}
+.is-headline{display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:12px}
+.is-ok{color:var(--primary);font-weight:600}
+.is-warn{color:var(--orange);font-weight:600;cursor:pointer;text-decoration:underline;text-decoration-style:dotted}
+.is-dismiss{margin-left:auto;background:none;border:none;color:var(--txm);cursor:pointer;font-size:14px;padding:2px 6px}
+.is-dismiss:hover{color:var(--tx)}
+.is-details{margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:none;max-height:160px;overflow-y:auto}
+.is-details.open{display:block}
+.is-row{display:flex;gap:10px;font-size:11px;padding:3px 0;color:var(--tx2)}
+.is-row-num{width:28px;flex-shrink:0;color:var(--txm)}
+.is-row-name{width:140px;flex-shrink:0;color:var(--tx)}
+.is-row-reason{color:var(--orange)}
+
+/* ── SENARYO TEST ÖNİZLEME ── */
+#scenarioTestModal{width:640px;max-height:85vh}
+.st-scenario-group{margin-bottom:22px}
+.st-scenario-group:last-child{margin-bottom:0}
+.st-scenario-title{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+.st-tag{padding:2px 9px;border-radius:20px;font-size:10px;font-weight:700}
+.st-tag.st-olumlu{background:rgba(0,200,150,.15);color:var(--primary)}
+.st-tag.st-olumsuz{background:rgba(255,83,112,.15);color:var(--red)}
+.st-tag.st-kararsiz{background:rgba(255,208,96,.15);color:var(--yellow)}
+.st-transcript{display:flex;flex-direction:column;gap:9px}

@@ -1801,6 +1801,19 @@ function onFileSelected(e) {
   e.target.value = '';
 }
 
+// Yaygın CSV/Excel formatlama karakterlerini (boşluk, tire, parantez, nokta) temizler
+// ve başına + ekler. Bunu yapmazsak "0532 123 45 67" gibi normal görünen bir numara
+// bile bozuk kaydedilip kampanya ortasında sessizce arama hatasına yol açabiliyordu.
+function cleanPhone(raw) {
+  let p = String(raw == null ? '' : raw).trim();
+  p = p.replace(/[\s\-().]/g, '');
+  if (p && !p.startsWith('+')) p = '+' + p;
+  return p;
+}
+function isValidPhone(p) {
+  return /^\+\d{10,15}$/.test(p);
+}
+
 function parseContacts(rows) {
   if (!rows.length) { toast('Dosya boş', 'error'); return; }
 
@@ -1825,12 +1838,30 @@ function parseContacts(rows) {
   campaign.running  = false;
   campaign.paused   = false;
 
+  const seenPhones = new Set();
+  const skipped = []; // { row, name, reason }
+
   for (let i = dataStart; i < rows.length; i++) {
-    const row   = rows[i];
-    const rawPhone = String(row[colPhone] || '').trim();
-    const phone    = rawPhone && !rawPhone.startsWith('+') ? '+' + rawPhone : rawPhone;
-    const name     = String(row[colName]  || '').trim() || ('Kişi ' + (i - dataStart + 1));
-    if (!phone) continue;
+    const row      = rows[i];
+    const rawPhone = row[colPhone];
+    const phone    = cleanPhone(rawPhone);
+    const name     = String(row[colName] || '').trim() || ('Kişi ' + (i - dataStart + 1));
+    const rowNum   = i + 1; // 1-tabanlı, kullanıcının Excel'de gördüğü satır numarasına yakın
+
+    if (!phone) {
+      skipped.push({ row: rowNum, name, reason: 'Telefon boş' });
+      continue;
+    }
+    if (!isValidPhone(phone)) {
+      skipped.push({ row: rowNum, name, reason: 'Geçersiz numara formatı (' + esc(String(rawPhone || '')) + ')' });
+      continue;
+    }
+    if (seenPhones.has(phone)) {
+      skipped.push({ row: rowNum, name, reason: 'Mükerrer — bu numara listede zaten var' });
+      continue;
+    }
+    seenPhones.add(phone);
+
     campaign.contacts.push({
       name,
       phone,
@@ -1842,12 +1873,55 @@ function parseContacts(rows) {
     });
   }
 
+  renderImportSummary(campaign.contacts.length, skipped);
+
   if (!campaign.contacts.length) { toast('Geçerli telefon bulunamadı', 'error'); return; }
 
-  toast(campaign.contacts.length + ' kişi yüklendi', 'success');
+  toast(campaign.contacts.length + ' kişi yüklendi' + (skipped.length ? ' (' + skipped.length + ' atlandı)' : ''),
+    skipped.length ? 'info' : 'success');
   $('btnCampaignStart').disabled = false;
   $('campaignProgressBar').style.display = 'none';
   renderCampaignTable();
+}
+
+function renderImportSummary(loadedCount, skipped) {
+  const el = $('campaignImportSummary');
+  if (!el) return;
+
+  if (loadedCount === 0 && skipped.length === 0) {
+    el.style.display = 'none';
+    return;
+  }
+
+  el.style.display = 'block';
+  el.classList.toggle('has-issues', skipped.length > 0);
+
+  const warnHtml = skipped.length
+    ? '<span class="is-warn" id="isToggleDetails">⚠️ ' + skipped.length + ' kayıt atlandı — detay göster</span>'
+    : '';
+
+  el.innerHTML =
+    '<div class="is-headline">' +
+      '<span class="is-ok">✓ ' + loadedCount + ' kişi yüklendi</span>' +
+      warnHtml +
+      '<button class="is-dismiss" id="isDismiss" title="Kapat">✕</button>' +
+    '</div>' +
+    (skipped.length
+      ? '<div class="is-details" id="isDetails">' +
+          skipped.map(s =>
+            '<div class="is-row">' +
+              '<span class="is-row-num">#' + s.row + '</span>' +
+              '<span class="is-row-name">' + esc(s.name) + '</span>' +
+              '<span class="is-row-reason">' + s.reason + '</span>' +
+            '</div>'
+          ).join('') +
+        '</div>'
+      : '');
+
+  const toggle = $('isToggleDetails');
+  if (toggle) toggle.addEventListener('click', () => $('isDetails').classList.toggle('open'));
+  const dismiss = $('isDismiss');
+  if (dismiss) dismiss.addEventListener('click', () => { el.style.display = 'none'; });
 }
 
 async function loadCampaignState() {
@@ -2247,6 +2321,7 @@ function initScenarios() {
   $('btnVlpReload').addEventListener('click', loadVapiLivePrompt);
   $('btnVlpSave').addEventListener('click', saveVapiLivePrompt);
   initPromptGenerator();
+  initScenarioTest();
   loadScenarios();
 }
 
@@ -2277,6 +2352,69 @@ function closePromptGenModal() {
   $('promptGenModal').classList.remove('open');
   $('promptGenOverlay').classList.remove('visible');
   promptGenTargetId = null;
+}
+
+// ─── SENARYO TEST ÖNİZLEME — para harcamadan örnek diyalog ─────────────────
+
+function initScenarioTest() {
+  document.querySelectorAll('[data-scenariotest-target]').forEach(btn => {
+    btn.addEventListener('click', () => runScenarioTest(btn.dataset.scenariotestTarget));
+  });
+  $('scenarioTestClose').addEventListener('click', closeScenarioTestModal);
+  $('scenarioTestOverlay').addEventListener('click', closeScenarioTestModal);
+}
+
+function closeScenarioTestModal() {
+  $('scenarioTestModal').classList.remove('open');
+  $('scenarioTestOverlay').classList.remove('visible');
+}
+
+async function runScenarioTest(targetTextareaId) {
+  const ta = $(targetTextareaId);
+  const systemPrompt = ta ? ta.value.trim() : '';
+  if (!systemPrompt) {
+    toast('Önce bir prompt yazın veya oluşturun', 'error');
+    return;
+  }
+
+  $('scenarioTestModal').classList.add('open');
+  $('scenarioTestOverlay').classList.add('visible');
+  $('scenarioTestBody').innerHTML = '<div class="drawer-loading">⏳ 3 örnek diyalog oluşturuluyor (biraz sürebilir)...</div>';
+
+  try {
+    const r = await fetch('/api/prompt/simulate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ systemPrompt }),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    renderScenarioTestResult(j.data.scenarios);
+  } catch (err) {
+    $('scenarioTestBody').innerHTML = '<div class="drawer-error">Hata: ' + err.message + '</div>';
+  }
+}
+
+const ST_TAG_CLASS = { 'Olumlu': 'st-olumlu', 'Olumsuz': 'st-olumsuz', 'Kararsız': 'st-kararsiz' };
+
+function renderScenarioTestResult(scenarios) {
+  $('scenarioTestBody').innerHTML = scenarios.map(sc => {
+    const tagCls = ST_TAG_CLASS[sc.label] || 'st-kararsiz';
+    const bubbles = (sc.transcript || []).map(t => {
+      const isAgent = t.role === 'assistant';
+      return '<div class="dtf-row ' + (isAgent ? 'agent' : 'user') + '">' +
+        '<div class="dtf-who">' + (isAgent ? '🤖 Asistan' : '👤 Müşteri') + '</div>' +
+        '<div class="dtf-bubble">' + esc(t.text) + '</div>' +
+      '</div>';
+    }).join('');
+    return '<div class="st-scenario-group">' +
+      '<div class="st-scenario-title">' +
+        '<span class="st-tag ' + tagCls + '">' + esc(sc.label) + '</span>' +
+        '<span>Müşteri Tepkisi</span>' +
+      '</div>' +
+      '<div class="st-transcript">' + bubbles + '</div>' +
+    '</div>';
+  }).join('');
 }
 
 async function runPromptGenerate() {
