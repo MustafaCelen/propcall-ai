@@ -506,14 +506,49 @@ app.get('/api/followup', async (_req: Request, res: Response) => {
       (ilgiRank[b.summary?.ilgi_seviyesi ?? 'yok'] ?? 0) -
       (ilgiRank[a.summary?.ilgi_seviyesi ?? 'yok'] ?? 0);
 
+    const manuelTakip     = manuelRes.rows.map(r => r.data).sort(byIlgi);
+    const geriAranacaklar = geriRes.rows.map(r => r.data).sort(byIlgi);
+    const cevapsizilar    = cevapsiziRes.rows.map(r => ({ ...r.data, retryCount: Number(r.retry_count) }));
+
+    // "Bugün kimi aramalıyım" — üç ayrı listeyi (manuel/sıcak lead/cevapsız) TEK,
+    // şeffaf skorlu sıralamada birleştirir. Skor sebep-görünür: kaynak ağırlığı +
+    // ilgi seviyesi + (cevapsızlarda) deneme sayısı cezası. Aynı kişi (telefon)
+    // birden fazla listede geçebilir — en yüksek skorlu görünümü tutulur.
+    function priorityScore(c: any, source: string): number {
+      let score = source === 'manuel' ? 100 : source === 'ara' ? 70 : 40;
+      const ilgi = c.summary?.ilgi_seviyesi;
+      if (ilgi === 'yüksek') score += 15;
+      else if (ilgi === 'orta') score += 10;
+      else if (ilgi === 'düşük') score += 5;
+      if (source === 'cevapsiz' && c.retryCount) score -= Math.min(15, (c.retryCount - 1) * 5);
+      return score;
+    }
+
+    const priorityCandidates = [
+      ...manuelTakip.map(c => ({ c, source: 'manuel', label: 'Manuel Takip' })),
+      ...geriAranacaklar.map(c => ({ c, source: 'ara', label: 'Sıcak Lead' })),
+      ...cevapsizilar.map(c => ({ c, source: 'cevapsiz', label: (c as any).status === 'meşgul' ? 'Meşgul' : 'Cevapsız' })),
+    ];
+
+    const byPhone = new Map<string, any>();
+    for (const { c, source, label } of priorityCandidates) {
+      const score = priorityScore(c, source);
+      const existing = byPhone.get(c.customerPhone);
+      if (!existing || score > existing._priorityScore) {
+        byPhone.set(c.customerPhone, { ...c, _prioritySource: source, _priorityLabel: label, _priorityScore: score });
+      }
+    }
+    const oncelikliListe = Array.from(byPhone.values()).sort((a, b) => b._priorityScore - a._priorityScore);
+
     return res.json({
       success: true,
       data: {
         randevuAlanlar:  randevuRes.rows.map(r => r.data),
-        geriAranacaklar: geriRes.rows.map(r => r.data).sort(byIlgi),
+        geriAranacaklar,
         beklemeListesi:  beklemeRes.rows.map(r => r.data).sort(byIlgi),
-        manuelTakip:     manuelRes.rows.map(r => r.data).sort(byIlgi),
-        cevapsizilar:    cevapsiziRes.rows.map(r => ({ ...r.data, retryCount: Number(r.retry_count) })),
+        manuelTakip,
+        cevapsizilar,
+        oncelikliListe,
       },
     });
   } catch (err) {

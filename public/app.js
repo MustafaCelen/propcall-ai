@@ -1387,10 +1387,9 @@ async function loadFollowupBadge() {
     const json = await resp.json();
     if (!json.success) return;
     const d = json.data;
-    const total = (d.geriAranacaklar || []).length
-                + (d.beklemeListesi || []).length
-                + (d.cevapsizilar || []).length
-                + (d.manuelTakip || []).length;
+    // oncelikliListe zaten manuel+ara+cevapsız'ı kişi bazında tekilleştirilmiş halde
+    // içeriyor; beklemeListesi ayrı bir kategori (henüz aranmayacaklar) olduğu için ekleniyor.
+    const total = (d.oncelikliListe || []).length + (d.beklemeListesi || []).length;
     const badge = $('followupBadge');
     if (badge) {
       badge.textContent = total;
@@ -1487,6 +1486,16 @@ function renderFollowup(d) {
 
   const sections = [
     {
+      key: 'oncelikliListe',
+      icon: '🎯',
+      title: 'Bugünün Önceliği — Kimi Aramalıyım',
+      color: 'oncelik',
+      emptyMsg: 'Öncelikli kimse yok — harika!',
+      items: d.oncelikliListe || [],
+      customCard: priorityCard,
+      bulk: true,
+    },
+    {
       key: 'cevapsizilar',
       icon: '📵',
       title: 'Cevapsız — Tekrar Ara',
@@ -1533,11 +1542,13 @@ function renderFollowup(d) {
     },
   ];
 
-  // Toplam sayaç
+  // Toplam sayaç — oncelikliListe diğer kategorilerle örtüştüğü (aynı kişi birden
+  // fazla listede olabilir) için toplama dahil edilmez, sadece kendi rozetinde görünür.
   const sumEl = $('followupSummary');
   if (sumEl) {
-    const total = sections.reduce((s, sec) => s + sec.items.length, 0);
-    sumEl.textContent = total + ' kişi · ' + sections.map(s => s.title.split('—')[0].trim() + ': ' + s.items.length).join(' · ');
+    const countable = sections.filter(s => s.key !== 'oncelikliListe');
+    const total = countable.reduce((s, sec) => s + sec.items.length, 0);
+    sumEl.textContent = total + ' kişi · ' + countable.map(s => s.title.split('—')[0].trim() + ': ' + s.items.length).join(' · ');
   }
 
   layout.innerHTML = sections.map(sec => {
@@ -1681,6 +1692,42 @@ function followupCard(c, colorClass, opts) {
         'data-region="' + esc((c.customerInfo && c.customerInfo.region) || '') + '">📞 Ara</button>' +
       '<button class="fu-detail-btn" data-id="' + c.vapiCallId + '">Detay</button>' +
       unfollowBtn +
+    '</div>' +
+  '</div>';
+}
+
+const PRIORITY_SOURCE_CLS = { manuel: 'pr-manuel', ara: 'pr-ara', cevapsiz: 'pr-cevapsiz' };
+
+// Birleşik öncelik listesi kartı — kaynak (manuel/sıcak lead/cevapsız) + ilgi +
+// deneme sayısı gibi skor bileşenlerini şeffaf rozetler olarak gösterir,
+// kullanıcı "neden bu sırada" sorusuna kartın üzerinden cevap bulabilsin.
+function priorityCard(c) {
+  const ago  = timeSince(c.startTime);
+  const ilgi = c.summary ? c.summary.ilgi_seviyesi : null;
+  const ilgiCls = ilgi === 'yüksek' ? 'heat-hot' : ilgi === 'orta' ? 'heat-warm' : ilgi === 'düşük' ? 'heat-mid' : 'heat-cold';
+  const note = c.summary ? c.summary.geri_donus_notu : null;
+  const srcCls = PRIORITY_SOURCE_CLS[c._prioritySource] || 'pr-cevapsiz';
+  const retryBadge = c._prioritySource === 'cevapsiz' && c.retryCount
+    ? '<span class="ctag ct-miss" title="Deneme sayısı">' + c.retryCount + 'x</span>' : '';
+
+  return '<div class="fu-row fu-oncelik">' +
+    '<div class="fu-row-heat ' + ilgiCls + '" title="İlgi: ' + (ilgi || '—') + '">' + (ilgi ? ilgi.slice(0,3) : '—') + '</div>' +
+    '<div class="fu-row-main">' +
+      '<div class="fu-row-line1">' +
+        '<span class="pr-src-badge ' + srcCls + '">' + esc(c._priorityLabel || '') + '</span>' +
+        '<span class="fu-name">' + esc(c.customerName) + '</span>' +
+        '<span class="fu-phone">' + esc(c.customerPhone) + '</span>' +
+        retryBadge +
+        '<span class="fu-ago">' + ago + '</span>' +
+      '</div>' +
+      (note ? '<div class="fu-row-note">💡 ' + esc(note) + '</div>' : '') +
+    '</div>' +
+    '<div class="fu-row-actions">' +
+      '<button class="fu-call-btn" data-id="' + c.vapiCallId + '" ' +
+        'data-name="' + esc(c.customerName) + '" ' +
+        'data-phone="' + esc(c.customerPhone) + '" ' +
+        'data-region="' + esc((c.customerInfo && c.customerInfo.region) || '') + '">📞 Ara</button>' +
+      '<button class="fu-detail-btn" data-id="' + c.vapiCallId + '">Detay</button>' +
     '</div>' +
   '</div>';
 }
