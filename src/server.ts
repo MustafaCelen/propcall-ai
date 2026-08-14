@@ -19,7 +19,7 @@ import { getAllScenarios, getScenario, createScenario, updateScenario, deleteSce
 import {
   getAllCalls, readCall, createCall, updateCall,
   appendTranscript, updateCosts, saveCallSummary,
-  endedReasonToStatus, getStats, exportCSV, getCampaignStats,
+  endedReasonToStatus, getStats, exportCSV, getCampaignStats, reconcileStaleCalls,
 } from './calls';
 import { VapiCallRequest, VapiWebhookPayload, VapiCostItem, CallFilters, CallRecord } from './types';
 import {
@@ -826,6 +826,10 @@ initDb()
   .then(async () => {
     initCampaignRunner(broadcast);
     await loadCampaignFromDb();
+    const staleCount = await reconcileStaleCalls();
+    if (staleCount > 0) {
+      console.log(`[Reconcile] ${staleCount} eski "in-progress" arama "failed" olarak kapatıldı (webhook gelmemişti)`);
+    }
     const [anthropicKey, vapiKey] = await Promise.all([
       getSetting('ANTHROPIC_API_KEY'),
       getSetting('VAPI_API_KEY'),

@@ -295,7 +295,7 @@ async function onCampaignComplete(): Promise<void> {
   console.log(`[Campaign] "${state.name}" tamamlandı — ${randevu}/${state.contacts.length} randevu`);
 }
 
-function fillQueue(): void {
+async function fillQueue(): Promise<void> {
   if (!state.running || state.paused) return;
 
   const startIdx = state.startFromIndex ?? 0;
@@ -305,7 +305,10 @@ function fillQueue(): void {
   if (state.answeredLimit && state.answeredLimit > 0 && answered >= state.answeredLimit) {
     let changed = false;
     state.contacts.forEach(c => { if (c.status === 'bekliyor') { c.status = 'başarısız'; changed = true; } });
-    if (active === 0) { if (changed) void persistContacts(); void onCampaignComplete(); }
+    // Sıraya alma/tamamlama yazımı önceden "fire-and-forget" idi (void ile) — sunucu
+    // tam bu anda yeniden başlarsa (örn. dev respawn) yazım tamamlanmadan kaybolabiliyordu,
+    // DB'de bir adım geride kalmış görünüp "sayı azaldı" hissi yaratıyordu. Artık await'li.
+    if (active === 0) { if (changed) await persistContacts(); await onCampaignComplete(); }
     return;
   }
 
@@ -314,7 +317,7 @@ function fillQueue(): void {
     if (dialed >= state.callLimit) {
       let changed = false;
       state.contacts.forEach(c => { if (c.status === 'bekliyor') { c.status = 'başarısız'; changed = true; } });
-      if (active === 0) { if (changed) void persistContacts(); void onCampaignComplete(); }
+      if (active === 0) { if (changed) await persistContacts(); await onCampaignComplete(); }
       return;
     }
   }

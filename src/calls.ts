@@ -22,6 +22,22 @@ export async function readCall(vapiCallId: string): Promise<CallRecord | null> {
   return rows[0]?.data ?? null;
 }
 
+// Sunucu her başladığında çağrılır: bir çökme/restart/tünel kopması yüzünden
+// end-of-call-report webhook'u hiç gelmemiş, sonsuza kadar "in-progress"
+// görünen eski aramaları 'failed' olarak kapatır. Bunlar İstatistikler'de
+// totalCalls'ı şişirip answerRate'i hayalet kayıtlarla düşürüyordu.
+export async function reconcileStaleCalls(olderThanMinutes = 30): Promise<number> {
+  const { rowCount } = await pool.query(
+    `UPDATE calls
+     SET status = 'failed',
+         data = jsonb_set(jsonb_set(data, '{status}', '"failed"'), '{endedReason}', '"stale-no-webhook-received"')
+     WHERE status = 'in-progress'
+       AND start_time < NOW() - ($1 || ' minutes')::interval`,
+    [olderThanMinutes],
+  );
+  return rowCount ?? 0;
+}
+
 export async function getAllCalls(filters?: CallFilters): Promise<CallRecord[]> {
   const { rows } = await pool.query(
     'SELECT data FROM calls ORDER BY start_time DESC NULLS LAST',
