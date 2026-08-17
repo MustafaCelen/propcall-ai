@@ -708,3 +708,10 @@ mark.tr-highlight{background:rgba(0,200,150,.3);color:var(--tx);border-radius:2p
 .st-tag.st-olumsuz{background:rgba(255,83,112,.15);color:var(--red)}
 .st-tag.st-kararsiz{background:rgba(255,208,96,.15);color:var(--yellow)}
 .st-transcript{display:flex;flex-direction:column;gap:9px}
+
+/* ── AI PROMPT GENERATOR — mod toggle ── */
+.pg-mode-toggle{display:flex;gap:6px;margin-bottom:16px;background:var(--s2);padding:4px;border-radius:10px}
+.pg-mode-btn{flex:1;padding:8px 12px;background:none;border:none;border-radius:7px;color:var(--tx2);font-family:'Sora',sans-serif;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
+.pg-mode-btn:hover{color:var(--tx)}
+.pg-mode-btn.active{background:var(--primary);color:#000}
+#pgRawText{font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.6}

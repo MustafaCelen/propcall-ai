@@ -716,8 +716,9 @@ app.put('/api/vapi/assistant-prompt', async (req, res) => {
 app.post('/api/prompt/generate', async (req: Request, res: Response) => {
   try {
     const input = req.body as PromptGenInput;
-    if (!input.companyName?.trim() || !input.callGoal?.trim()) {
-      return res.status(400).json({ success: false, error: 'Şirket/marka adı ve aramanın amacı zorunlu' });
+    const hasRaw = !!input.rawText?.trim();
+    if (!hasRaw && (!input.companyName?.trim() || !input.callGoal?.trim())) {
+      return res.status(400).json({ success: false, error: 'Şirket/marka adı ve aramanın amacı zorunlu (veya serbest metin girin)' });
     }
     const systemPrompt = await generateVapiPrompt(input);
     return res.json({ success: true, data: { systemPrompt } });

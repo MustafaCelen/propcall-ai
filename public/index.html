@@ -599,30 +599,45 @@
     <button class="modal-close" id="promptGenClose">✕</button>
   </div>
   <div class="modal-body">
-    <div class="form-group">
-      <label>Şirket / Marka <span class="label-hint">zorunlu</span></label>
-      <input type="text" id="pgCompanyName" placeholder="Keller Williams Gayrimenkul" />
+    <div class="pg-mode-toggle">
+      <button class="pg-mode-btn active" id="pgModeStructured" data-mode="structured">📋 Adım Adım</button>
+      <button class="pg-mode-btn" id="pgModeRaw" data-mode="raw">📝 Kendi Metnimi Yapıştır</button>
     </div>
-    <div class="form-group">
-      <label>Aramanın Amacı <span class="label-hint">zorunlu</span></label>
-      <textarea id="pgCallGoal" rows="2" placeholder="Geçmişte ilgi göstermiş kişileri işe alım görüşmesine yeniden davet etmek"></textarea>
+
+    <div id="pgStructuredFields">
+      <div class="form-group">
+        <label>Şirket / Marka <span class="label-hint">zorunlu</span></label>
+        <input type="text" id="pgCompanyName" placeholder="Keller Williams Gayrimenkul" />
+      </div>
+      <div class="form-group">
+        <label>Aramanın Amacı <span class="label-hint">zorunlu</span></label>
+        <textarea id="pgCallGoal" rows="2" placeholder="Geçmişte ilgi göstermiş kişileri işe alım görüşmesine yeniden davet etmek"></textarea>
+      </div>
+      <div class="form-group">
+        <label>Teklif Edilen Şey <span class="label-hint">opsiyonel</span></label>
+        <input type="text" id="pgOfferDetails" placeholder="Ücretsiz gayrimenkul değerleme / Kariyer fırsatı" />
+      </div>
+      <div class="form-group">
+        <label>Konuşma Tonu <span class="label-hint">opsiyonel</span></label>
+        <input type="text" id="pgTone" placeholder="Sıcak, güven verici, baskıcı olmayan" />
+      </div>
+      <div class="form-group">
+        <label>Detaylar İçin Yönlendirilecek Kişi <span class="label-hint">opsiyonel</span></label>
+        <input type="text" id="pgContactPerson" placeholder="Yeşim Hanım" />
+      </div>
+      <div class="form-group">
+        <label>Maks. Görüşme Süresi (saniye) <span class="label-hint">opsiyonel</span></label>
+        <input type="number" id="pgMaxDuration" placeholder="120" min="30" max="600" />
+      </div>
     </div>
-    <div class="form-group">
-      <label>Teklif Edilen Şey <span class="label-hint">opsiyonel</span></label>
-      <input type="text" id="pgOfferDetails" placeholder="Ücretsiz gayrimenkul değerleme / Kariyer fırsatı" />
+
+    <div id="pgRawFields" style="display:none">
+      <div class="form-group">
+        <label>Taslak / Script / Örnek Konuşma <span class="label-hint">zorunlu</span></label>
+        <textarea id="pgRawText" rows="12" placeholder="Elinizdeki metni buraya yapıştırın — açılış cümlesi, örnek diyalog, akış notları, ne varsa. AI bunu düzenli bir Vapi promptuna (Identity/Style/Task&Goals/vb.) dönüştürüp içeriğinizi olabildiğince koruyacak."></textarea>
+      </div>
     </div>
-    <div class="form-group">
-      <label>Konuşma Tonu <span class="label-hint">opsiyonel</span></label>
-      <input type="text" id="pgTone" placeholder="Sıcak, güven verici, baskıcı olmayan" />
-    </div>
-    <div class="form-group">
-      <label>Detaylar İçin Yönlendirilecek Kişi <span class="label-hint">opsiyonel</span></label>
-      <input type="text" id="pgContactPerson" placeholder="Yeşim Hanım" />
-    </div>
-    <div class="form-group">
-      <label>Maks. Görüşme Süresi (saniye) <span class="label-hint">opsiyonel</span></label>
-      <input type="number" id="pgMaxDuration" placeholder="120" min="30" max="600" />
-    </div>
+
     <div class="form-group">
       <label>Ek Notlar / Kurallar <span class="label-hint">opsiyonel</span></label>
       <textarea id="pgNotes" rows="2" placeholder="Fiyat konusunda söz verme, hafta sonu aramaları önerme..."></textarea>

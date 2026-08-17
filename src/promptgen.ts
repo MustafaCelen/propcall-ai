@@ -8,13 +8,17 @@ import Anthropic from '@anthropic-ai/sdk';
 import { getSetting } from './settings';
 
 export interface PromptGenInput {
-  companyName: string;          // örn. "Keller Williams Gayrimenkul"
-  callGoal: string;             // örn. "Geçmişte ilgi göstermiş kişileri işe alım görüşmesine davet etmek"
+  companyName?: string;         // örn. "Keller Williams Gayrimenkul" — rawText modunda zorunlu değil
+  callGoal?: string;            // örn. "Geçmişte ilgi göstermiş kişileri işe alım görüşmesine davet etmek"
   offerDetails?: string;        // örn. "Ücretsiz gayrimenkul değerleme" / "Kariyer fırsatı"
   tone?: string;                // örn. "Sıcak ama profesyonel, baskıcı değil"
   contactPersonName?: string;   // detaylar için yönlendirilecek kişi, varsa
   maxDurationSeconds?: number;  // örn. 120
   additionalNotes?: string;     // serbest metin, ekstra kurallar
+  // Doldurulursa, alan-alan girdiler yerine kullanıcının kendi taslağı/örnek
+  // scripti/konuşma akışı kaynak alınır — yapıya (bkz. sistem promptu) oturtulur,
+  // içerik/ton/açılış cümlesi olabildiğince korunur.
+  rawText?: string;
 }
 
 async function getClient(): Promise<Anthropic> {
@@ -26,6 +30,31 @@ async function getClient(): Promise<Anthropic> {
 export async function generateVapiPrompt(input: PromptGenInput): Promise<string> {
   const client = await getClient();
   const maxDuration = input.maxDurationSeconds || 120;
+
+  const userMessage = input.rawText?.trim()
+    ? `Kullanıcının elinde hazır bir taslak/script/örnek konuşma akışı var — aşağıda. Bunu KAYNAK
+alarak, yukarıdaki YAPIYA (Identity/Style/Response Guidelines/Task & Goals/Error Handling,
+dallanma, "Sonuç:" etiketleri) uygun, düzenli bir Vapi sistem promptu oluştur.
+
+Kullanıcının verdiği açılış cümlesini, tonu, akış mantığını ve somut detayları OLABİLDİĞİNCE
+KORU — sadece eksik kısımları (dallanma senaryoları, hata yönetimi, kapanış kuralları vb.)
+tamamla ve doğru yapıya oturt. Kullanıcının yazmadığı bir şeyi UYDURMA; eksikse makul bir
+varsayılan ekle ama taslağın özünü değiştirme.
+${input.additionalNotes ? `\nEk notlar/kurallar: ${input.additionalNotes}` : ''}
+
+Kullanıcının taslağı / scripti:
+"""
+${input.rawText.trim()}
+"""`
+    : `Aşağıdaki bilgilere göre bir Vapi sistem promptu oluştur:
+
+Şirket/Marka: ${input.companyName}
+Aramanın amacı: ${input.callGoal}
+${input.offerDetails ? `Teklif edilen şey: ${input.offerDetails}` : ''}
+${input.tone ? `Konuşma tonu: ${input.tone}` : 'Konuşma tonu: Sıcak, güven verici, baskıcı olmayan'}
+${input.contactPersonName ? `Detaylar için yönlendirilecek kişi: ${input.contactPersonName}` : ''}
+Maksimum görüşme süresi: ${maxDuration} saniye
+${input.additionalNotes ? `Ek notlar/kurallar: ${input.additionalNotes}` : ''}`;
 
   const response = await client.messages.create({
     model: 'claude-sonnet-4-5',
@@ -58,18 +87,7 @@ KURALLAR:
   aranmak istemiyor, konu dışına çıktı — her biri için kısa cevap + "Sonuç:" etiketi
 - Maksimum görüşme süresi olarak verilen saniyeyi kullan, sessizlik zaman aşımını 5 saniye olarak belirt
 - SADECE prompt metnini döndür — açıklama, giriş cümlesi, markdown code fence (\`\`\`) EKLEME`,
-    messages: [{
-      role: 'user',
-      content: `Aşağıdaki bilgilere göre bir Vapi sistem promptu oluştur:
-
-Şirket/Marka: ${input.companyName}
-Aramanın amacı: ${input.callGoal}
-${input.offerDetails ? `Teklif edilen şey: ${input.offerDetails}` : ''}
-${input.tone ? `Konuşma tonu: ${input.tone}` : 'Konuşma tonu: Sıcak, güven verici, baskıcı olmayan'}
-${input.contactPersonName ? `Detaylar için yönlendirilecek kişi: ${input.contactPersonName}` : ''}
-Maksimum görüşme süresi: ${maxDuration} saniye
-${input.additionalNotes ? `Ek notlar/kurallar: ${input.additionalNotes}` : ''}`,
-    }],
+    messages: [{ role: 'user', content: userMessage }],
   });
 
   const content = response.content[0];

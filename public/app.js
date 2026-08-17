@@ -2342,6 +2342,7 @@ function initScenarios() {
 // ─── AI PROMPT GENERATOR ───────────────────────────────────────────────────
 
 let promptGenTargetId = null;
+let promptGenMode = 'structured'; // 'structured' | 'raw'
 
 function initPromptGenerator() {
   document.querySelectorAll('[data-promptgen-target]').forEach(btn => {
@@ -2351,12 +2352,24 @@ function initPromptGenerator() {
   $('promptGenOverlay').addEventListener('click', closePromptGenModal);
   $('btnPgCancel').addEventListener('click', closePromptGenModal);
   $('btnPgGenerate').addEventListener('click', runPromptGenerate);
+
+  $('pgModeStructured').addEventListener('click', () => setPromptGenMode('structured'));
+  $('pgModeRaw').addEventListener('click', () => setPromptGenMode('raw'));
+}
+
+function setPromptGenMode(mode) {
+  promptGenMode = mode;
+  $('pgModeStructured').classList.toggle('active', mode === 'structured');
+  $('pgModeRaw').classList.toggle('active', mode === 'raw');
+  $('pgStructuredFields').style.display = mode === 'structured' ? 'block' : 'none';
+  $('pgRawFields').style.display = mode === 'raw' ? 'block' : 'none';
 }
 
 function openPromptGenModal(targetTextareaId) {
   promptGenTargetId = targetTextareaId;
-  ['pgCompanyName','pgCallGoal','pgOfferDetails','pgTone','pgContactPerson','pgMaxDuration','pgNotes']
+  ['pgCompanyName','pgCallGoal','pgOfferDetails','pgTone','pgContactPerson','pgMaxDuration','pgNotes','pgRawText']
     .forEach(id => { $(id).value = ''; });
+  setPromptGenMode('structured');
   $('promptGenModal').classList.add('open');
   $('promptGenOverlay').classList.add('visible');
   $('pgCompanyName').focus();
@@ -2432,19 +2445,26 @@ function renderScenarioTestResult(scenarios) {
 }
 
 async function runPromptGenerate() {
-  const companyName = $('pgCompanyName').value.trim();
-  const callGoal    = $('pgCallGoal').value.trim();
-  if (!companyName || !callGoal) {
-    toast('Şirket adı ve aramanın amacı zorunlu', 'error');
-    return;
-  }
+  let body;
 
-  const btn = $('btnPgGenerate');
-  btn.disabled = true;
-  btn.textContent = 'Oluşturuluyor...';
-
-  try {
-    const body = {
+  if (promptGenMode === 'raw') {
+    const rawText = $('pgRawText').value.trim();
+    if (!rawText) {
+      toast('Taslak/script metni boş olamaz', 'error');
+      return;
+    }
+    body = {
+      rawText,
+      additionalNotes: $('pgNotes').value.trim() || undefined,
+    };
+  } else {
+    const companyName = $('pgCompanyName').value.trim();
+    const callGoal    = $('pgCallGoal').value.trim();
+    if (!companyName || !callGoal) {
+      toast('Şirket adı ve aramanın amacı zorunlu', 'error');
+      return;
+    }
+    body = {
       companyName,
       callGoal,
       offerDetails: $('pgOfferDetails').value.trim() || undefined,
@@ -2453,6 +2473,13 @@ async function runPromptGenerate() {
       maxDurationSeconds: parseInt($('pgMaxDuration').value, 10) || undefined,
       additionalNotes: $('pgNotes').value.trim() || undefined,
     };
+  }
+
+  const btn = $('btnPgGenerate');
+  btn.disabled = true;
+  btn.textContent = 'Oluşturuluyor...';
+
+  try {
     const r = await fetch('/api/prompt/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
