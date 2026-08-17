@@ -2495,6 +2495,14 @@ async function loadVapiLivePrompt() {
 async function saveVapiLivePrompt() {
   const prompt = $('vlpPrompt').value.trim();
   if (!prompt) { toast('Prompt boş olamaz', 'error'); return; }
+  const sure = confirm(
+    'Bu, Vapi\'deki PAYLAŞILAN varsayılan promptu kalıcı olarak DEĞİŞTİRECEK.\n\n' +
+    'Senaryo seçilmeden yapılan TÜM aramalar bundan sonra bu yeni promptu kullanacak — ' +
+    'mevcut/eski prompt geri getirilemez şekilde kaybolacak.\n\n' +
+    'Sadece yeni bir senaryo denemek istiyorsanız bunun yerine "Yerel Senaryolar" bölümünü kullanın.\n\n' +
+    'Yine de devam etmek istiyor musunuz?'
+  );
+  if (!sure) return;
   const btn = $('btnVlpSave');
   btn.disabled = true;
   btn.textContent = 'Kaydediliyor...';

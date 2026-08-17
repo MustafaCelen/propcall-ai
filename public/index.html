@@ -552,9 +552,10 @@
         <span class="vlp-title">📡 Vapi'deki Canlı Asistan Promptu</span>
         <span class="vlp-name" id="vlpAssistantName"></span>
       </div>
-      <div class="vlp-hint">Bu prompt, senaryo seçilmeden yapılan tüm aramalarda kullanılır ve doğrudan Vapi'deki asistanı günceller.</div>
+      <div class="vlp-hint vlp-warn">⚠️ Bu, Vapi'deki PAYLAŞILAN varsayılan promptu değiştirir — senaryo seçilmeden yapılan
+        TÜM aramaları kalıcı olarak etkiler. Yeni bir senaryo denemek için burayı değil, aşağıdaki
+        "Yerel Senaryolar" bölümünü kullanın (Vapi'ye dokunmaz, güvenlidir).</div>
       <div class="scenario-form-actions" style="margin-bottom:8px">
-        <button class="btn-secondary" data-promptgen-target="vlpPrompt">✨ AI ile Oluştur</button>
         <button class="btn-secondary" data-scenariotest-target="vlpPrompt">🧪 Test Et (Örnek Diyalog)</button>
       </div>
       <textarea id="vlpPrompt" rows="8" placeholder="Yükleniyor..."></textarea>
@@ -564,7 +565,9 @@
       </div>
     </div>
 
-    <div class="modal-section-divider">Yerel Senaryolar</div>
+    <div class="modal-section-divider">Yerel Senaryolar <span class="ls-safe-tag">✓ Vapi'ye dokunmaz</span></div>
+    <div class="ls-hint">Burada oluşturduğunuz senaryolar sadece sizin sisteminizde saklanır. Bir senaryo seçip arama
+      yaptığınızda, o aramaya ÖZEL olarak kullanılır — Vapi'deki paylaşılan varsayılan prompt asla değişmez.</div>
     <div class="scenario-list" id="scenarioList"></div>
     <div class="scenario-form" id="scenarioForm">
       <input type="hidden" id="scenarioEditId"/>
