@@ -37,6 +37,7 @@ const DOM = {
   customerPhone:    $('customerPhone'),
   customerRegion:   $('customerRegion'),
   customerNotes:    $('customerNotes'),
+  customerReference:$('customerReference'),
   btnStartCall:     $('btnStartCall'),
   btnEndCall:       $('btnEndCall'),
   tabBtns:          $$('.tab-btn'),
@@ -361,6 +362,7 @@ async function startCall() {
           phone,
           region: DOM.customerRegion.value.trim(),
           notes:  DOM.customerNotes.value.trim(),
+          reference: DOM.customerReference ? DOM.customerReference.value.trim() : '',
         },
         scenarioId,
       }),
@@ -1583,12 +1585,14 @@ function renderFollowup(d) {
   });
   layout.querySelectorAll('.fu-call-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      const name   = btn.dataset.name;
-      const phone  = btn.dataset.phone;
-      const region = btn.dataset.region || '';
-      if ($('customerName'))   $('customerName').value   = name;
-      if ($('customerPhone'))  $('customerPhone').value  = phone;
-      if ($('customerRegion')) $('customerRegion').value = region;
+      const name      = btn.dataset.name;
+      const phone     = btn.dataset.phone;
+      const region    = btn.dataset.region    || '';
+      const reference = btn.dataset.reference || '';
+      if ($('customerName'))      $('customerName').value      = name;
+      if ($('customerPhone'))     $('customerPhone').value     = phone;
+      if ($('customerRegion'))    $('customerRegion').value    = region;
+      if ($('customerReference')) $('customerReference').value = reference;
       switchTab('live');
     });
   });
@@ -1633,8 +1637,9 @@ function bulkLoadToCampaign(items) {
   campaign.contacts = items.map(c => ({
     name:       c.customerName,
     phone:      c.customerPhone,
-    region:     c.customerInfo?.region || '',
-    notes:      c.customerInfo?.notes  || '',
+    region:     c.customerInfo?.region    || '',
+    notes:      c.customerInfo?.notes     || '',
+    reference:  c.customerInfo?.reference || '',
     status:     'bekliyor',
     vapiCallId: null,
     result:     null,
@@ -1689,7 +1694,8 @@ function followupCard(c, colorClass, opts) {
       '<button class="fu-call-btn" data-id="' + c.vapiCallId + '" ' +
         'data-name="' + esc(c.customerName) + '" ' +
         'data-phone="' + esc(c.customerPhone) + '" ' +
-        'data-region="' + esc((c.customerInfo && c.customerInfo.region) || '') + '">📞 Ara</button>' +
+        'data-region="' + esc((c.customerInfo && c.customerInfo.region) || '') + '" ' +
+        'data-reference="' + esc((c.customerInfo && c.customerInfo.reference) || '') + '">📞 Ara</button>' +
       '<button class="fu-detail-btn" data-id="' + c.vapiCallId + '">Detay</button>' +
       unfollowBtn +
     '</div>' +
@@ -1726,7 +1732,8 @@ function priorityCard(c) {
       '<button class="fu-call-btn" data-id="' + c.vapiCallId + '" ' +
         'data-name="' + esc(c.customerName) + '" ' +
         'data-phone="' + esc(c.customerPhone) + '" ' +
-        'data-region="' + esc((c.customerInfo && c.customerInfo.region) || '') + '">📞 Ara</button>' +
+        'data-region="' + esc((c.customerInfo && c.customerInfo.region) || '') + '" ' +
+        'data-reference="' + esc((c.customerInfo && c.customerInfo.reference) || '') + '">📞 Ara</button>' +
       '<button class="fu-detail-btn" data-id="' + c.vapiCallId + '">Detay</button>' +
     '</div>' +
   '</div>';
@@ -1751,7 +1758,8 @@ function cevapsizCard(c) {
       '<button class="fu-call-btn" data-id="' + c.vapiCallId + '" ' +
         'data-name="' + esc(c.customerName) + '" ' +
         'data-phone="' + esc(c.customerPhone) + '" ' +
-        'data-region="' + esc((c.customerInfo && c.customerInfo.region) || '') + '">📞 Tekrar</button>' +
+        'data-region="' + esc((c.customerInfo && c.customerInfo.region) || '') + '" ' +
+        'data-reference="' + esc((c.customerInfo && c.customerInfo.reference) || '') + '">📞 Tekrar</button>' +
       '<button class="fu-detail-btn" data-id="' + c.vapiCallId + '">Detay</button>' +
     '</div>' +
   '</div>';
@@ -1833,7 +1841,7 @@ function parseContacts(rows) {
 
   // Detect header row — look for phone-like column
   let dataStart = 0;
-  let colName = 0, colPhone = 1, colRegion = 2, colNotes = 3;
+  let colName = 0, colPhone = 1, colRegion = 2, colNotes = 3, colReference = -1;
 
   const first = rows[0].map(c => String(c).toLowerCase().trim());
   const phoneIdx = first.findIndex(h => h.includes('telefon') || h.includes('phone') || h.includes('tel'));
@@ -1846,6 +1854,8 @@ function parseContacts(rows) {
     if (colRegion < 0) colRegion = -1;
     colNotes  = first.findIndex(h => h.includes('not') || h.includes('note'));
     if (colNotes < 0) colNotes = -1;
+    colReference = first.findIndex(h => h.includes('referans') || h.includes('reference') || h.includes('ref'));
+    if (colReference < 0) colReference = -1;
   }
 
   campaign.contacts = [];
@@ -1879,8 +1889,9 @@ function parseContacts(rows) {
     campaign.contacts.push({
       name,
       phone,
-      region: colRegion >= 0 ? String(row[colRegion] || '').trim() : '',
-      notes:  colNotes  >= 0 ? String(row[colNotes]  || '').trim() : '',
+      region:    colRegion    >= 0 ? String(row[colRegion]    || '').trim() : '',
+      notes:     colNotes     >= 0 ? String(row[colNotes]     || '').trim() : '',
+      reference: colReference >= 0 ? String(row[colReference] || '').trim() : '',
       status: 'bekliyor',
       vapiCallId: null,
       result: null,
@@ -1972,7 +1983,7 @@ function syncCampaignButtons() {
 function renderCampaignTable() {
   const tbody = $('campaignTableBody');
   if (!campaign.contacts.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Excel veya CSV dosyası yükleyin</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Excel veya CSV dosyası yükleyin</td></tr>';
     return;
   }
   tbody.innerHTML = campaign.contacts.map((c, i) => campaignRowHtml(c, i)).join('');
@@ -2035,6 +2046,7 @@ function campaignRowHtml(c, i) {
     '<td>' + esc(c.name) + '</td>' +
     '<td class="dur-cell">' + esc(c.phone) + '</td>' +
     '<td>' + esc(c.region || '—') + '</td>' +
+    '<td>' + esc(c.reference || '—') + '</td>' +
     '<td>' + statusTag + '</td>' +
     '<td>' + heat + '</td>' +
     '<td>' + rdv + ' ' + ozetIcon + '</td>' +

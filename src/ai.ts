@@ -51,7 +51,7 @@ başka hiçbir şey yazmayacaksın.`,
 
 ${contextBlock}
 
-Müşteri: ${customer.name} | Tel: ${customer.phone}${customer.region ? ` | Bölge: ${customer.region}` : ''}
+Müşteri: ${customer.name} | Tel: ${customer.phone}${customer.region ? ` | Bölge: ${customer.region}` : ''}${customer.reference ? ` | Referans: ${customer.reference}` : ''}
 
 Görüşme:
 ${conversationText || '(Transcript mevcut değil — arama yanıtsız veya çok kısa kaldı)'}

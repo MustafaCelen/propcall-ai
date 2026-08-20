@@ -58,6 +58,7 @@ export async function createVapiCall(customer: CustomerInfo, systemPrompt?: stri
       customerName: customer.name,
       customerRegion: customer.region || 'belirtilmemiş',
       customerNotes: customer.notes || 'yok',
+      customerReference: customer.reference || 'yok',
     },
   };
 

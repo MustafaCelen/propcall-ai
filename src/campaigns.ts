@@ -13,6 +13,7 @@ export interface CampaignContact {
   phone: string;
   region: string;
   notes: string;
+  reference: string;
   status: 'bekliyor' | 'arıyor' | 'tamamlandı' | 'cevapsız' | 'meşgul' | 'başarısız';
   vapiCallId: string | null;
   result: CallSummary | null;

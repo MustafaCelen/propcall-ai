@@ -353,7 +353,7 @@ async function callContact(idx: number): Promise<void> {
     const scenario = state.scenarioId ? await getScenario(state.scenarioId) : null;
     const customer: CustomerInfo = {
       name: c.name, phone: c.phone,
-      region: c.region || '', notes: c.notes || '',
+      region: c.region || '', notes: c.notes || '', reference: c.reference || '',
     };
     const vapiCall = await createVapiCall(customer, scenario?.systemPrompt);
     c.vapiCallId   = vapiCall.id;

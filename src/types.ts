@@ -5,6 +5,7 @@ export interface CustomerInfo {
   phone: string;
   region: string;
   notes: string;
+  reference: string;
 }
 
 export interface CallCosts {

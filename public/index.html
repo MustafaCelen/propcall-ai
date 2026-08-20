@@ -55,8 +55,12 @@
         <input type="text" id="customerRegion" placeholder="Kadıköy, İstanbul" />
       </div>
       <div class="form-group">
+        <label>Referans <span class="label-hint">opsiyonel</span></label>
+        <input type="text" id="customerReference" placeholder="Örn: İlan No 4521" />
+      </div>
+      <div class="form-group">
         <label>Notlar <span class="label-hint">opsiyonel</span></label>
-        <textarea id="customerNotes" placeholder="Referans, önceki görüşme..."></textarea>
+        <textarea id="customerNotes" placeholder="Önceki görüşme, ek bilgiler..."></textarea>
       </div>
     </div>
     <div class="panel-section">
@@ -365,7 +369,7 @@
           <div class="campaign-upload-area" id="campaignUploadArea">
             <input type="file" id="campaignFile" accept=".xlsx,.xls,.csv" style="display:none"/>
             <button class="btn-upload" id="btnUpload">📂 Excel / CSV Yükle</button>
-            <span class="upload-hint">Ad, Telefon, Bölge, Notlar sütunları</span>
+            <span class="upload-hint">Ad, Telefon, Bölge, Referans, Notlar sütunları</span>
           </div>
           <div class="campaign-controls">
             <div class="concurrency-group" title="Bu kampanyayı geçmişte tanıyacağınız isim — zorunlu">
@@ -436,6 +440,7 @@
                 <th>Ad Soyad</th>
                 <th>Telefon</th>
                 <th>Bölge</th>
+                <th>Referans</th>
                 <th>Durum</th>
                 <th>Sıcaklık</th>
                 <th>Randevu</th>
@@ -443,7 +448,7 @@
               </tr>
             </thead>
             <tbody id="campaignTableBody">
-              <tr><td colspan="8" class="table-empty">Excel veya CSV dosyası yükleyin</td></tr>
+              <tr><td colspan="9" class="table-empty">Excel veya CSV dosyası yükleyin</td></tr>
             </tbody>
           </table>
         </div>
