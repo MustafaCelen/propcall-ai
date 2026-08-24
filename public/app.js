@@ -1,5 +1,20 @@
 // PropCall AI — Frontend
 
+// ─── AUTH GUARD ───────────────────────────────────────────────────────────────
+// Oturum ortasında süresi dolarsa/devre dışı bırakılırsa (admin tarafından) her
+// API çağrısı 401 döner — tek tek ~25 fetch() çağrısını sarmalamak yerine native
+// fetch'i burada bir kez sarmalayıp otomatik login'e yönlendiriyoruz.
+(function installAuthGuard() {
+  const nativeFetch = window.fetch;
+  window.fetch = async function (...args) {
+    const resp = await nativeFetch(...args);
+    if (resp.status === 401 && !String(args[0]).includes('/api/auth/')) {
+      location.href = '/login?next=' + encodeURIComponent(location.pathname);
+    }
+    return resp;
+  };
+})();
+
 // ─── STATE ───────────────────────────────────────────────────────────────────
 
 const state = {
@@ -16,8 +31,28 @@ const state = {
 };
 const FILTER_STORAGE_KEY = 'propcall.historyFilters.v1';
 const FOLLOWUP_STORAGE_KEY = 'propcall.followupSearch.v1';
+const FOCUSED_CAMPAIGN_KEY = 'propcall.focusedCampaignId.v1';
+
+// localStorage'dan SENKRON okunuyor — sayfa yüklenir yüklenmez, herhangi bir SSE
+// olayı veya loadCampaignState() fetch'i tamamlanmadan ÖNCE campaign.id doludur.
+// Bu olmadan, kullanıcı birden fazla kampanyayı eşzamanlı çalıştırırken sayfa
+// yenilendiğinde ilk gelen SSE campaign-update olayı (hangi kampanyadan gelirse)
+// "odak" olarak benimseniyor, bu da rastgele "kendiliğinden eski kampanyaya döndü"
+// hissi veriyordu — artık odak her zaman kullanıcının GERÇEKTEN seçtiği kampanyada kalıyor.
+function readFocusedCampaignId() {
+  try { return localStorage.getItem(FOCUSED_CAMPAIGN_KEY); } catch(_) { return null; }
+}
+function setFocusedCampaign(id) {
+  campaign.id = id || null;
+  try {
+    if (id) localStorage.setItem(FOCUSED_CAMPAIGN_KEY, id);
+    else localStorage.removeItem(FOCUSED_CAMPAIGN_KEY);
+  } catch(_) {}
+}
 
 const campaign = {
+  id: readFocusedCampaignId(),  // var olan (kaydedilmiş) bir kampanya yüklüyse doldurulur — "Başlat"ın
+                                 // bunu sıfırdan yeniden oluşturup ilerlemeyi silmesini önlemek için
   contacts: [],        // { name, phone, region, notes, status, vapiCallId, result }
   maxConcurrent: 1,
   running: false,
@@ -85,7 +120,25 @@ const DOM = {
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  // Oturum kontrolü — girişli değilse uygulamayı hiç kurmadan login'e yönlendir.
+  try {
+    const r = await fetch('/api/auth/session');
+    if (!r.ok) { location.href = '/login?next=' + encodeURIComponent(location.pathname); return; }
+    const session = await r.json();
+    if (session.data?.role === 'admin' && $('linkUsers')) $('linkUsers').style.display = '';
+  } catch (_) {
+    location.href = '/login';
+    return;
+  }
+
+  if ($('btnLogout')) {
+    $('btnLogout').addEventListener('click', async () => {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      location.href = '/login';
+    });
+  }
+
   initTabs();
   initCallButtons();
   initFilterBar();
@@ -270,6 +323,11 @@ function connectSSE() {
 
   src.addEventListener('campaign-update', e => {
     const data = JSON.parse(e.data);
+    // Kullanıcı birden fazla kampanyayı eşzamanlı çalıştırabiliyor — canlı sekme
+    // sadece o an odaklanılan (campaign.id) kampanyayı göstermeli, arka plandaki
+    // diğer kampanyaların güncellemeleri görünümü ezmemeli.
+    if (campaign.id && data.id !== campaign.id) return;
+    if (data.id) setFocusedCampaign(data.id);
     campaign.contacts     = data.contacts || [];
     campaign.running      = data.running;
     campaign.paused       = data.paused;
@@ -277,10 +335,19 @@ function connectSSE() {
     syncCampaignButtons();
     renderCampaignTable();
     updateCampaignProgress();
+    renderCallingHoursNotice(data.autoHeld);
+  });
+
+  // Kredi (Vapi/ElevenLabs) tükendiği için otomatik duraklatıldığında — bu, kullanıcının
+  // fark etmeden sessizce kampanyanın durmuş kalmasını önlemek için net bir uyarı.
+  src.addEventListener('campaign-credit-paused', e => {
+    const { name, reason } = JSON.parse(e.data);
+    toast('⚠️ "' + name + '" duraklatıldı: ' + reason, 'error');
   });
 
   src.addEventListener('campaign-contact-update', e => {
-    const { index, contact, summary: sum } = JSON.parse(e.data);
+    const { campaignId, index, contact, summary: sum } = JSON.parse(e.data);
+    if (campaignId && campaign.id && campaignId !== campaign.id) return;
     if (index >= 0 && index < campaign.contacts.length) {
       campaign.contacts[index] = contact;
       renderCampaignRow(index);
@@ -289,7 +356,12 @@ function connectSSE() {
   });
 
   src.addEventListener('campaign-complete', e => {
-    const { randevu, total } = JSON.parse(e.data);
+    const { campaignId, randevu, total } = JSON.parse(e.data);
+    if (campaignId && campaign.id && campaignId !== campaign.id) {
+      toast('Bir kampanya tamamlandı: ' + randevu + '/' + total + ' randevu alındı.', 'success');
+      if (document.querySelector('#tabCampaignHistory.active')) loadCampaignHistory();
+      return;
+    }
     campaign.running = false;
     syncCampaignButtons();
     updateCampaignProgress();
@@ -302,12 +374,18 @@ function connectSSE() {
       const banner = document.createElement('div');
       banner.className = 'campaign-complete-banner';
       const pct = total ? Math.round(randevu / total * 100) : 0;
+      const unreachableCount = campaign.contacts.filter(c => c.status === 'cevapsız' || c.status === 'meşgul').length;
       banner.innerHTML =
         '🏁 <strong>Kampanya Tamamlandı!</strong> ' +
         '<span class="ccb-stat">📅 ' + randevu + ' randevu</span> · ' +
         '<span class="ccb-stat">📞 ' + total + ' kişi</span> · ' +
-        '<span class="ccb-stat ccb-rate">%' + pct + ' dönüşüm</span>';
+        '<span class="ccb-stat ccb-rate">%' + pct + ' dönüşüm</span>' +
+        (unreachableCount
+          ? ' <button class="btn-secondary" id="btnRequeueUnreachable" style="margin-left:10px">📵 Ulaşılamayanları (' + unreachableCount + ') Yeni Listeye Aktar</button>'
+          : '');
       bar.appendChild(banner);
+      const rqBtn = $('btnRequeueUnreachable');
+      if (rqBtn) rqBtn.addEventListener('click', requeueUnreachableContacts);
     }
     toast('Kampanya tamamlandı! ' + randevu + '/' + total + ' randevu alındı.', 'success');
   });
@@ -679,7 +757,7 @@ function filterHistoryData(arr) {
 async function loadHistory() {
   const params = buildFilterParams();
   state.currentFilters = params;
-  DOM.callsTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Yükleniyor...</td></tr>';
+  DOM.callsTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Yükleniyor...</td></tr>';
   try {
     const qs   = new URLSearchParams(params).toString();
     const resp = await fetch('/api/calls' + (qs ? '?' + qs : ''));
@@ -688,7 +766,7 @@ async function loadHistory() {
     state.historyData = json.data;
     renderTable(filterHistoryData(json.data));
   } catch (err) {
-    DOM.callsTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Hata: ' + err.message + '</td></tr>';
+    DOM.callsTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Hata: ' + err.message + '</td></tr>';
   }
 }
 
@@ -714,7 +792,7 @@ function renderTable(calls) {
   const counter = $('historyCounter');
   if (counter) counter.textContent = calls.length + ' kayıt';
   if (!calls.length) {
-    DOM.callsTableBody.innerHTML = '<tr><td colspan="8" class="table-empty">Kayıt bulunamadı</td></tr>';
+    DOM.callsTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Kayıt bulunamadı</td></tr>';
     return;
   }
   DOM.callsTableBody.innerHTML = calls.map(c => {
@@ -727,17 +805,18 @@ function renderTable(calls) {
       ? '<span class="tc-indicator" title="' + trCount + ' mesaj">💬 ' + trCount + '</span>'
       : '<span class="tc-none" title="Transkript yok">—</span>';
     const costStr = c.costs && c.costs.total
-      ? '<span class="tbl-cost">$' + c.costs.total.toFixed(4) + '</span>'
-      : '';
+      ? '$' + c.costs.total.toFixed(4)
+      : '—';
     return '<tr class="call-row" data-id="' + c.vapiCallId + '">' +
-      '<td>' + fmtDateTime(c.startTime) + '</td>' +
+      '<td class="dt-cell">' + fmtDateTime(c.startTime) + '</td>' +
       '<td><div class="tbl-name">' + esc(c.customerName) + '</div><div class="tbl-phone">' + esc(c.customerPhone) + '</div></td>' +
       '<td>' + statusBadge(c.status) + '</td>' +
       '<td class="dur-cell">' + dur + '</td>' +
       '<td class="tc-cell">' + trIcon + '</td>' +
       '<td>' + randevuBadge(s) + '</td>' +
       '<td>' + ilgiBadge(s && s.ilgi_seviyesi) + '</td>' +
-      '<td class="action-cell">' + costStr + '<button class="btn-detail" data-id="' + c.vapiCallId + '">›</button></td>' +
+      '<td class="tbl-cost">' + costStr + '</td>' +
+      '<td class="action-cell"><button class="btn-detail" data-id="' + c.vapiCallId + '">›</button></td>' +
       '</tr>';
   }).join('');
 
@@ -893,12 +972,14 @@ function renderDrawer(call) {
     '<div class="drawer-section">' +
       '<div class="drawer-section-title">💰 Maliyet</div>' +
       '<div class="cost-breakdown">' +
-        '<div class="cb-row"><span>Vapi</span><span>$' + (cost.vapi||0).toFixed(4) + '</span></div>' +
-        '<div class="cb-row"><span>Twilio</span><span>$' + (cost.twilio||0).toFixed(4) + '</span></div>' +
-        '<div class="cb-row"><span>LLM</span><span>$' + (cost.llm||0).toFixed(4) + '</span></div>' +
-        '<div class="cb-row"><span>TTS</span><span>$' + (cost.tts||0).toFixed(4) + '</span></div>' +
-        '<div class="cb-row"><span>STT</span><span>$' + (cost.stt||0).toFixed(4) + '</span></div>' +
+        '<div class="cb-row"><span>Vapi (platform)</span><span>$' + (cost.vapi||0).toFixed(4) + '</span></div>' +
+        '<div class="cb-row"><span>Telefon Hattı</span><span>$' + (cost.twilio||0).toFixed(4) + '</span></div>' +
+        '<div class="cb-row"><span>LLM (konuşma)</span><span>$' + (cost.llm||0).toFixed(4) + '</span></div>' +
+        '<div class="cb-row"><span>STT (Deepgram)</span><span>$' + (cost.stt||0).toFixed(4) + '</span></div>' +
+        '<div class="cb-row"><span>ElevenLabs' + (cost.tts ? ' (tahmini)' : '') + '</span><span>$' + (cost.tts||0).toFixed(4) + '</span></div>' +
+        '<div class="cb-row"><span>Anthropic (özet)</span><span>$' + (cost.anthropic||0).toFixed(4) + '</span></div>' +
         '<div class="cb-row total"><span>Toplam</span><span>$' + (cost.total||0).toFixed(4) + '</span></div>' +
+        (!cost.tts ? '<div class="cb-hint">ElevenLabs maliyeti Vapi tarafından raporlanmıyor — Ayarlarım\'da karakter başı ücreti girerseniz burada tahmini olarak görünür.</div>' : '') +
       '</div>' +
     '</div>' +
     transcriptHtml +
@@ -1459,9 +1540,15 @@ function followupMatchesSearch(c, q) {
          (c.customerPhone || '').toLowerCase().includes(q);
 }
 
+const FOLLOWUP_TAB_STORAGE_KEY = 'propcall.followupActiveTab.v1';
+function readFollowupActiveTab() {
+  try { return localStorage.getItem(FOLLOWUP_TAB_STORAGE_KEY) || 'oncelikliListe'; } catch(_) { return 'oncelikliListe'; }
+}
+
 function renderFollowup(d) {
   renderFollowup._lastData = d;
   const layout = $('followupLayout');
+  const subtabsEl = $('followupSubtabs');
   const searchInput = $('followupSearch');
   const q = searchInput ? searchInput.value.trim().toLowerCase() : '';
 
@@ -1549,36 +1636,68 @@ function renderFollowup(d) {
   const sumEl = $('followupSummary');
   if (sumEl) {
     const countable = sections.filter(s => s.key !== 'oncelikliListe');
+    const oncelikSec = sections.find(s => s.key === 'oncelikliListe');
     const total = countable.reduce((s, sec) => s + sec.items.length, 0);
-    sumEl.textContent = total + ' kişi · ' + countable.map(s => s.title.split('—')[0].trim() + ': ' + s.items.length).join(' · ');
+    const chips = [
+      '<span class="fu-sum-chip fu-sum-total">' + total + ' kişi</span>',
+      ...countable.map(sec =>
+        '<span class="fu-sum-chip">' + esc(sec.title.split('—')[0].trim()) + ': <b>' + sec.items.length + '</b></span>'),
+    ];
+    if (oncelikSec) {
+      chips.push(
+        '<span class="fu-sum-chip fu-sum-oncelik" title="Diğer listelerle örtüşebilir — aynı kişi birden fazla listede görünebilir, toplama dahil değil">' +
+        '🎯 Öncelikli: <b>' + oncelikSec.items.length + '</b></span>',
+      );
+    }
+    sumEl.innerHTML = chips.join('');
   }
 
-  layout.innerHTML = sections.map(sec => {
-    const cardFn = sec.customCard || ((c) => followupCard(c, sec.color));
-    const filtered = sec.items.filter(c => followupMatchesSearch(c, q) && matchesScenario(c));
-    const cards = filtered.length
-      ? filtered.map(c => cardFn(c)).join('')
-      : '<div class="fu-empty">' + (q || scenarioFilter ? 'Filtreye uyan kayıt yok' : sec.emptyMsg) + '</div>';
+  // Aktif alt-sekme — daha önce seçilmiş bir sekme varsa (bu render döngüsünde veya
+  // localStorage'dan) onu koru; artık mevcut olmayan bir key'e denk gelirse ilkine düş.
+  let activeKey = renderFollowup._activeTab || readFollowupActiveTab();
+  if (!sections.some(s => s.key === activeKey)) activeKey = sections[0].key;
+  renderFollowup._activeTab = activeKey;
 
-    const bulkBtn = sec.bulk && filtered.length
-      ? '<button class="fu-bulk-btn" data-bulk-key="' + sec.key + '">📞 Hepsini Kampanyaya At (' + filtered.length + ')</button>'
-      : '';
+  if (subtabsEl) {
+    subtabsEl.innerHTML = sections.map(sec => {
+      const filtered = sec.items.filter(c => followupMatchesSearch(c, q) && matchesScenario(c));
+      const isFiltered = (q || scenarioFilter) && filtered.length !== sec.items.length;
+      const countLabel = isFiltered ? (filtered.length + '/' + sec.items.length) : String(sec.items.length);
+      const shortTitle = sec.title.split('—')[0].trim();
+      return '<button class="fu-subtab fu-subtab-' + sec.color + (sec.key === activeKey ? ' active' : '') + '" data-key="' + sec.key + '">' +
+        '<span class="fu-subtab-icon">' + sec.icon + '</span>' +
+        '<span class="fu-subtab-label">' + esc(shortTitle) + '</span>' +
+        '<span class="fu-subtab-count">' + countLabel + '</span>' +
+      '</button>';
+    }).join('');
 
-    const isFiltered = (q || scenarioFilter) && filtered.length !== sec.items.length;
-    const filterBadge = isFiltered
-      ? '<span class="fu-filter-badge">' + filtered.length + '/' + sec.items.length + '</span>'
-      : '<span class="fu-count">' + sec.items.length + '</span>';
+    subtabsEl.querySelectorAll('.fu-subtab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.key === renderFollowup._activeTab) return;
+        renderFollowup._activeTab = btn.dataset.key;
+        try { localStorage.setItem(FOLLOWUP_TAB_STORAGE_KEY, btn.dataset.key); } catch(_) {}
+        renderFollowup(renderFollowup._lastData);
+      });
+    });
+  }
 
-    return '<div class="fu-section fu-' + sec.color + '">' +
-      '<div class="fu-section-header">' +
-        '<span class="fu-icon">' + sec.icon + '</span>' +
-        '<span class="fu-title">' + sec.title + '</span>' +
-        filterBadge +
-        bulkBtn +
-      '</div>' +
-      '<div class="fu-list">' + cards + '</div>' +
+  // Sadece aktif sekmenin listesi gösteriliyor — diğerleri karışıklık yaratmasın diye
+  // gizli, sayıları yine de üstteki alt-sekme rozetlerinde görünüyor.
+  const activeSec = sections.find(s => s.key === activeKey);
+  const cardFn = activeSec.customCard || ((c) => followupCard(c, activeSec.color));
+  const filtered = activeSec.items.filter(c => followupMatchesSearch(c, q) && matchesScenario(c));
+  const cards = filtered.length
+    ? filtered.map(c => cardFn(c)).join('')
+    : '<div class="fu-empty">' + (q || scenarioFilter ? 'Filtreye uyan kayıt yok' : activeSec.emptyMsg) + '</div>';
+  const bulkBtn = activeSec.bulk && filtered.length
+    ? '<button class="fu-bulk-btn" data-bulk-key="' + activeSec.key + '">📞 Hepsini Kampanyaya At (' + filtered.length + ')</button>'
+    : '';
+
+  layout.innerHTML =
+    '<div class="fu-section fu-section-solo fu-' + activeSec.color + '">' +
+      (bulkBtn ? '<div class="fu-section-toolbar">' + bulkBtn + '</div>' : '') +
+      '<div class="fu-list fu-list-full">' + cards + '</div>' +
     '</div>';
-  }).join('');
 
   layout.querySelectorAll('.fu-detail-btn').forEach(btn => {
     btn.addEventListener('click', () => openDrawer(btn.dataset.id));
@@ -1634,12 +1753,13 @@ function renderFollowup(d) {
 }
 
 function bulkLoadToCampaign(items) {
+  setFocusedCampaign(null); // yeni liste — var olan bir kampanyaya bağlı değil
   campaign.contacts = items.map(c => ({
-    name:       c.customerName,
-    phone:      c.customerPhone,
-    region:     c.customerInfo?.region    || '',
-    notes:      c.customerInfo?.notes     || '',
-    reference:  c.customerInfo?.reference || '',
+    name:       c.customerName ?? c.name,
+    phone:      c.customerPhone ?? c.phone,
+    region:     c.customerInfo?.region    ?? c.region    ?? '',
+    notes:      c.customerInfo?.notes     ?? c.notes     ?? '',
+    reference:  c.customerInfo?.reference ?? c.reference ?? '',
     status:     'bekliyor',
     vapiCallId: null,
     result:     null,
@@ -1649,9 +1769,24 @@ function bulkLoadToCampaign(items) {
   switchTab('campaign');
   renderCampaignTable();
   updateCampaignProgress();
-  $('btnCampaignStart').disabled = false;
+  syncCampaignButtons();
   $('campaignProgressBar').style.display = 'none';
   toast(items.length + ' kişi kampanyaya yüklendi', 'success');
+}
+
+// Biten bir kampanyadan ulaşılamayan (cevapsız/meşgul) kişileri, kampanya adı ve
+// tarihiyle önerilen isimle, yeni/bağımsız bir listeye aktarır — bulkLoadToCampaign
+// zaten hem çağrı-kaydı hem düz CampaignContact şeklini kabul ediyor.
+function requeueUnreachableContacts() {
+  const unreachable = campaign.contacts.filter(c => c.status === 'cevapsız' || c.status === 'meşgul');
+  if (!unreachable.length) return;
+  bulkLoadToCampaign(unreachable);
+  const nameInput = $('campaignName');
+  if (nameInput) {
+    const base = nameInput.value.trim().replace(/\s*\(tekrar\)$/, '');
+    nameInput.value = (base || 'Kampanya') + ' (tekrar)';
+  }
+  toast(unreachable.length + ' ulaşılamayan kişi yeni listeye aktarıldı', 'success');
 }
 
 // Son veriyi sakla — bulk btn erişimi için
@@ -1858,6 +1993,7 @@ function parseContacts(rows) {
     if (colReference < 0) colReference = -1;
   }
 
+  setFocusedCampaign(null); // yeni yüklenen dosya — var olan bir kampanyaya bağlı değil
   campaign.contacts = [];
   campaign.running  = false;
   campaign.paused   = false;
@@ -1951,10 +2087,26 @@ function renderImportSummary(loadedCount, skipped) {
 
 async function loadCampaignState() {
   try {
-    const resp = await fetch('/api/campaign');
-    const json = await resp.json();
-    if (!json.success || !json.data || !json.data.contacts || !json.data.contacts.length) return;
+    // Daha önce odaklanılmış belirli bir kampanya varsa (localStorage'dan, sayfa
+    // yüklenirken senkron okundu) ONU iste — id vermezsek backend "en son güncellenen"e
+    // düşer, bu da başka bir kampanyada arka planda aktivite varsa yanlış olanı getirir.
+    const focusedId = campaign.id;
+    const qs   = focusedId ? ('?campaignId=' + encodeURIComponent(focusedId)) : '';
+    let resp = await fetch('/api/campaign' + qs);
+    let json = await resp.json();
 
+    // Kayıtlı kampanya artık yok/temizlenmiş — genel "en son"a düş.
+    if (focusedId && (!json.success || !json.data || !json.data.id)) {
+      resp = await fetch('/api/campaign');
+      json = await resp.json();
+    }
+
+    if (!json.success || !json.data || !json.data.contacts || !json.data.contacts.length) {
+      setFocusedCampaign(null);
+      return;
+    }
+
+    setFocusedCampaign(json.data.id || null);
     campaign.contacts      = json.data.contacts;
     campaign.running       = json.data.running;
     campaign.paused        = json.data.paused;
@@ -1966,9 +2118,51 @@ async function loadCampaignState() {
     renderCampaignTable();
     updateCampaignProgress();
     syncCampaignButtons();
+    renderCallingHoursNotice(json.data.autoHeld);
     $('campaignProgressBar').style.display = 'block';
     toast('Önceki kampanya yüklendi (' + campaign.contacts.length + ' kişi)', 'info');
   } catch(_) {}
+}
+
+// Kampanya Geçmişi'nden yarıda kalmış (bekliyor kişisi olan) belirli bir kampanyayı
+// canlı sekmeye getirir — halihazırda odaklanılan kampanyayı DEĞİŞTİRİR, arka planda
+// çalışan başka bir kampanya varsa o kendi motorunda dialing'e devam eder, sadece
+// görünüm değişir.
+async function loadSpecificCampaign(id) {
+  try {
+    const resp = await fetch('/api/campaign?campaignId=' + encodeURIComponent(id));
+    const json = await resp.json();
+    if (!json.success || !json.data || !json.data.id) {
+      toast('Kampanya yüklenemedi', 'error');
+      return;
+    }
+    setFocusedCampaign(json.data.id);
+    campaign.contacts       = json.data.contacts;
+    campaign.running        = json.data.running;
+    campaign.paused         = json.data.paused;
+    campaign.maxConcurrent  = json.data.maxConcurrent || 1;
+
+    const sel = $('campaignConcurrency');
+    if (sel) sel.value = String(campaign.maxConcurrent);
+    const nameInput = $('campaignName');
+    if (nameInput) nameInput.value = json.data.name || '';
+
+    renderCampaignTable();
+    updateCampaignProgress();
+    syncCampaignButtons();
+    renderCallingHoursNotice(json.data.autoHeld);
+    $('campaignProgressBar').style.display = 'block';
+    switchTab('campaign');
+    closeCampaignDetail();
+    toast('"' + json.data.name + '" kampanyasına geçildi (' + campaign.contacts.length + ' kişi)', 'success');
+  } catch (_) {
+    toast('Kampanya yüklenemedi', 'error');
+  }
+}
+
+function renderCallingHoursNotice(autoHeld) {
+  const el = $('callingHoursNotice');
+  if (el) el.style.display = (autoHeld === 'calling-hours') ? 'block' : 'none';
 }
 
 function syncCampaignButtons() {
@@ -1978,6 +2172,9 @@ function syncCampaignButtons() {
   $('btnCampaignPause').disabled = !running;
   $('btnCampaignStop').disabled  = !running;
   $('btnCampaignPause').textContent = paused ? '▶ Devam Et' : '⏸ Duraklat';
+  // Var olan bir kampanya yüklüyse "Başlat" aslında ayarları güncelleyip devam
+  // ettiriyor (sonuçları silmiyor) — bunu butonun etiketinde açıkça belirt.
+  $('btnCampaignStart').textContent = campaign.id ? '🔄 Bu Ayarlarla Devam Et' : '▶ Başlat';
 }
 
 function renderCampaignTable() {
@@ -2116,6 +2313,41 @@ function updateCampaignProgressFromSummary(sum) {
 
 async function campaignStart() {
   if (!campaign.contacts.length) return;
+
+  campaign.maxConcurrent = parseInt($('campaignConcurrency').value, 10) || 1;
+  const startFromRaw    = parseInt(($('campaignStartFrom')?.value    || ''), 10);
+  const callLimitRaw    = parseInt(($('campaignCallLimit')?.value     || ''), 10);
+  const answeredLimitRaw = parseInt(($('campaignAnsweredLimit')?.value || ''), 10);
+  const startFromIndex  = (startFromRaw  > 1  ? startFromRaw - 1 : 0); // UI 1-tabanlı → 0-tabanlı
+  const callLimit       = (callLimitRaw  > 0  ? callLimitRaw   : 0);
+  const answeredLimit   = (answeredLimitRaw > 0 ? answeredLimitRaw : 0);
+
+  // Zaten yüklenmiş (var olan) bir kampanya varsa — listeyi sıfırdan yeniden
+  // OLUŞTURMAK yerine (bu, tüm birikmiş sonuçları/durumları sıfırlardı) SADECE
+  // ayarları (başlangıç satırı, eş zamanlı sayısı, limitler) güncelleyip devam ettir.
+  if (campaign.id) {
+    try {
+      const resp = await fetch('/api/campaign/resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          campaignId: campaign.id, maxConcurrent: campaign.maxConcurrent,
+          startFromIndex, callLimit, answeredLimit,
+        }),
+      });
+      const json = await resp.json();
+      if (!json.success) throw new Error(json.error);
+      $('campaignProgressBar').style.display = 'block';
+      campaign.running = true;
+      campaign.paused  = false;
+      syncCampaignButtons();
+      toast('Kampanya bu ayarlarla devam ediyor — mevcut sonuçlar korundu', 'success');
+    } catch (err) {
+      toast('Kampanya devam ettirilemedi: ' + err.message, 'error');
+    }
+    return;
+  }
+
   const nameInput = $('campaignName');
   const name = nameInput ? nameInput.value.trim() : '';
   if (!name) {
@@ -2125,14 +2357,7 @@ async function campaignStart() {
   }
   if (nameInput) nameInput.classList.remove('invalid');
 
-  campaign.maxConcurrent = parseInt($('campaignConcurrency').value, 10) || 1;
-  const scenarioId      = $('campaignScenario') ? ($('campaignScenario').value || undefined) : undefined;
-  const startFromRaw    = parseInt(($('campaignStartFrom')?.value    || ''), 10);
-  const callLimitRaw    = parseInt(($('campaignCallLimit')?.value     || ''), 10);
-  const answeredLimitRaw = parseInt(($('campaignAnsweredLimit')?.value || ''), 10);
-  const startFromIndex  = (startFromRaw  > 1  ? startFromRaw - 1 : 0); // UI 1-tabanlı → 0-tabanlı
-  const callLimit       = (callLimitRaw  > 0  ? callLimitRaw   : 0);
-  const answeredLimit   = (answeredLimitRaw > 0 ? answeredLimitRaw : 0);
+  const scenarioId = $('campaignScenario') ? ($('campaignScenario').value || undefined) : undefined;
   try {
     const resp = await fetch('/api/campaign/start', {
       method: 'POST',
@@ -2149,6 +2374,7 @@ async function campaignStart() {
     });
     const json = await resp.json();
     if (!json.success) throw new Error(json.error);
+    setFocusedCampaign((json.data && json.data.id) || null);
     $('campaignProgressBar').style.display = 'block';
     syncCampaignButtons();
     toast('Kampanya sunucuda başlatıldı — tarayıcıyı kapatabilirsiniz', 'success');
@@ -2159,7 +2385,14 @@ async function campaignStart() {
 
 async function campaignPause() {
   try {
-    const resp = await fetch('/api/campaign/pause', { method: 'POST' });
+    // campaignId'yi mutlaka gönder — göndermezsek backend "en son güncellenen
+    // kampanya"ya düşer, bu da kullanıcı birden fazla kampanyayı eşzamanlı
+    // çalıştırıyorsa o an EKRANDA GÖRÜNENDEN FARKLI bir kampanyayı duraklatabilir.
+    const resp = await fetch('/api/campaign/pause', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ campaignId: campaign.id }),
+    });
     const json = await resp.json();
     if (!json.success) throw new Error(json.error);
     campaign.paused = json.paused;
@@ -2172,7 +2405,14 @@ async function campaignPause() {
 
 async function campaignStop() {
   try {
-    const resp = await fetch('/api/campaign/stop', { method: 'POST' });
+    // Aynı sebeple campaignId zorunlu — bkz. campaignPause() notu. Bu olmadan
+    // "Durdur" ekranda görünenden BAŞKA bir kampanyayı hedefleyip onun bekleyen
+    // kişilerini sessizce "başarısız" işaretleyebilir.
+    const resp = await fetch('/api/campaign/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ campaignId: campaign.id }),
+    });
     const json = await resp.json();
     if (!json.success) throw new Error(json.error);
     campaign.running = false;
@@ -2271,6 +2511,42 @@ function renderCampaignDetail(data) {
   $('cdTitle').textContent = c.name;
   $('cdSub').textContent = (c.scenarioName || 'Varsayılan prompt') + ' · ' + fmtDateTime(c.createdAt) +
     ' · ' + (CH_STATUS_LABEL[c.status] || c.status);
+
+  const pending = (c.contacts || []).filter(x => x.status === 'bekliyor');
+  const existingResumeBtn = $('cdResumeBtn');
+  if (existingResumeBtn) existingResumeBtn.remove();
+  if (pending.length) {
+    const rbtn = document.createElement('button');
+    rbtn.id = 'cdResumeBtn';
+    rbtn.className = 'btn-campaign-start';
+    rbtn.style.marginTop = '10px';
+    rbtn.style.marginRight = '8px';
+    rbtn.textContent = '▶ Bu Kampanyaya Geç ve Devam Et (' + pending.length + ' bekliyor)';
+    rbtn.addEventListener('click', () => loadSpecificCampaign(c.id));
+    $('cdSub').insertAdjacentElement('afterend', rbtn);
+  }
+
+  const unreachable = (c.contacts || []).filter(x => x.status === 'cevapsız' || x.status === 'meşgul');
+  const existingBtn = $('cdRequeueBtn');
+  if (existingBtn) existingBtn.remove();
+  if (unreachable.length) {
+    const btn = document.createElement('button');
+    btn.id = 'cdRequeueBtn';
+    btn.className = 'btn-secondary';
+    btn.style.marginTop = '10px';
+    btn.textContent = '📵 Ulaşılamayanları (' + unreachable.length + ') Yeni Listeye Aktar';
+    btn.addEventListener('click', () => {
+      bulkLoadToCampaign(unreachable);
+      const nameInput = $('campaignName');
+      if (nameInput) {
+        const base = c.name.replace(/\s*\(tekrar\)$/, '');
+        nameInput.value = base + ' (tekrar)';
+      }
+      closeCampaignDetail();
+      toast(unreachable.length + ' ulaşılamayan kişi yeni listeye aktarıldı', 'success');
+    });
+    $('cdSub').insertAdjacentElement('afterend', btn);
+  }
 
   const kpis = [
     { label: 'Toplam Arama', value: s.totalCalls, hl: false },

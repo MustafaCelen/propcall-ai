@@ -5,7 +5,6 @@
 // (Identity/Style/Response Guidelines/Task & Goals/Error Handling) uyarak sağlıyoruz.
 
 import Anthropic from '@anthropic-ai/sdk';
-import { getSetting } from './settings';
 
 export interface PromptGenInput {
   companyName?: string;         // örn. "Keller Williams Gayrimenkul" — rawText modunda zorunlu değil
@@ -21,14 +20,9 @@ export interface PromptGenInput {
   rawText?: string;
 }
 
-async function getClient(): Promise<Anthropic> {
-  const apiKey = await getSetting('ANTHROPIC_API_KEY');
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY tanımlanmamış (Admin panelden veya .env ile ekleyin)');
-  return new Anthropic({ apiKey });
-}
-
-export async function generateVapiPrompt(input: PromptGenInput): Promise<string> {
-  const client = await getClient();
+export async function generateVapiPrompt(apiKey: string, input: PromptGenInput): Promise<string> {
+  if (!apiKey) throw new Error('Anthropic API key tanımlanmamış (Ayarlarım sayfasından ekleyin)');
+  const client = new Anthropic({ apiKey });
   const maxDuration = input.maxDurationSeconds || 120;
 
   const userMessage = input.rawText?.trim()

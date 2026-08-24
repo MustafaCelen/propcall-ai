@@ -12,8 +12,10 @@ export interface CallCosts {
   vapi: number;
   twilio: number;
   llm: number;
-  tts: number;
+  tts: number;       // ElevenLabs — BYO key kullanıldığında Vapi bunu raporlamaz (her zaman 0
+                      // döner), bu yüzden konuşulan karakter sayısından biz tahmin ediyoruz.
   stt: number;
+  anthropic: number;  // Görüşme özeti (Claude) — gerçek token kullanımından hesaplanan gerçek maliyet.
   total: number;
 }
 

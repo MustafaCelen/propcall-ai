@@ -1,6 +1,4 @@
-// ElevenLabs abonelik / karakter kotası bilgisi
-
-import { getSetting } from './settings';
+// ElevenLabs abonelik / karakter kotası bilgisi — her danışman kendi hesabını kullanır.
 
 const ELEVENLABS_BASE = 'https://api.elevenlabs.io';
 
@@ -14,12 +12,11 @@ export interface ElevenLabsCreditInfo {
   error?: string;
 }
 
-export async function getElevenLabsCredit(): Promise<ElevenLabsCreditInfo> {
-  const key = await getSetting('ELEVENLABS_API_KEY');
-  if (!key) return { ok: false, error: 'ELEVENLABS_API_KEY yok' };
+export async function getElevenLabsCredit(apiKey: string): Promise<ElevenLabsCreditInfo> {
+  if (!apiKey) return { ok: false, error: 'ELEVENLABS_API_KEY yok' };
   try {
     const resp = await fetch(`${ELEVENLABS_BASE}/v1/user/subscription`, {
-      headers: { 'xi-api-key': key },
+      headers: { 'xi-api-key': apiKey },
     });
     if (!resp.ok) return { ok: false, error: `HTTP ${resp.status}` };
     const data = await resp.json() as {
@@ -44,6 +41,14 @@ export async function getElevenLabsCredit(): Promise<ElevenLabsCreditInfo> {
   }
 }
 
+// Vapi'nin cost webhook'u BYO ElevenLabs kullanıldığında tts kalemini raporlamıyor
+// (her zaman 0) — bu yüzden asistanın gerçekten söylediği metnin karakter sayısından,
+// kullanıcının kendi girdiği $/1000-karakter oranına göre tahmini hesaplıyoruz.
+export function estimateTtsCost(charCount: number, ratePer1kChars: number | null | undefined): number {
+  if (!ratePer1kChars || charCount <= 0) return 0;
+  return Math.round((charCount / 1000) * ratePer1kChars * 1e6) / 1e6;
+}
+
 export interface ElevenLabsVoice {
   voiceId: string;
   name: string;
@@ -51,13 +56,12 @@ export interface ElevenLabsVoice {
   previewUrl?: string;
 }
 
-// Hesaba tanımlı sesleri listele — admin panelde dropdown için
-export async function listElevenLabsVoices(): Promise<ElevenLabsVoice[]> {
-  const key = await getSetting('ELEVENLABS_API_KEY');
-  if (!key) throw new Error('ELEVENLABS_API_KEY tanımlanmamış (Admin panelden ekleyin)');
+// Hesaba tanımlı sesleri listele — Ayarlarım sayfasında dropdown için
+export async function listElevenLabsVoices(apiKey: string): Promise<ElevenLabsVoice[]> {
+  if (!apiKey) throw new Error('ELEVENLABS_API_KEY tanımlanmamış (Ayarlarım sayfasından ekleyin)');
 
   const resp = await fetch(`${ELEVENLABS_BASE}/v1/voices`, {
-    headers: { 'xi-api-key': key },
+    headers: { 'xi-api-key': apiKey },
   });
   if (!resp.ok) throw new Error(`ElevenLabs ses listesi alınamadı: ${resp.status}`);
   const data = await resp.json() as {

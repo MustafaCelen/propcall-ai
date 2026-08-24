@@ -4,16 +4,17 @@ import {
   VapiTranscriptEntry, CallFilters, StatsData,
 } from './types';
 
+// Webhook yolunda kullanılır — kayıt zaten var olduğu için düz UPDATE yeterli
+// (createCall'daki ilk INSERT dışında hiçbir çağıran yeni satır oluşturmaz).
 async function writeCall(record: CallRecord): Promise<void> {
   await pool.query(
-    `INSERT INTO calls (vapi_call_id, data, start_time, status)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (vapi_call_id) DO UPDATE
-       SET data = EXCLUDED.data, status = EXCLUDED.status`,
-    [record.vapiCallId, JSON.stringify(record), record.startTime || null, record.status],
+    `UPDATE calls SET data = $2, status = $3 WHERE vapi_call_id = $1`,
+    [record.vapiCallId, JSON.stringify(record), record.status],
   );
 }
 
+// Webhook-internal: sahiplik kontrolü yapmaz — çağıran (server.ts /webhook)
+// userId'yi ayrıca (assistantId eşleşmesiyle) doğrulamış olmalı.
 export async function readCall(vapiCallId: string): Promise<CallRecord | null> {
   const { rows } = await pool.query(
     'SELECT data FROM calls WHERE vapi_call_id = $1',
@@ -22,10 +23,26 @@ export async function readCall(vapiCallId: string): Promise<CallRecord | null> {
   return rows[0]?.data ?? null;
 }
 
+// Uygulama rotaları için sahiplik-kontrollü okuma.
+export async function readCallForUser(userId: string, vapiCallId: string): Promise<CallRecord | null> {
+  const { rows } = await pool.query(
+    'SELECT data FROM calls WHERE vapi_call_id = $1 AND user_id = $2',
+    [vapiCallId, userId],
+  );
+  return rows[0]?.data ?? null;
+}
+
+// Webhook spoof-kontrolü / sahiplik doğrulaması için.
+export async function getCallOwnerUserId(vapiCallId: string): Promise<string | null> {
+  const { rows } = await pool.query('SELECT user_id FROM calls WHERE vapi_call_id = $1', [vapiCallId]);
+  return rows[0]?.user_id ?? null;
+}
+
 // Sunucu her başladığında çağrılır: bir çökme/restart/tünel kopması yüzünden
 // end-of-call-report webhook'u hiç gelmemiş, sonsuza kadar "in-progress"
 // görünen eski aramaları 'failed' olarak kapatır. Bunlar İstatistikler'de
 // totalCalls'ı şişirip answerRate'i hayalet kayıtlarla düşürüyordu.
+// Kasıtlı olarak TÜM kiracılar genelinde çalışır — açılışta bir kerelik sweep.
 export async function reconcileStaleCalls(olderThanMinutes = 30): Promise<number> {
   const { rowCount } = await pool.query(
     `UPDATE calls
@@ -38,9 +55,10 @@ export async function reconcileStaleCalls(olderThanMinutes = 30): Promise<number
   return rowCount ?? 0;
 }
 
-export async function getAllCalls(filters?: CallFilters): Promise<CallRecord[]> {
+export async function getAllCalls(userId: string, filters?: CallFilters): Promise<CallRecord[]> {
   const { rows } = await pool.query(
-    'SELECT data FROM calls ORDER BY start_time DESC NULLS LAST',
+    'SELECT data FROM calls WHERE user_id = $1 ORDER BY start_time DESC NULLS LAST',
+    [userId],
   );
   let calls: CallRecord[] = rows.map(r => r.data as CallRecord);
 
@@ -60,6 +78,7 @@ export async function getAllCalls(filters?: CallFilters): Promise<CallRecord[]> 
 }
 
 export async function createCall(
+  userId: string,
   vapiCallId: string,
   customer: CustomerInfo,
   scenarioId?: string,
@@ -74,7 +93,7 @@ export async function createCall(
     customerInfo:  customer,
     startTime:     new Date().toISOString(),
     transcript:    [],
-    costs:         { vapi: 0, twilio: 0, llm: 0, tts: 0, stt: 0, total: 0 },
+    costs:         { vapi: 0, twilio: 0, llm: 0, tts: 0, stt: 0, anthropic: 0, total: 0 },
     status:        'in-progress',
     followUp:      false,
     createdAt:     new Date().toISOString(),
@@ -82,15 +101,33 @@ export async function createCall(
     scenarioName,
     campaignId,
   };
-  await writeCall(record);
+  await pool.query(
+    `INSERT INTO calls (vapi_call_id, data, start_time, status, user_id)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [record.vapiCallId, JSON.stringify(record), record.startTime, record.status, userId],
+  );
   return record;
 }
 
+// Webhook-internal — sahiplik zaten rota katmanında doğrulanmış varsayılır.
 export async function updateCall(
   vapiCallId: string,
   updates: Partial<CallRecord>,
 ): Promise<CallRecord | null> {
   const record = await readCall(vapiCallId);
+  if (!record) return null;
+  const updated = { ...record, ...updates };
+  await writeCall(updated);
+  return updated;
+}
+
+// Uygulama rotaları için sahiplik-kontrollü güncelleme (örn. PATCH /api/calls/:id).
+export async function updateCallForUser(
+  userId: string,
+  vapiCallId: string,
+  updates: Partial<CallRecord>,
+): Promise<CallRecord | null> {
+  const record = await readCallForUser(userId, vapiCallId);
   if (!record) return null;
   const updated = { ...record, ...updates };
   await writeCall(updated);
@@ -113,7 +150,15 @@ export async function updateCosts(
 ): Promise<void> {
   const record = await readCall(vapiCallId);
   if (!record) return;
-  record.costs = { ...record.costs, ...costs };
+  const merged = { ...record.costs, ...costs } as CallCosts;
+  // total'ü her zaman parçalardan yeniden hesapla — çağıran taraf hangi alt kalemi
+  // güncellerse güncellesin (Vapi'nin cost-update'i, ya da bizim Anthropic/ElevenLabs
+  // tahminimiz) toplam asla eksik/yanlış kalmasın.
+  merged.total = Math.round(
+    ((merged.vapi || 0) + (merged.twilio || 0) + (merged.llm || 0) +
+     (merged.tts || 0) + (merged.stt || 0) + (merged.anthropic || 0)) * 1e6,
+  ) / 1e6;
+  record.costs = merged;
   await writeCall(record);
 }
 
@@ -122,6 +167,59 @@ export async function saveCallSummary(
   summary: CallSummary,
 ): Promise<void> {
   await updateCall(vapiCallId, { summary });
+}
+
+export interface BestCallInfo {
+  vapiCallId: string;
+  status: string;
+  summary: CallSummary | null;
+}
+
+// Bir kampanyadaki her telefon numarası için "calls" tablosundaki EN İYİ (randevu
+// varsa öncelikli, sonra özeti olanı, sonra en sonuncusu) aramayı TEK sorguda döner.
+// Kampanya motoru sunucu açılışında kendi contacts JSONB kopyasını bu gerçek veriyle
+// karşılaştırıp senkronize etmek için kullanır — bir webhook yazımı bir deploy
+// sırasında kaybolmuşsa (örn. arıyor'da takılı kalmış veya özeti eksik kalmış bir
+// kişi), her kişi için ayrı sorgu atmadan, tek seferde gerçeği geri kazanır.
+export async function getBestCallsByPhoneForCampaign(
+  userId: string, campaignId: string,
+): Promise<Map<string, BestCallInfo>> {
+  const { rows } = await pool.query<{ phone: string; vapi_call_id: string; status: string; summary: CallSummary | null }>(
+    `SELECT DISTINCT ON (data->>'customerPhone')
+       data->>'customerPhone' AS phone, vapi_call_id, status, data->'summary' AS summary
+     FROM calls
+     WHERE user_id = $1 AND data->>'campaignId' = $2
+     ORDER BY data->>'customerPhone',
+       (data->'summary'->>'randevu_alindi')::boolean DESC NULLS LAST,
+       (data->'summary' IS NOT NULL) DESC,
+       start_time DESC`,
+    [userId, campaignId],
+  );
+  const map = new Map<string, BestCallInfo>();
+  for (const r of rows) map.set(r.phone, { vapiCallId: r.vapi_call_id, status: r.status, summary: r.summary });
+  return map;
+}
+
+// Aynı kişiyi aynı gün ikinci kez aramayı önleyen güvenlik ağı — kampanya motorunun
+// KENDİ durum takibi (contact.status) bir nedenle yanlış/eski kalmış olsa bile
+// (örn. bir deploy sırasında kaybolan webhook yazımı), gerçek arama geçmişine bakan
+// bu DIŞARIDAN doğrulama ikinci bir güvence katmanı sağlar.
+export async function findTodaysCallForPhone(
+  userId: string, phone: string, sinceIso: string,
+): Promise<BestCallInfo | null> {
+  const { rows } = await pool.query<{ vapi_call_id: string; status: string; summary: CallSummary | null }>(
+    `SELECT vapi_call_id, status, data->'summary' AS summary
+     FROM calls
+     WHERE user_id = $1 AND data->>'customerPhone' = $2 AND start_time >= $3
+     ORDER BY
+       (data->'summary'->>'randevu_alindi')::boolean DESC NULLS LAST,
+       (data->'summary' IS NOT NULL) DESC,
+       start_time DESC
+     LIMIT 1`,
+    [userId, phone, sinceIso],
+  );
+  const r = rows[0];
+  return r ? { vapiCallId: r.vapi_call_id, status: r.status, summary: r.summary } : null;
 }
 
 // Kampanya ve tek arama arasında paylaşılan: İngilizce status → Türkçe UI etiketi
@@ -196,7 +294,7 @@ export interface CampaignStatsData {
 
 // Tek bir kampanyaya ait aramaların analizi — getStats ile aynı SQL desenini
 // kullanır ama tarih aralığı yerine campaignId ile filtreler.
-export async function getCampaignStats(campaignId: string): Promise<CampaignStatsData> {
+export async function getCampaignStats(userId: string, campaignId: string): Promise<CampaignStatsData> {
   const [mainRow, ilgiRows, retRows, statusRows] = await Promise.all([
     pool.query<{
       total_calls: string; completed_calls: string; avg_duration: string;
@@ -212,25 +310,25 @@ export async function getCampaignStats(campaignId: string): Promise<CampaignStat
            = true)::int                                                      AS randevu_count,
          COUNT(*) FILTER (WHERE data->'summary' IS NOT NULL
            AND status != 'in-progress')::int                                AS with_summary
-       FROM calls WHERE data->>'campaignId' = $1`,
-      [campaignId],
+       FROM calls WHERE data->>'campaignId' = $1 AND user_id = $2`,
+      [campaignId, userId],
     ),
     pool.query<{ seviye: string; count: string }>(
       `SELECT COALESCE(data->'summary'->>'ilgi_seviyesi','yok') AS seviye, COUNT(*)::int AS count
-       FROM calls WHERE data->>'campaignId' = $1
+       FROM calls WHERE data->>'campaignId' = $1 AND user_id = $2
          AND data->'summary' IS NOT NULL AND status != 'in-progress'
        GROUP BY seviye`,
-      [campaignId],
+      [campaignId, userId],
     ),
     pool.query<{ neden: string; count: string }>(
       `SELECT data->'summary'->>'ret_nedeni' AS neden, COUNT(*)::int AS count
-       FROM calls WHERE data->>'campaignId' = $1 AND data->'summary'->>'ret_nedeni' IS NOT NULL
+       FROM calls WHERE data->>'campaignId' = $1 AND user_id = $2 AND data->'summary'->>'ret_nedeni' IS NOT NULL
        GROUP BY neden ORDER BY count DESC LIMIT 8`,
-      [campaignId],
+      [campaignId, userId],
     ),
     pool.query<{ status: string; count: string }>(
-      `SELECT status, COUNT(*)::int AS count FROM calls WHERE data->>'campaignId' = $1 GROUP BY status`,
-      [campaignId],
+      `SELECT status, COUNT(*)::int AS count FROM calls WHERE data->>'campaignId' = $1 AND user_id = $2 GROUP BY status`,
+      [campaignId, userId],
     ),
   ]);
 
@@ -256,7 +354,7 @@ export async function getCampaignStats(campaignId: string): Promise<CampaignStat
   };
 }
 
-export async function getStats(periodDays?: number): Promise<StatsData> {
+export async function getStats(userId: string, periodDays?: number): Promise<StatsData> {
   const days   = periodDays && periodDays > 0 ? Math.min(periodDays, 90) : 30;
   const cutoff = periodDays && periodDays > 0
     ? new Date(Date.now() - periodDays * 86400000).toISOString()
@@ -290,8 +388,8 @@ export async function getStats(periodDays?: number): Promise<StatsData> {
          COUNT(*) FILTER (WHERE data->'summary' IS NOT NULL
            AND status != 'in-progress')::int                                  AS with_summary
        FROM calls
-       WHERE ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)`,
-      [cutoff],
+       WHERE user_id = $2 AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)`,
+      [cutoff, userId],
     ),
 
     // 2 — Günlük arama + maliyet (generate_series → sıfırlı günler dahil)
@@ -307,9 +405,10 @@ export async function getStats(periodDays?: number): Promise<StatsData> {
               COALESCE(SUM((c.data->'costs'->>'total')::float), 0)   AS cost
        FROM ds
        LEFT JOIN calls c ON c.start_time::date = ds.d
+         AND c.user_id = $3
          AND ($1::timestamptz IS NULL OR c.start_time >= $1::timestamptz)
        GROUP BY ds.d ORDER BY ds.d`,
-      [cutoff, days],
+      [cutoff, days, userId],
     ),
 
     // 3 — Randevu dönüşüm trendi
@@ -327,9 +426,10 @@ export async function getStats(periodDays?: number): Promise<StatsData> {
               )::int AS alindi
        FROM ds
        LEFT JOIN calls c ON c.start_time::date = ds.d
+         AND c.user_id = $3
          AND ($1::timestamptz IS NULL OR c.start_time >= $1::timestamptz)
        GROUP BY ds.d ORDER BY ds.d`,
-      [cutoff, days],
+      [cutoff, days, userId],
     ),
 
     // 4 — İlgi seviyesi dağılımı
@@ -337,20 +437,20 @@ export async function getStats(periodDays?: number): Promise<StatsData> {
       `SELECT COALESCE(data->'summary'->>'ilgi_seviyesi','yok') AS seviye,
               COUNT(*)::int AS count
        FROM calls
-       WHERE data->'summary' IS NOT NULL AND status != 'in-progress'
+       WHERE user_id = $2 AND data->'summary' IS NOT NULL AND status != 'in-progress'
          AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
        GROUP BY seviye`,
-      [cutoff],
+      [cutoff, userId],
     ),
 
     // 5 — Ret nedeni dağılımı
     pool.query<{ neden: string; count: string }>(
       `SELECT data->'summary'->>'ret_nedeni' AS neden, COUNT(*)::int AS count
        FROM calls
-       WHERE data->'summary'->>'ret_nedeni' IS NOT NULL
+       WHERE user_id = $2 AND data->'summary'->>'ret_nedeni' IS NOT NULL
          AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
        GROUP BY neden ORDER BY count DESC LIMIT 8`,
-      [cutoff],
+      [cutoff, userId],
     ),
 
     // 6 — Aksiyon dağılımı
@@ -358,28 +458,28 @@ export async function getStats(periodDays?: number): Promise<StatsData> {
       `SELECT COALESCE(data->'summary'->>'tavsiye_edilen_aksiyon','Belirsiz') AS action,
               COUNT(*)::int AS count
        FROM calls
-       WHERE data->'summary' IS NOT NULL AND status != 'in-progress'
+       WHERE user_id = $2 AND data->'summary' IS NOT NULL AND status != 'in-progress'
          AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
        GROUP BY action`,
-      [cutoff],
+      [cutoff, userId],
     ),
 
     // 7 — Saatlik dağılım
     pool.query<{ hour: string; count: string }>(
       `SELECT EXTRACT(HOUR FROM start_time)::int AS hour, COUNT(*)::int AS count
        FROM calls
-       WHERE start_time IS NOT NULL
+       WHERE user_id = $2 AND start_time IS NOT NULL
          AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
        GROUP BY hour ORDER BY hour`,
-      [cutoff],
+      [cutoff, userId],
     ),
 
     // 8 — Durum dağılımı
     pool.query<{ status: string; count: string }>(
       `SELECT status, COUNT(*)::int AS count FROM calls
-       WHERE ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
+       WHERE user_id = $2 AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
        GROUP BY status`,
-      [cutoff],
+      [cutoff, userId],
     ),
 
     // 9 — Senaryo performansı
@@ -391,9 +491,9 @@ export async function getStats(periodDays?: number): Promise<StatsData> {
               )::int AS randevu,
               COALESCE(SUM((data->'costs'->>'total')::float), 0) AS cost
        FROM calls
-       WHERE ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
+       WHERE user_id = $2 AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
        GROUP BY name ORDER BY calls DESC`,
-      [cutoff],
+      [cutoff, userId],
     ),
   ]);
 
@@ -442,8 +542,8 @@ export async function getStats(periodDays?: number): Promise<StatsData> {
   };
 }
 
-export async function exportCSV(filters?: CallFilters): Promise<string> {
-  const calls = await getAllCalls(filters);
+export async function exportCSV(userId: string, filters?: CallFilters): Promise<string> {
+  const calls = await getAllCalls(userId, filters);
   const headers = ['Tarih','Ad','Telefon','Süre','Randevu','İlgi','Ret Nedeni','Mülk Tipi','Aksiyon','Geri Dönüş Notu','Özet','Maliyet','Durum','Notlar'];
   const rows = calls.map(c => [
     new Date(c.startTime).toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' }),

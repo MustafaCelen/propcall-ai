@@ -21,6 +21,42 @@ const INIT_RETRY_MS   = 2_000; // Neon uç noktası genellikle 1-3 sn içinde uy
 
 export async function initDb(): Promise<void> {
   const ddl = `
+    -- Danışman (consultant) hesapları — çok kiracılı (multi-tenant) mimarinin temeli.
+    -- password_hash formatı: "N:r:p:saltHex:hashHex" (scrypt, bkz. src/auth.ts).
+    CREATE TABLE IF NOT EXISTS users (
+      id                     TEXT PRIMARY KEY,
+      email                  TEXT UNIQUE NOT NULL,
+      password_hash          TEXT NOT NULL,
+      name                   TEXT,
+      role                   TEXT NOT NULL DEFAULT 'agent', -- 'agent' | 'admin'
+      is_active              BOOLEAN NOT NULL DEFAULT true,
+      vapi_api_key_enc       TEXT,
+      vapi_phone_number_id   TEXT,
+      vapi_assistant_id      TEXT,
+      vapi_server_secret_enc TEXT,
+      elevenlabs_api_key_enc TEXT,
+      anthropic_api_key_enc  TEXT,
+      max_concurrent_calls   INT NOT NULL DEFAULT 3,
+      calling_hours_start    INT,  -- 0-23, NULL = sınır yok
+      calling_hours_end      INT,  -- 0-23, NULL = sınır yok
+      elevenlabs_cost_per_1k NUMERIC,  -- $/1000 karakter, NULL = kullanıcı henüz girmedi
+      last_login_at          TIMESTAMPTZ,
+      created_at             TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    -- users tablosu zaten var olan kurulumlarda yukarıdaki CREATE bir no-op olur —
+    -- yeni sütunları var olan tabloya eklemek için ayrıca gerekli.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS calling_hours_start INT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS calling_hours_end   INT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS elevenlabs_cost_per_1k NUMERIC;
+
+    CREATE TABLE IF NOT EXISTS user_sessions (
+      id         TEXT PRIMARY KEY,
+      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS calls (
       vapi_call_id TEXT PRIMARY KEY,
       data         JSONB NOT NULL,
@@ -69,6 +105,16 @@ export async function initDb(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_campaigns_status     ON campaigns (status);
     CREATE INDEX IF NOT EXISTS idx_campaigns_created_at ON campaigns (created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_calls_campaign_id    ON calls ((data ->> 'campaignId'));
+
+    -- Çok kiracılı veri izolasyonu — nullable (eski kayıtlar boot sırasında admin'e atanır, bkz. src/users.ts backfillOwnerlessRows).
+    ALTER TABLE calls        ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id);
+    ALTER TABLE appointments ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id);
+    ALTER TABLE scenarios    ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id);
+    ALTER TABLE campaigns    ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id);
+    CREATE INDEX IF NOT EXISTS idx_calls_user_id        ON calls (user_id);
+    CREATE INDEX IF NOT EXISTS idx_appointments_user_id ON appointments (user_id);
+    CREATE INDEX IF NOT EXISTS idx_scenarios_user_id    ON scenarios (user_id);
+    CREATE INDEX IF NOT EXISTS idx_campaigns_user_id    ON campaigns (user_id);
 
     -- Admin panelden girilen API key'leri (şifreli) — .env yerine canlı override
     CREATE TABLE IF NOT EXISTS app_settings (

@@ -2,22 +2,24 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { CustomerInfo, CallSummary } from './types';
-import { getSetting } from './settings';
 
-// Client her çağrıda taze key ile yaratılır — admin panelden key değişse bile
-// restart gerekmeden bir sonraki özet yeni key'i kullanır.
-async function getClient(): Promise<Anthropic> {
-  const apiKey = await getSetting('ANTHROPIC_API_KEY');
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY tanımlanmamış (Admin panelden veya .env ile ekleyin)');
-  return new Anthropic({ apiKey });
+// claude-sonnet-4-5 fiyatlandırması ($/milyon token) — model değişirse burada güncelle.
+const ANTHROPIC_INPUT_PER_MTOK  = 3;
+const ANTHROPIC_OUTPUT_PER_MTOK = 15;
+
+export interface CallSummaryResult {
+  summary: CallSummary;
+  usage: { inputTokens: number; outputTokens: number; costUsd: number };
 }
 
 export async function generateCallSummary(
+  apiKey: string,
   customer: CustomerInfo,
   history: Array<{ role: 'assistant' | 'user'; content: string }>,
   scenarioPrompt?: string | null,
-): Promise<CallSummary> {
-  const client = await getClient();
+): Promise<CallSummaryResult> {
+  if (!apiKey) throw new Error('Anthropic API key tanımlanmamış (Ayarlarım sayfasından ekleyin)');
+  const client = new Anthropic({ apiKey });
   const conversationText = history
     .map((m) => `${m.role === 'assistant' ? 'Asistan' : 'Müşteri'}: ${m.content}`)
     .join('\n\n');
@@ -113,5 +115,13 @@ geri_donus_notu:
   if (content.type !== 'text') throw new Error('Beklenmeyen yanıt tipi');
 
   const jsonText = content.text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-  return JSON.parse(jsonText) as CallSummary;
+  const summary = JSON.parse(jsonText) as CallSummary;
+
+  const inputTokens  = response.usage?.input_tokens  ?? 0;
+  const outputTokens = response.usage?.output_tokens ?? 0;
+  const costUsd = Math.round(
+    ((inputTokens / 1e6) * ANTHROPIC_INPUT_PER_MTOK + (outputTokens / 1e6) * ANTHROPIC_OUTPUT_PER_MTOK) * 1e6,
+  ) / 1e6;
+
+  return { summary, usage: { inputTokens, outputTokens, costUsd } };
 }

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Giriş — PropCall AI</title>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    html,body{height:100%}
+    body{background:var(--bg);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+    .lg-wrap{max-width:380px;width:100%}
+    .lg-header{text-align:center;margin-bottom:28px}
+    .lg-logo{width:52px;height:52px;background:var(--primary);border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:24px;margin:0 auto 12px}
+    .lg-title{font-size:20px;font-weight:700}
+    .lg-sub{font-size:13px;color:var(--tx2);margin-top:4px}
+    .lg-card{background:var(--s1);border:1px solid var(--border);border-radius:14px;padding:26px}
+    .lg-card input{width:100%;font-size:14px;padding:11px 14px;background:var(--s2);border:1px solid var(--border);border-radius:8px;color:var(--tx);font-family:'Sora',sans-serif;outline:none;transition:border-color .15s;margin-bottom:12px}
+    .lg-card input:focus{border-color:var(--border-a)}
+    .lg-btn{width:100%;background:var(--primary);color:#000;border:none;border-radius:8px;padding:11px 20px;font-size:14px;font-weight:700;cursor:pointer;transition:opacity .15s;font-family:'Sora',sans-serif}
+    .lg-btn:hover:not(:disabled){opacity:.85}
+    .lg-btn:disabled{opacity:.4;cursor:not-allowed}
+    .lg-err{color:var(--red);font-size:12px;margin-top:10px;display:none;text-align:center}
+    .lg-err.show{display:block}
+  </style>
+</head>
+<body>
+<div class="lg-wrap">
+  <div class="lg-header">
+    <div class="lg-logo">📞</div>
+    <div class="lg-title">PropCall AI</div>
+    <div class="lg-sub">Danışman girişi</div>
+  </div>
+  <div class="lg-card">
+    <input type="email" id="emailInput" placeholder="E-posta" autocomplete="username" />
+    <input type="password" id="pwInput" placeholder="Şifre" autocomplete="current-password" />
+    <button class="lg-btn" id="btnLogin">Giriş Yap</button>
+    <div class="lg-err" id="loginErr"></div>
+  </div>
+</div>
+<script>
+  const $ = id => document.getElementById(id);
+
+  async function doLogin() {
+    const email    = $('emailInput').value.trim();
+    const password = $('pwInput').value;
+    if (!email || !password) {
+      $('loginErr').textContent = 'E-posta ve şifre zorunlu';
+      $('loginErr').classList.add('show');
+      return;
+    }
+    $('btnLogin').disabled = true;
+    $('loginErr').classList.remove('show');
+    try {
+      const resp = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      const json = await resp.json();
+      if (!json.success) throw new Error(json.error || 'Giriş başarısız');
+      const params = new URLSearchParams(location.search);
+      location.href = params.get('next') || '/';
+    } catch (err) {
+      $('loginErr').textContent = err.message;
+      $('loginErr').classList.add('show');
+      $('btnLogin').disabled = false;
+    }
+  }
+
+  $('btnLogin').addEventListener('click', doLogin);
+  $('pwInput').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+  $('emailInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('pwInput').focus(); });
+
+  // Zaten girişliyse doğrudan uygulamaya gönder
+  fetch('/api/auth/session').then(r => r.json()).then(j => {
+    if (j.success) location.href = '/';
+  }).catch(() => {});
+</script>
+</body>
+</html>

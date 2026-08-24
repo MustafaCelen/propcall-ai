@@ -1,13 +1,12 @@
-// PropCall AI - Vapi API entegrasyonu
+// PropCall AI - Vapi API entegrasyonu — her danışman kendi Vapi hesabıyla çalışır,
+// bu yüzden her fonksiyon kimlik bilgilerini (apiKey/assistantId) açıkça parametre alır.
 
 import { CustomerInfo } from './types';
-import { getSetting } from './settings';
+import { ResolvedVapiCredentials } from './users';
 
 const VAPI_BASE_URL = 'https://api.vapi.ai';
 
-async function getHeaders(): Promise<Record<string, string>> {
-  const apiKey = await getSetting('VAPI_API_KEY');
-  if (!apiKey) throw new Error('VAPI_API_KEY tanımlanmamış (Admin panelden veya .env ile ekleyin)');
+function getHeaders(apiKey: string): Record<string, string> {
   return {
     Authorization: `Bearer ${apiKey}`,
     'Content-Type': 'application/json',
@@ -26,32 +25,37 @@ export interface VapiCallResponse {
 // Assistant'ın model config'i (provider + model adı) kısa süreliğine önbelleğe alınır —
 // Vapi, assistantOverrides.model'de messages göndermek için provider/model alanlarının da
 // dolu olmasını zorunlu tutuyor; bunları her aramada asistandan taze çekmek yerine cache'liyoruz.
-let modelConfigCache: { provider: string; model: string } | null = null;
-let modelConfigCachedAt = 0;
+// assistantId ile keylenir — farklı danışmanların farklı asistanları birbirine karışmaz.
+const modelConfigCache = new Map<string, { provider: string; model: string; cachedAt: number }>();
 const MODEL_CONFIG_TTL_MS = 5 * 60 * 1000;
 
-async function getAssistantModelConfig(assistantId: string): Promise<{ provider: string; model: string }> {
-  if (modelConfigCache && Date.now() - modelConfigCachedAt < MODEL_CONFIG_TTL_MS) {
-    return modelConfigCache;
-  }
-  const resp = await fetch(`${VAPI_BASE_URL}/assistant/${assistantId}`, { headers: await getHeaders() });
+async function getAssistantModelConfig(apiKey: string, assistantId: string): Promise<{ provider: string; model: string }> {
+  const cached = modelConfigCache.get(assistantId);
+  if (cached && Date.now() - cached.cachedAt < MODEL_CONFIG_TTL_MS) return cached;
+
+  const resp = await fetch(`${VAPI_BASE_URL}/assistant/${assistantId}`, { headers: getHeaders(apiKey) });
   if (!resp.ok) throw new Error(`Vapi assistant bilgisi alınamadı: ${resp.status}`);
   const data = await resp.json() as { model?: { provider?: string; model?: string } };
   if (!data.model?.provider || !data.model?.model) {
     throw new Error('Vapi assistant model config eksik (provider/model)');
   }
-  modelConfigCache = { provider: data.model.provider, model: data.model.model };
-  modelConfigCachedAt = Date.now();
-  return modelConfigCache;
+  const result = { provider: data.model.provider, model: data.model.model, cachedAt: Date.now() };
+  modelConfigCache.set(assistantId, result);
+  return result;
+}
+
+function invalidateAssistantCaches(assistantId: string): void {
+  modelConfigCache.delete(assistantId);
+  systemPromptCache.delete(assistantId);
 }
 
 // Vapi üzerinden outbound arama başlat
-export async function createVapiCall(customer: CustomerInfo, systemPrompt?: string): Promise<VapiCallResponse> {
-  const phoneNumberId = await getSetting('VAPI_PHONE_NUMBER_ID');
-  const assistantId   = await getSetting('VAPI_ASSISTANT_ID');
-
-  if (!phoneNumberId) throw new Error('VAPI_PHONE_NUMBER_ID tanımlanmamış (Admin panelden veya .env ile ekleyin)');
-  if (!assistantId)   throw new Error('VAPI_ASSISTANT_ID tanımlanmamış (Admin panelden veya .env ile ekleyin)');
+export async function createVapiCall(
+  creds: ResolvedVapiCredentials,
+  customer: CustomerInfo,
+  systemPrompt?: string,
+): Promise<VapiCallResponse> {
+  const { apiKey, phoneNumberId, assistantId } = creds;
 
   const assistantOverrides: Record<string, unknown> = {
     variableValues: {
@@ -65,7 +69,7 @@ export async function createVapiCall(customer: CustomerInfo, systemPrompt?: stri
   if (systemPrompt) {
     // Vapi, model override'ında provider/model alanlarını zorunlu tutuyor —
     // sadece messages göndermek "assistantOverrides.model.provider must be one of..." hatası verir.
-    const { provider, model } = await getAssistantModelConfig(assistantId);
+    const { provider, model } = await getAssistantModelConfig(apiKey, assistantId);
     assistantOverrides.model = {
       provider,
       model,
@@ -85,7 +89,7 @@ export async function createVapiCall(customer: CustomerInfo, systemPrompt?: stri
 
   const response = await fetch(`${VAPI_BASE_URL}/call`, {
     method: 'POST',
-    headers: await getHeaders(),
+    headers: getHeaders(apiKey),
     body: JSON.stringify(body),
   });
 
@@ -100,9 +104,9 @@ export async function createVapiCall(customer: CustomerInfo, systemPrompt?: stri
 // Ses kaydı için kısa ömürlü imzalı URL al (raw recordingUrl'ler HIPAA bucket'ında
 // yetkilendirme gerektirdiğinden doğrudan tarayıcıdan çalınamaz — Vapi'nin
 // /call/:id/mono-recording endpoint'i 302 ile imzalı URL'ye yönlendirir).
-export async function getSignedRecordingUrl(vapiCallId: string): Promise<string | null> {
+export async function getSignedRecordingUrl(apiKey: string, vapiCallId: string): Promise<string | null> {
   const resp = await fetch(`${VAPI_BASE_URL}/call/${vapiCallId}/mono-recording`, {
-    headers: await getHeaders(),
+    headers: getHeaders(apiKey),
     redirect: 'manual',
   });
   const location = resp.headers.get('location');
@@ -110,10 +114,10 @@ export async function getSignedRecordingUrl(vapiCallId: string): Promise<string 
 }
 
 // Aktif aramayı sonlandır
-export async function endVapiCall(vapiCallId: string): Promise<void> {
+export async function endVapiCall(apiKey: string, vapiCallId: string): Promise<void> {
   const response = await fetch(`${VAPI_BASE_URL}/call/${vapiCallId}`, {
     method: 'DELETE',
-    headers: await getHeaders(),
+    headers: getHeaders(apiKey),
   });
 
   if (!response.ok && response.status !== 404) {
@@ -124,39 +128,34 @@ export async function endVapiCall(vapiCallId: string): Promise<void> {
 
 // Vapi assistant'ın canlı (base) sistem promptunu getir — özet üretiminde de
 // kullanıldığı için kısa TTL cache: her arama sonunda Vapi'yi bombalamayalım.
-let systemPromptCache: { name: string; systemPrompt: string } | null = null;
-let systemPromptCachedAt = 0;
+// assistantId ile keylenir (bkz. modelConfigCache açıklaması).
+const systemPromptCache = new Map<string, { name: string; systemPrompt: string; cachedAt: number }>();
 const SYSTEM_PROMPT_TTL_MS = 5 * 60 * 1000;
 
-export async function getAssistantSystemPrompt(forceRefresh = false): Promise<{ name: string; systemPrompt: string }> {
-  if (!forceRefresh && systemPromptCache && Date.now() - systemPromptCachedAt < SYSTEM_PROMPT_TTL_MS) {
-    return systemPromptCache;
-  }
-  const assistantId = await getSetting('VAPI_ASSISTANT_ID');
-  if (!assistantId) throw new Error('VAPI_ASSISTANT_ID tanımlanmamış (Admin panelden veya .env ile ekleyin)');
+export async function getAssistantSystemPrompt(
+  apiKey: string, assistantId: string, forceRefresh = false,
+): Promise<{ name: string; systemPrompt: string }> {
+  const cached = systemPromptCache.get(assistantId);
+  if (!forceRefresh && cached && Date.now() - cached.cachedAt < SYSTEM_PROMPT_TTL_MS) return cached;
 
-  const resp = await fetch(`${VAPI_BASE_URL}/assistant/${assistantId}`, { headers: await getHeaders() });
+  const resp = await fetch(`${VAPI_BASE_URL}/assistant/${assistantId}`, { headers: getHeaders(apiKey) });
   if (!resp.ok) throw new Error(`Vapi assistant bilgisi alınamadı: ${resp.status}`);
   const data = await resp.json() as {
     name?: string;
     model?: { messages?: Array<{ role: string; content: string }> };
   };
   const systemMsg = data.model?.messages?.find(m => m.role === 'system');
-  const result = { name: data.name || 'Vapi Asistanı', systemPrompt: systemMsg?.content || '' };
-  systemPromptCache = result;
-  systemPromptCachedAt = Date.now();
+  const result = { name: data.name || 'Vapi Asistanı', systemPrompt: systemMsg?.content || '', cachedAt: Date.now() };
+  systemPromptCache.set(assistantId, result);
   return result;
 }
 
 // Vapi assistant'ın canlı (base) sistem promptunu güncelle — tüm aramaları etkiler
-export async function updateAssistantSystemPrompt(systemPrompt: string): Promise<void> {
-  const assistantId = await getSetting('VAPI_ASSISTANT_ID');
-  if (!assistantId) throw new Error('VAPI_ASSISTANT_ID tanımlanmamış (Admin panelden veya .env ile ekleyin)');
-
-  const { provider, model } = await getAssistantModelConfig(assistantId);
+export async function updateAssistantSystemPrompt(apiKey: string, assistantId: string, systemPrompt: string): Promise<void> {
+  const { provider, model } = await getAssistantModelConfig(apiKey, assistantId);
   const resp = await fetch(`${VAPI_BASE_URL}/assistant/${assistantId}`, {
     method: 'PATCH',
-    headers: await getHeaders(),
+    headers: getHeaders(apiKey),
     body: JSON.stringify({
       model: { provider, model, messages: [{ role: 'system', content: systemPrompt }] },
     }),
@@ -165,8 +164,7 @@ export async function updateAssistantSystemPrompt(systemPrompt: string): Promise
     const errText = await resp.text();
     throw new Error(`Vapi assistant güncelleme hatası: ${resp.status} - ${errText}`);
   }
-  modelConfigCache  = null; // provider/model değişmiş olabilir varsayımıyla cache'i temizle
-  systemPromptCache = null; // prompt değişti — bir sonraki özette taze çekilsin
+  invalidateAssistantCaches(assistantId);
 }
 
 // Vapi hesap kredisi / abonelik bilgisi
@@ -197,7 +195,58 @@ export async function verifyVapiApiKey(apiKey: string): Promise<{ ok: boolean; e
   }
 }
 
-// ─── Asistan Ayarları (Admin panel) ────────────────────────────────────────
+// Ayarlarım'da Assistant ID / Phone Number ID'yi elle yapıştırmak yerine dropdown'dan
+// seçtirebilmek için — kullanıcı sadece Vapi API Key'ini girince hesabındaki asistan/numara
+// listesi çekilir.
+export async function listAssistants(apiKey: string): Promise<Array<{ id: string; name: string }>> {
+  const resp = await fetch(`${VAPI_BASE_URL}/assistant`, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!resp.ok) throw new Error(`Vapi asistan listesi alınamadı: ${resp.status}`);
+  const data = await resp.json() as Array<{ id: string; name?: string }>;
+  return data.map(a => ({ id: a.id, name: a.name || '(isimsiz)' }));
+}
+
+export async function listPhoneNumbers(apiKey: string): Promise<Array<{ id: string; number: string; name?: string }>> {
+  const resp = await fetch(`${VAPI_BASE_URL}/phone-number`, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!resp.ok) throw new Error(`Vapi telefon numarası listesi alınamadı: ${resp.status}`);
+  const data = await resp.json() as Array<{ id: string; number?: string; name?: string }>;
+  return data.map(p => ({ id: p.id, number: p.number || '(numara yok)', name: p.name }));
+}
+
+// Bu alanlar hesaba/kayda özeldir — bir asistanı başka bir hesaba kopyalarken
+// taşınmamalı. En önemlisi "server": kaynağın webhook adresi/secret'ı hedefe
+// kopyalanırsa hedef hesabın aramaları yanlışlıkla kaynağa gider. Hedefin kendi
+// webhook'u, assistantId kaydedildiğinde provisionWebhookIfReady ile ayrıca kurulur.
+const NON_COPYABLE_ASSISTANT_FIELDS = ['id', 'orgId', 'createdAt', 'updatedAt', 'server', 'latestVersion', 'isServerUrlSecretSet'];
+
+// Bir asistanın TÜM konfigürasyonunu (model/ses/transkripsiyon/prompt/davranış — Ayarlarım'daki
+// dar AssistantConfigView'dan çok daha kapsamlı) bir hesaptan okuyup başka bir hesapta
+// yepyeni bir asistan olarak oluşturur. Danışman onboarding'inde "admin'in ayarladığı
+// script/ses/model bende de aynen olsun" senaryosu için.
+export async function importAssistant(
+  sourceApiKey: string, sourceAssistantId: string, targetApiKey: string, newName?: string,
+): Promise<{ id: string; name: string }> {
+  const sourceResp = await fetch(`${VAPI_BASE_URL}/assistant/${sourceAssistantId}`, { headers: getHeaders(sourceApiKey) });
+  if (!sourceResp.ok) throw new Error(`Kaynak asistan okunamadı: ${sourceResp.status}`);
+  const source = await sourceResp.json() as Record<string, unknown>;
+
+  const body: Record<string, unknown> = { ...source };
+  for (const field of NON_COPYABLE_ASSISTANT_FIELDS) delete body[field];
+  if (newName?.trim()) body.name = newName.trim();
+
+  const createResp = await fetch(`${VAPI_BASE_URL}/assistant`, {
+    method: 'POST',
+    headers: getHeaders(targetApiKey),
+    body: JSON.stringify(body),
+  });
+  if (!createResp.ok) {
+    const errText = await createResp.text();
+    throw new Error(`Yeni asistan oluşturulamadı: ${createResp.status} - ${errText}`);
+  }
+  const created = await createResp.json() as { id: string; name: string };
+  return { id: created.id, name: created.name };
+}
+
+// ─── Asistan Ayarları (kullanıcının kendi "Ayarlarım" sayfası) ─────────────
 // Model/ses/transkripsiyon/konuşma davranışı — prompt dışındaki teknik ayarlar.
 
 export interface AssistantConfigView {
@@ -220,11 +269,8 @@ export interface AssistantConfigView {
   stopSpeakingNumWords: number;
 }
 
-export async function getAssistantConfig(): Promise<AssistantConfigView> {
-  const assistantId = await getSetting('VAPI_ASSISTANT_ID');
-  if (!assistantId) throw new Error('VAPI_ASSISTANT_ID tanımlanmamış');
-
-  const resp = await fetch(`${VAPI_BASE_URL}/assistant/${assistantId}`, { headers: await getHeaders() });
+export async function getAssistantConfig(apiKey: string, assistantId: string): Promise<AssistantConfigView> {
+  const resp = await fetch(`${VAPI_BASE_URL}/assistant/${assistantId}`, { headers: getHeaders(apiKey) });
   if (!resp.ok) throw new Error(`Vapi assistant bilgisi alınamadı: ${resp.status}`);
   const d = await resp.json() as any;
 
@@ -271,11 +317,8 @@ export interface AssistantConfigPatch {
 // alanı değil TÜM objeyi bekliyor — bu yüzden önce mevcut config'i çekip
 // sadece değişen alanları üstüne yazıp tam objeyi geri gönderiyoruz. Aksi halde
 // örn. sadece confidenceThreshold güncellenirken transcriber.language sıfırlanabilir.
-export async function updateAssistantConfig(patch: AssistantConfigPatch): Promise<void> {
-  const assistantId = await getSetting('VAPI_ASSISTANT_ID');
-  if (!assistantId) throw new Error('VAPI_ASSISTANT_ID tanımlanmamış');
-
-  const current = await fetch(`${VAPI_BASE_URL}/assistant/${assistantId}`, { headers: await getHeaders() })
+export async function updateAssistantConfig(apiKey: string, assistantId: string, patch: AssistantConfigPatch): Promise<void> {
+  const current = await fetch(`${VAPI_BASE_URL}/assistant/${assistantId}`, { headers: getHeaders(apiKey) })
     .then(r => r.json()) as any;
 
   const body: Record<string, unknown> = {};
@@ -322,13 +365,28 @@ export async function updateAssistantConfig(patch: AssistantConfigPatch): Promis
 
   const resp = await fetch(`${VAPI_BASE_URL}/assistant/${assistantId}`, {
     method: 'PATCH',
-    headers: await getHeaders(),
+    headers: getHeaders(apiKey),
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
     const errText = await resp.text();
     throw new Error(`Vapi assistant güncelleme hatası: ${resp.status} - ${errText}`);
   }
-  modelConfigCache  = null;
-  systemPromptCache = null;
+  invalidateAssistantCaches(assistantId);
+}
+
+// server.secret + server.url tanımla — webhook geldiğinde bu danışmana ait olduğunu
+// doğrulamak için kullanılır (bkz. src/auth.ts webhook spoof kontrolü, Faz 5).
+export async function updateAssistantServer(
+  apiKey: string, assistantId: string, params: { url: string; secret: string },
+): Promise<void> {
+  const resp = await fetch(`${VAPI_BASE_URL}/assistant/${assistantId}`, {
+    method: 'PATCH',
+    headers: getHeaders(apiKey),
+    body: JSON.stringify({ server: { url: params.url, secret: params.secret } }),
+  });
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`Vapi assistant server ayarı güncellenemedi: ${resp.status} - ${errText}`);
+  }
 }

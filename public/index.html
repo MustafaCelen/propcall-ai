@@ -35,6 +35,9 @@
         <button class="credit-refresh" id="btnCreditRefresh" title="Yenile">↻</button>
       </div>
       <button class="btn-secondary" id="btnToggleApts">📅 Randevular</button>
+      <a class="btn-secondary" id="linkUsers" href="/admin" style="display:none;text-decoration:none">👥 Kullanıcılar</a>
+      <a class="btn-secondary" href="/settings" style="text-decoration:none">⚙️ Ayarlarım</a>
+      <button class="btn-secondary" id="btnLogout">Çıkış</button>
     </div>
   </header>
 
@@ -229,15 +232,16 @@
               <th class="th-sort" data-sort="startTime">Tarih/Saat</th>
               <th class="th-sort" data-sort="customerName">Müşteri</th>
               <th>Durum</th>
-              <th>Süre</th>
-              <th title="Transkript">💬</th>
+              <th class="th-num">Süre</th>
+              <th class="th-num" title="Transkript">💬</th>
               <th>Randevu</th>
               <th>İlgi</th>
+              <th class="th-num">Maliyet</th>
               <th></th>
             </tr>
           </thead>
           <tbody id="callsTableBody">
-            <tr><td colspan="10" class="table-empty">Yükleniyor...</td></tr>
+            <tr><td colspan="9" class="table-empty">Yükleniyor...</td></tr>
           </tbody>
         </table>
       </div>
@@ -355,6 +359,7 @@
         <button class="btn-delete-old" id="btnDeleteOldCalls" title="Bugün hariç tüm arama kayıtlarını sil">🗑 Bugün hariç sil</button>
         <div class="followup-summary" id="followupSummary"></div>
       </div>
+      <div class="fu-subtabs" id="followupSubtabs"></div>
       <div class="followup-layout" id="followupLayout">
         <div class="followup-loading">Yükleniyor...</div>
       </div>
@@ -366,13 +371,15 @@
 
         <!-- Üst kontrol çubuğu -->
         <div class="campaign-toolbar">
-          <div class="campaign-upload-area" id="campaignUploadArea">
-            <input type="file" id="campaignFile" accept=".xlsx,.xls,.csv" style="display:none"/>
-            <button class="btn-upload" id="btnUpload">📂 Excel / CSV Yükle</button>
-            <span class="upload-hint">Ad, Telefon, Bölge, Referans, Notlar sütunları</span>
-          </div>
-          <div class="campaign-controls">
-            <div class="concurrency-group" title="Bu kampanyayı geçmişte tanıyacağınız isim — zorunlu">
+
+          <!-- Satır 1: kampanya kimliği -->
+          <div class="campaign-toolbar-row">
+            <div class="campaign-upload-area" id="campaignUploadArea">
+              <input type="file" id="campaignFile" accept=".xlsx,.xls,.csv" style="display:none"/>
+              <button class="btn-upload" id="btnUpload">📂 Excel / CSV Yükle</button>
+              <span class="upload-hint">Ad, Telefon, Bölge, Referans, Notlar sütunları</span>
+            </div>
+            <div class="concurrency-group camp-name-group" title="Bu kampanyayı geçmişte tanıyacağınız isim — zorunlu">
               <label>Kampanya Adı</label>
               <input type="text" id="campaignName" class="camp-name-input" placeholder="Örn: Ağustos KW Büyüme — Batch 2" />
             </div>
@@ -382,32 +389,41 @@
                 <option value="">— Varsayılan prompt —</option>
               </select>
             </div>
-            <div class="concurrency-group">
-              <label>Eş Zamanlı</label>
-              <select id="campaignConcurrency">
-                <option value="1">1</option>
-                <option value="2">2</option>
-                <option value="3">3</option>
-                <option value="4">4</option>
-                <option value="5">5</option>
-              </select>
-            </div>
-            <div class="concurrency-group" title="Kaçıncı satırdan başlanacak (1'den sayılır)">
-              <label>Başlangıç Satırı</label>
-              <input type="number" id="campaignStartFrom" class="camp-limit-input" min="1" placeholder="1" />
-            </div>
-            <div class="concurrency-group" title="Toplam kaç arama yapılacak (0 = sınırsız)">
-              <label>Arama Limiti</label>
-              <input type="number" id="campaignCallLimit" class="camp-limit-input" min="0" placeholder="∞" />
-            </div>
-            <div class="concurrency-group" title="Kaç kişi konuşunca duracak (0 = sınırsız)">
-              <label>Cevaplayan Limiti</label>
-              <input type="number" id="campaignAnsweredLimit" class="camp-limit-input" min="0" placeholder="∞" />
-            </div>
-            <button class="btn-campaign-start" id="btnCampaignStart" disabled>▶ Başlat</button>
-            <button class="btn-campaign-pause" id="btnCampaignPause" disabled>⏸ Duraklat</button>
-            <button class="btn-campaign-stop"  id="btnCampaignStop"  disabled>⏹ Durdur</button>
           </div>
+
+          <!-- Satır 2: kuyruk ayarları + aksiyon butonları -->
+          <div class="campaign-toolbar-row">
+            <div class="campaign-settings-group">
+              <div class="concurrency-group">
+                <label>Eş Zamanlı</label>
+                <select id="campaignConcurrency">
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3">3</option>
+                  <option value="4">4</option>
+                  <option value="5">5</option>
+                </select>
+              </div>
+              <div class="concurrency-group" title="Kaçıncı satırdan başlanacak (1'den sayılır)">
+                <label>Başlangıç Satırı</label>
+                <input type="number" id="campaignStartFrom" class="camp-limit-input" min="1" placeholder="1" />
+              </div>
+              <div class="concurrency-group" title="Toplam kaç arama yapılacak (0 = sınırsız)">
+                <label>Arama Limiti</label>
+                <input type="number" id="campaignCallLimit" class="camp-limit-input" min="0" placeholder="∞" />
+              </div>
+              <div class="concurrency-group" title="Kaç kişi konuşunca duracak (0 = sınırsız)">
+                <label>Cevaplayan Limiti</label>
+                <input type="number" id="campaignAnsweredLimit" class="camp-limit-input" min="0" placeholder="∞" />
+              </div>
+            </div>
+            <div class="campaign-actions-group">
+              <button class="btn-campaign-start" id="btnCampaignStart" disabled>▶ Başlat</button>
+              <button class="btn-campaign-pause" id="btnCampaignPause" disabled>⏸ Duraklat</button>
+              <button class="btn-campaign-stop"  id="btnCampaignStop"  disabled>⏹ Durdur</button>
+            </div>
+          </div>
+
         </div>
 
         <!-- İlerleme çubuğu -->
@@ -426,6 +442,7 @@
             <span class="ps-item ps-error"       id="psError">⚠️ 0 Hata</span>
             <span class="ps-item ps-active"      id="psActive">📞 0 Aktif</span>
           </div>
+          <div class="calling-hours-notice" id="callingHoursNotice" style="display:none">⏰ Şu an tanımlı arama saatleri dışında — yeni arama başlatılmıyor, pencere açılınca otomatik devam edecek.</div>
         </div>
 
         <!-- İçe aktarma sonuç raporu -->

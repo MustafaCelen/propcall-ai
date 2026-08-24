@@ -3,3 +3,8 @@ dist
 .env
 *.md
 .tsbuildinfo
+.git
+cloudflared.exe
+attached_assets
+data
+.replit_integration_files

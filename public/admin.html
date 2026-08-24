@@ -3,503 +3,216 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Admin — PropCall AI</title>
+  <title>Kullanıcılar — PropCall AI</title>
   <link rel="stylesheet" href="style.css" />
   <style>
     html,body{height:100%;overflow-y:auto}
     body{background:var(--bg);min-height:100vh;padding:40px 20px}
-    .adm-wrap{max-width:600px;margin:0 auto}
+    .adm-wrap{max-width:820px;margin:0 auto}
     .adm-header{text-align:center;margin-bottom:28px}
     .adm-logo{width:52px;height:52px;background:var(--primary);border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:24px;margin:0 auto 12px}
     .adm-title{font-size:20px;font-weight:700}
     .adm-sub{font-size:13px;color:var(--tx2);margin-top:4px}
-
     .adm-card{background:var(--s1);border:1px solid var(--border);border-radius:14px;padding:26px;margin-bottom:16px}
+    .adm-topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+    .adm-topbar-links{display:flex;gap:8px}
+    .adm-logout, .adm-back{background:transparent;border:1px solid var(--border);color:var(--tx2);border-radius:8px;padding:7px 14px;font-size:12px;cursor:pointer;transition:all .15s;text-decoration:none;display:inline-flex;align-items:center}
+    .adm-logout:hover{border-color:var(--red);color:var(--red)}
+    .adm-back:hover{border-color:var(--primary);color:var(--primary)}
+    .adm-section-title{font-size:14px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:8px}
 
-    /* Login formu */
-    #loginView{max-width:380px;margin:60px auto 0}
-    #loginView .adm-card{text-align:center}
-    #loginView input{margin:16px 0 12px;text-align:center;font-size:15px;letter-spacing:2px}
-    .adm-btn{width:100%;background:var(--primary);color:#000;border:none;border-radius:8px;padding:11px 20px;font-size:14px;font-weight:700;cursor:pointer;transition:opacity .15s;font-family:'Sora',sans-serif}
+    .adm-form-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+    .adm-form-row input{flex:1;min-width:140px;font-size:13px;padding:9px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;color:var(--tx);font-family:'Sora',sans-serif;outline:none}
+    .adm-form-row input:focus{border-color:var(--border-a)}
+    .adm-btn{background:var(--primary);color:#000;border:none;border-radius:8px;padding:9px 18px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;transition:opacity .15s}
     .adm-btn:hover:not(:disabled){opacity:.85}
     .adm-btn:disabled{opacity:.4;cursor:not-allowed}
-    .adm-err{color:var(--red);font-size:12px;margin-top:10px;display:none}
-    .adm-err.show{display:block}
+    .adm-form-err{font-size:12px;color:var(--red);display:none;margin-bottom:10px}
+    .adm-form-err.show{display:block}
+    .adm-form-ok{font-size:12px;color:var(--primary);display:none;margin-bottom:10px}
+    .adm-form-ok.show{display:block}
 
-    /* Ayarlar */
-    #settingsView{display:none}
-    .adm-topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
-    .adm-logout{background:transparent;border:1px solid var(--border);color:var(--tx2);border-radius:8px;padding:7px 14px;font-size:12px;cursor:pointer;transition:all .15s}
-    .adm-logout:hover{border-color:var(--red);color:var(--red)}
-
-    .adm-field{margin-bottom:18px}
-    .adm-field:last-child{margin-bottom:0}
-    .adm-label-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
-    .adm-label{font-size:13px;font-weight:600;color:var(--tx)}
-    .adm-source{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px}
-    .adm-source.db{background:rgba(0,200,150,.15);color:var(--primary)}
-    .adm-source.env{background:rgba(74,158,255,.15);color:var(--blue)}
-    .adm-source.none{background:rgba(255,83,112,.15);color:var(--red)}
-
-    .adm-input-row{display:flex;gap:8px}
-    .adm-input-row input{flex:1;font-size:13px;padding:9px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;color:var(--tx);font-family:'JetBrains Mono',monospace;outline:none;transition:border-color .15s}
-    .adm-input-row input:focus{border-color:var(--border-a)}
-    .adm-save-btn{background:var(--s2);border:1px solid var(--border);color:var(--tx2);border-radius:8px;padding:9px 14px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap}
-    .adm-save-btn:hover:not(:disabled){border-color:var(--primary);color:var(--primary)}
-    .adm-save-btn:disabled{opacity:.4;cursor:not-allowed}
-
-    .adm-field-status{margin-top:6px;font-size:11px;display:none}
-    .adm-field-status.ok{color:var(--primary);display:block}
-    .adm-field-status.err{color:var(--red);display:block}
-    .adm-field-hint{font-size:11px;color:var(--txm);margin-top:4px}
-
-    /* Asistan Ayarları kartları */
-    .adm-section-title{font-size:14px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:8px}
-    .adm-row{display:flex;gap:12px}
-    .adm-col{flex:1;min-width:0}
-    .adm-mini-label{display:block;font-size:11px;font-weight:600;color:var(--tx2);margin-bottom:5px}
-    #settingsView select, #settingsView textarea, #settingsView input[type="text"], #settingsView input[type="number"] {
-      width:100%;font-size:13px;padding:9px 12px;background:var(--s2);border:1px solid var(--border);
-      border-radius:8px;color:var(--tx);font-family:'Sora',sans-serif;outline:none;transition:border-color .15s;
-    }
-    #settingsView select:focus, #settingsView textarea:focus, #settingsView input:focus{border-color:var(--border-a)}
-    #settingsView .form-group{margin-bottom:12px}
-    #settingsView .form-group:last-of-type{margin-bottom:0}
-    .adm-warn{font-size:11px;color:var(--red);margin-bottom:10px;display:none}
-    .adm-warn.show{display:block}
+    table.adm-table{width:100%;border-collapse:collapse;font-size:13px}
+    table.adm-table th{text-align:left;font-size:11px;color:var(--txm);text-transform:uppercase;letter-spacing:.4px;padding:0 10px 8px;font-weight:600}
+    table.adm-table td{padding:10px;border-top:1px solid var(--border);vertical-align:middle}
+    .adm-role-tag{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:700;text-transform:uppercase}
+    .adm-role-tag.admin{background:rgba(0,200,150,.15);color:var(--primary)}
+    .adm-role-tag.agent{background:rgba(74,158,255,.15);color:var(--blue)}
+    .adm-status-tag{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:700}
+    .adm-status-tag.active{background:rgba(0,200,150,.15);color:var(--primary)}
+    .adm-status-tag.inactive{background:rgba(255,83,112,.15);color:var(--red)}
+    .adm-row-actions{display:flex;gap:6px;flex-wrap:wrap}
+    .adm-mini-btn{background:transparent;border:1px solid var(--border);color:var(--tx2);border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;transition:all .15s}
+    .adm-mini-btn:hover{border-color:var(--border-a);color:var(--tx)}
+    .adm-mini-btn.danger:hover{border-color:var(--red);color:var(--red)}
+    .adm-table-empty{padding:24px;text-align:center;color:var(--txm);font-size:13px}
   </style>
 </head>
 <body>
 <div class="adm-wrap">
 
   <div class="adm-header">
-    <div class="adm-logo">🔑</div>
-    <div class="adm-title">Admin Panel</div>
-    <div class="adm-sub">API Anahtarları Yönetimi</div>
+    <div class="adm-logo">👥</div>
+    <div class="adm-title">Kullanıcılar</div>
+    <div class="adm-sub">Danışman hesaplarını yönet — sadece yöneticiler görebilir</div>
   </div>
 
-  <!-- LOGIN -->
-  <div id="loginView">
-    <div class="adm-card">
-      <input type="password" id="pwInput" placeholder="Şifre" autocomplete="current-password" />
-      <button class="adm-btn" id="btnLogin">Giriş Yap</button>
-      <div class="adm-err" id="loginErr"></div>
-    </div>
-  </div>
-
-  <!-- SETTINGS -->
-  <div id="settingsView">
-    <div class="adm-topbar">
-      <span style="font-size:12px;color:var(--txm)">Değişiklikler restart gerekmeden anında geçerli olur.</span>
+  <div class="adm-topbar">
+    <span></span>
+    <div class="adm-topbar-links">
+      <a class="adm-back" href="/">← Uygulama</a>
+      <a class="adm-back" href="/settings">Ayarlarım</a>
       <button class="adm-logout" id="btnLogout">Çıkış</button>
     </div>
+  </div>
 
-    <div class="adm-card">
-      <div class="adm-section-title">🔑 API Anahtarları</div>
-      <div id="fieldsContainer"></div>
+  <div class="adm-card">
+    <div class="adm-section-title">➕ Yeni Danışman Ekle</div>
+    <div class="adm-form-err" id="createErr"></div>
+    <div class="adm-form-ok" id="createOk"></div>
+    <div class="adm-form-row">
+      <input type="email" id="newEmail" placeholder="E-posta" />
+      <input type="text"  id="newName"  placeholder="Ad Soyad (opsiyonel)" />
+      <input type="text"  id="newPassword" placeholder="Geçici şifre" />
+      <button class="adm-btn" id="btnCreate">Ekle</button>
     </div>
+    <div style="font-size:11px;color:var(--txm)">Danışman ilk girişten sonra şifresini kendi değiştiremez henüz — gerekirse buradan sıfırlayabilirsin.</div>
+  </div>
 
-    <div class="adm-card">
-      <div class="adm-section-title">🧠 Model (LLM)</div>
-      <div class="adm-row">
-        <div class="adm-col">
-          <label class="adm-mini-label">Sağlayıcı</label>
-          <select id="acModelProvider"></select>
-        </div>
-        <div class="adm-col">
-          <label class="adm-mini-label">Model</label>
-          <select id="acModelName"></select>
-        </div>
-      </div>
-      <div class="adm-field-hint">Konuşma sırasında kullanılan LLM. Groq en düşük gecikmeyi verir (sesli aramada önemli).</div>
-      <button class="adm-save-btn" id="btnSaveModel" style="margin-top:12px">Kaydet</button>
-      <div class="adm-field-status" id="statusModel"></div>
-    </div>
-
-    <div class="adm-card">
-      <div class="adm-section-title">🔊 Ses (ElevenLabs)</div>
-      <div class="adm-warn" id="voiceWarn"></div>
-      <div class="form-group">
-        <label class="adm-mini-label">Ses</label>
-        <select id="acVoiceId"></select>
-      </div>
-      <div class="adm-row">
-        <div class="adm-col">
-          <label class="adm-mini-label">Ses Modeli</label>
-          <select id="acVoiceModel">
-            <option value="eleven_v3">Eleven v3 — en yüksek kalite</option>
-            <option value="eleven_multilingual_v2">Multilingual v2 — dengeli</option>
-            <option value="eleven_turbo_v2_5">Turbo v2.5 — hızlı</option>
-            <option value="eleven_flash_v2_5">Flash v2.5 — en düşük gecikme</option>
-          </select>
-        </div>
-        <div class="adm-col">
-          <label class="adm-mini-label">Hız (0.7 – 1.2)</label>
-          <input type="number" id="acVoiceSpeed" min="0.7" max="1.2" step="0.05" />
-        </div>
-      </div>
-      <button class="adm-save-btn" id="btnSaveVoice" style="margin-top:12px">Kaydet</button>
-      <div class="adm-field-status" id="statusVoice"></div>
-    </div>
-
-    <div class="adm-card">
-      <div class="adm-section-title">🎙️ Transkripsiyon (STT)</div>
-      <div class="adm-row">
-        <div class="adm-col">
-          <label class="adm-mini-label">Sağlayıcı</label>
-          <select id="acTranscriberProvider">
-            <option value="deepgram">Deepgram</option>
-          </select>
-        </div>
-        <div class="adm-col">
-          <label class="adm-mini-label">Model</label>
-          <select id="acTranscriberModel">
-            <option value="nova-2">Nova-2</option>
-            <option value="nova-3">Nova-3 — en yeni</option>
-          </select>
-        </div>
-      </div>
-      <div class="adm-row" style="margin-top:12px">
-        <div class="adm-col">
-          <label class="adm-mini-label">Confidence Threshold (0–1)</label>
-          <input type="number" id="acConfidenceThreshold" min="0" max="1" step="0.05" />
-          <div class="adm-field-hint">Düşük değer gürültüyü de "konuşma" sayar. Önerilen: 0.6–0.7</div>
-        </div>
-        <div class="adm-col" style="display:flex;flex-direction:column;justify-content:flex-end">
-          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;padding-bottom:9px">
-            <input type="checkbox" id="acBackgroundDenoising" style="width:auto" />
-            Background Denoising
-          </label>
-        </div>
-      </div>
-      <button class="adm-save-btn" id="btnSaveTranscriber" style="margin-top:12px">Kaydet</button>
-      <div class="adm-field-status" id="statusTranscriber"></div>
-    </div>
-
-    <div class="adm-card">
-      <div class="adm-section-title">⏱️ Konuşma Davranışı</div>
-      <div class="form-group">
-        <label class="adm-mini-label">Kapanış Kelimeleri <span style="font-weight:400;color:var(--txm)">(virgülle ayır)</span></label>
-        <textarea id="acEndCallPhrases" rows="3" placeholder="güle güle, hoşça kal, iyi günler..."></textarea>
-      </div>
-      <div class="form-group">
-        <label class="adm-mini-label">Kapanış Mesajı <span style="font-weight:400;color:var(--txm)">(opsiyonel)</span></label>
-        <input type="text" id="acEndCallMessage" placeholder="İyi günler dilerim, görüşmek üzere." />
-      </div>
-      <div class="adm-row">
-        <div class="adm-col">
-          <label class="adm-mini-label">Maks. Süre (sn)</label>
-          <input type="number" id="acMaxDuration" min="30" max="600" />
-        </div>
-        <div class="adm-col">
-          <label class="adm-mini-label">Sessizlik Aşımı (sn)</label>
-          <input type="number" id="acSilenceTimeout" min="3" max="60" />
-        </div>
-        <div class="adm-col">
-          <label class="adm-mini-label">Kesme Hassasiyeti</label>
-          <input type="number" id="acStopWords" min="1" max="10" />
-        </div>
-      </div>
-      <div class="adm-field-hint">Kesme hassasiyeti: kaç kelime duyunca asistan susar. Düşük = çabuk susar. Önerilen: 4–5</div>
-      <button class="adm-save-btn" id="btnSaveBehavior" style="margin-top:12px">Kaydet</button>
-      <div class="adm-field-status" id="statusBehavior"></div>
-    </div>
+  <div class="adm-card">
+    <div class="adm-section-title">📋 Tüm Danışmanlar</div>
+    <table class="adm-table">
+      <thead>
+        <tr><th>E-posta</th><th>Ad</th><th>Rol</th><th>Durum</th><th>Son Giriş</th><th>İşlemler</th></tr>
+      </thead>
+      <tbody id="usersBody">
+        <tr><td colspan="6" class="adm-table-empty">Yükleniyor...</td></tr>
+      </tbody>
+    </table>
   </div>
 
 </div>
 
 <script>
-const FIELD_META = {
-  ANTHROPIC_API_KEY:    { label: '🤖 Anthropic API Key',      hint: 'Görüşme özeti üretimi için (Claude)',            secret: true },
-  VAPI_API_KEY:         { label: '📞 Vapi API Key',            hint: 'Arama başlatma ve yönetimi için',                secret: true, verifiable: true },
-  VAPI_PHONE_NUMBER_ID: { label: '☎️ Vapi Telefon Numarası ID', hint: 'Vapi Dashboard → Phone Numbers',                secret: false },
-  VAPI_ASSISTANT_ID:    { label: '🧠 Vapi Assistant ID',        hint: 'Vapi Dashboard → Assistants',                    secret: false },
-  ELEVENLABS_API_KEY:   { label: '🔊 ElevenLabs API Key',       hint: 'Ses kotası görüntüleme için (opsiyonel)',        secret: true },
-};
-
 function $(id) { return document.getElementById(id); }
 
 async function checkSession() {
-  const r = await fetch('/api/admin/session');
-  if (r.ok) { showSettings(); loadSettings(); loadAssistantConfig(); }
-  else { showLogin(); }
-}
-
-function showLogin() {
-  $('loginView').style.display = 'block';
-  $('settingsView').style.display = 'none';
-}
-function showSettings() {
-  $('loginView').style.display = 'none';
-  $('settingsView').style.display = 'block';
-}
-
-$('btnLogin').addEventListener('click', doLogin);
-$('pwInput').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
-
-async function doLogin() {
-  const password = $('pwInput').value;
-  $('loginErr').classList.remove('show');
-  const r = await fetch('/api/admin/login', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password }),
-  });
+  const r = await fetch('/api/auth/session');
+  if (!r.ok) { location.href = '/login?next=' + encodeURIComponent(location.pathname); return; }
   const j = await r.json();
-  if (!j.success) {
-    $('loginErr').textContent = j.error || 'Giriş başarısız';
-    $('loginErr').classList.add('show');
-    return;
-  }
-  $('pwInput').value = '';
-  showSettings();
-  loadSettings();
-  loadAssistantConfig();
+  if (j.data.role !== 'admin') { location.href = '/'; return; }
+  loadUsers();
 }
 
 $('btnLogout').addEventListener('click', async () => {
-  await fetch('/api/admin/logout', { method: 'POST' });
-  showLogin();
+  await fetch('/api/auth/logout', { method: 'POST' });
+  location.href = '/login';
 });
 
-async function loadSettings() {
-  const r = await fetch('/api/admin/settings');
-  if (r.status === 401) { showLogin(); return; }
+function fmtDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('tr-TR', { dateStyle: 'short', timeStyle: 'short' });
+}
+
+async function loadUsers() {
+  const r = await fetch('/api/admin/users');
+  if (r.status === 401) { location.href = '/login'; return; }
+  if (r.status === 403) { location.href = '/'; return; }
   const j = await r.json();
   if (!j.success) return;
-  renderFields(j.data);
+  renderUsers(j.data);
 }
 
-function sourceLabel(source) {
-  if (source === 'db')   return '<span class="adm-source db">Admin panelden</span>';
-  if (source === 'env')  return '<span class="adm-source env">.env dosyasından</span>';
-  return '<span class="adm-source none">Tanımsız</span>';
-}
-
-function renderFields(data) {
-  const container = $('fieldsContainer');
-  container.innerHTML = Object.keys(FIELD_META).map(key => {
-    const meta = FIELD_META[key];
-    const info = data[key] || { value: '', source: 'none', hasValue: false };
-    const placeholder = info.hasValue
-      ? (meta.secret ? info.value : info.value)
-      : 'Henüz girilmedi...';
-    return `
-      <div class="adm-field" data-key="${key}">
-        <div class="adm-label-row">
-          <span class="adm-label">${meta.label}</span>
-          ${sourceLabel(info.source)}
-        </div>
-        <div class="adm-input-row">
-          <input type="${meta.secret ? 'password' : 'text'}" data-input="${key}"
-                 placeholder="${placeholder}" autocomplete="off" />
-          <button class="adm-save-btn" data-save="${key}">Kaydet</button>
-        </div>
-        <div class="adm-field-hint">${meta.hint}</div>
-        <div class="adm-field-status" data-status="${key}"></div>
-      </div>
-    `;
-  }).join('');
-
-  container.querySelectorAll('[data-save]').forEach(btn => {
-    btn.addEventListener('click', () => saveField(btn.dataset.save));
-  });
-}
-
-async function saveField(key) {
-  const input  = document.querySelector(`[data-input="${key}"]`);
-  const btn    = document.querySelector(`[data-save="${key}"]`);
-  const status = document.querySelector(`[data-status="${key}"]`);
-  const value  = input.value.trim();
-
-  if (!value) { status.textContent = 'Değer boş olamaz'; status.className = 'adm-field-status err'; return; }
-
-  btn.disabled = true;
-  status.className = 'adm-field-status';
-  status.textContent = '';
-
-  // Vapi key ise önce doğrula
-  if (FIELD_META[key].verifiable) {
-    btn.textContent = 'Doğrulanıyor...';
-    const vr = await fetch('/api/admin/settings/verify-vapi', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ value }),
-    }).then(r => r.json());
-    if (!vr.success) {
-      status.textContent = '✗ Geçersiz key: ' + (vr.error || 'doğrulanamadı');
-      status.className = 'adm-field-status err';
-      btn.disabled = false;
-      btn.textContent = 'Kaydet';
-      return;
-    }
+function renderUsers(users) {
+  const tbody = $('usersBody');
+  if (!users.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="adm-table-empty">Henüz danışman yok</td></tr>';
+    return;
   }
+  tbody.innerHTML = users.map(u => `
+    <tr data-id="${u.id}">
+      <td>${esc(u.email)}</td>
+      <td>${esc(u.name || '—')}</td>
+      <td><span class="adm-role-tag ${u.role}">${u.role === 'admin' ? 'Admin' : 'Danışman'}</span></td>
+      <td><span class="adm-status-tag ${u.isActive ? 'active' : 'inactive'}">${u.isActive ? 'Aktif' : 'Pasif'}</span></td>
+      <td>${fmtDate(u.lastLoginAt)}</td>
+      <td>
+        <div class="adm-row-actions">
+          <button class="adm-mini-btn" data-action="toggle">${u.isActive ? 'Devre Dışı Bırak' : 'Aktifleştir'}</button>
+          <button class="adm-mini-btn" data-action="reset-pw">Şifre Sıfırla</button>
+        </div>
+      </td>
+    </tr>
+  `).join('');
 
-  btn.textContent = 'Kaydediliyor...';
-  const r = await fetch('/api/admin/settings', {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ key, value }),
+  tbody.querySelectorAll('[data-action="toggle"]').forEach(btn => {
+    btn.addEventListener('click', () => toggleActive(btn.closest('tr').dataset.id, btn));
   });
-  const j = await r.json();
-  btn.disabled = false;
-  btn.textContent = 'Kaydet';
+  tbody.querySelectorAll('[data-action="reset-pw"]').forEach(btn => {
+    btn.addEventListener('click', () => resetPassword(btn.closest('tr').dataset.id));
+  });
+}
 
-  if (!j.success) {
-    status.textContent = '✗ ' + (j.error || 'Kaydedilemedi');
-    status.className = 'adm-field-status err';
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+async function toggleActive(id, btn) {
+  const row = btn.closest('tr');
+  const isActive = row.querySelector('.adm-status-tag').classList.contains('active');
+  btn.disabled = true;
+  await fetch('/api/admin/users/' + id, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ isActive: !isActive }),
+  });
+  loadUsers();
+}
+
+async function resetPassword(id) {
+  const pw = prompt('Yeni geçici şifre girin:');
+  if (!pw || !pw.trim()) return;
+  await fetch('/api/admin/users/' + id, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: pw.trim() }),
+  });
+  alert('Şifre güncellendi.');
+}
+
+$('btnCreate').addEventListener('click', async () => {
+  const email = $('newEmail').value.trim();
+  const name = $('newName').value.trim();
+  const password = $('newPassword').value.trim();
+  const errEl = $('createErr');
+  const okEl = $('createOk');
+  errEl.classList.remove('show');
+  okEl.classList.remove('show');
+
+  if (!email || !password) {
+    errEl.textContent = 'E-posta ve geçici şifre zorunlu';
+    errEl.classList.add('show');
     return;
   }
 
-  status.textContent = '✓ Kaydedildi, anında geçerli';
-  status.className = 'adm-field-status ok';
-  input.value = '';
-  loadSettings(); // maskeli değeri + kaynağı tazele
-}
+  $('btnCreate').disabled = true;
+  const r = await fetch('/api/admin/users', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, name, password }),
+  });
+  const j = await r.json();
+  $('btnCreate').disabled = false;
 
-// ─── ASİSTAN AYARLARI (model / ses / transkripsiyon / davranış) ────────────
-
-const MODEL_OPTIONS = {
-  groq: [
-    { value: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile' },
-    { value: 'llama-3.1-8b-instant',    label: 'Llama 3.1 8B Instant — hızlı' },
-  ],
-  openai: [
-    { value: 'gpt-4o',      label: 'GPT-4o' },
-    { value: 'gpt-4o-mini', label: 'GPT-4o mini — hızlı' },
-  ],
-  anthropic: [
-    { value: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet' },
-    { value: 'claude-3-5-haiku-20241022',  label: 'Claude 3.5 Haiku — hızlı' },
-  ],
-};
-
-function populateModelDropdowns(selectedProvider, selectedModel) {
-  const providerSel = $('acModelProvider');
-  providerSel.innerHTML = Object.keys(MODEL_OPTIONS).map(p =>
-    `<option value="${p}"${p === selectedProvider ? ' selected' : ''}>${p}</option>`
-  ).join('');
-  updateModelNameOptions(selectedModel);
-}
-
-function updateModelNameOptions(selected) {
-  const provider = $('acModelProvider').value;
-  const opts = MODEL_OPTIONS[provider] || [];
-  $('acModelName').innerHTML = opts.map(o =>
-    `<option value="${o.value}"${o.value === selected ? ' selected' : ''}>${o.label}</option>`
-  ).join('');
-}
-
-$('acModelProvider').addEventListener('change', () => updateModelNameOptions());
-
-async function loadAssistantConfig() {
-  try {
-    const r = await fetch('/api/admin/assistant-config');
-    if (r.status === 401) { showLogin(); return; }
-    const j = await r.json();
-    if (!j.success) throw new Error(j.error);
-    const d = j.data;
-
-    populateModelDropdowns(d.modelProvider, d.modelName);
-
-    $('acVoiceModel').value = d.voiceModel || 'eleven_v3';
-    $('acVoiceSpeed').value = d.voiceSpeed || 1;
-
-    $('acTranscriberModel').value = d.transcriberModel || 'nova-3';
-    $('acConfidenceThreshold').value = d.confidenceThreshold;
-    $('acBackgroundDenoising').checked = d.backgroundDenoisingEnabled;
-
-    $('acEndCallPhrases').value = (d.endCallPhrases || []).join(', ');
-    $('acEndCallMessage').value = d.endCallMessage || '';
-    $('acMaxDuration').value = d.maxDurationSeconds;
-    $('acSilenceTimeout').value = d.silenceTimeoutSeconds;
-    $('acStopWords').value = d.stopSpeakingNumWords;
-
-    loadVoices(d.voiceId);
-  } catch (err) {
-    const w = $('voiceWarn');
-    w.textContent = 'Asistan ayarları alınamadı: ' + err.message;
-    w.classList.add('show');
+  if (!j.success) {
+    errEl.textContent = j.error || 'Eklenemedi';
+    errEl.classList.add('show');
+    return;
   }
-}
 
-async function loadVoices(selectedVoiceId) {
-  const sel = $('acVoiceId');
-  const warn = $('voiceWarn');
-  warn.classList.remove('show');
-  sel.innerHTML = '<option>Yükleniyor...</option>';
-  try {
-    const r = await fetch('/api/admin/elevenlabs-voices');
-    const j = await r.json();
-    if (!j.success) throw new Error(j.error);
-    const voices = j.data;
-    sel.innerHTML = voices.map(v =>
-      `<option value="${v.voiceId}"${v.voiceId === selectedVoiceId ? ' selected' : ''}>${v.name}${v.category ? ' — ' + v.category : ''}</option>`
-    ).join('');
-    if (selectedVoiceId && !voices.some(v => v.voiceId === selectedVoiceId)) {
-      sel.insertAdjacentHTML('afterbegin', `<option value="${selectedVoiceId}" selected>Mevcut ses (${selectedVoiceId})</option>`);
-    }
-  } catch (err) {
-    sel.innerHTML = `<option value="${selectedVoiceId || ''}">${selectedVoiceId || 'Ses seçilmemiş'}</option>`;
-    warn.textContent = 'ElevenLabs sesleri yüklenemedi (' + err.message + ') — yukarıdan ElevenLabs API Key girin.';
-    warn.classList.add('show');
-  }
-}
-
-async function saveAssistantConfig(patch, statusId, btnId) {
-  const status = $(statusId);
-  const btn = $(btnId);
-  btn.disabled = true;
-  status.className = 'adm-field-status';
-  status.textContent = '';
-  try {
-    const r = await fetch('/api/admin/assistant-config', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    });
-    const j = await r.json();
-    if (!j.success) throw new Error(j.error);
-    status.textContent = '✓ Kaydedildi, anında geçerli';
-    status.className = 'adm-field-status ok';
-  } catch (err) {
-    status.textContent = '✗ ' + err.message;
-    status.className = 'adm-field-status err';
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-$('btnSaveModel').addEventListener('click', () => {
-  saveAssistantConfig({
-    modelProvider: $('acModelProvider').value,
-    modelName: $('acModelName').value,
-  }, 'statusModel', 'btnSaveModel');
-});
-
-$('btnSaveVoice').addEventListener('click', () => {
-  saveAssistantConfig({
-    voiceProvider: '11labs',
-    voiceId: $('acVoiceId').value,
-    voiceModel: $('acVoiceModel').value,
-    voiceSpeed: parseFloat($('acVoiceSpeed').value) || 1,
-  }, 'statusVoice', 'btnSaveVoice');
-});
-
-$('btnSaveTranscriber').addEventListener('click', () => {
-  saveAssistantConfig({
-    transcriberProvider: 'deepgram',
-    transcriberModel: $('acTranscriberModel').value,
-    confidenceThreshold: parseFloat($('acConfidenceThreshold').value),
-    backgroundDenoisingEnabled: $('acBackgroundDenoising').checked,
-  }, 'statusTranscriber', 'btnSaveTranscriber');
-});
-
-$('btnSaveBehavior').addEventListener('click', () => {
-  const phrases = $('acEndCallPhrases').value.split(',').map(s => s.trim()).filter(Boolean);
-  saveAssistantConfig({
-    endCallPhrases: phrases,
-    endCallMessage: $('acEndCallMessage').value.trim(),
-    maxDurationSeconds: parseInt($('acMaxDuration').value, 10),
-    silenceTimeoutSeconds: parseInt($('acSilenceTimeout').value, 10),
-    stopSpeakingNumWords: parseInt($('acStopWords').value, 10),
-  }, 'statusBehavior', 'btnSaveBehavior');
+  okEl.textContent = '✓ ' + email + ' eklendi';
+  okEl.classList.add('show');
+  $('newEmail').value = '';
+  $('newName').value = '';
+  $('newPassword').value = '';
+  loadUsers();
 });
 
 checkSession();
