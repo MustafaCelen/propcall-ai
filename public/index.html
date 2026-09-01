@@ -41,14 +41,15 @@
       </div>
       <button class="btn-secondary" id="btnToggleApts">📅 Randevular</button>
       <a class="btn-secondary" id="linkUsers" href="/admin" style="display:none;text-decoration:none">👥 Kullanıcılar</a>
-      <a class="btn-secondary" href="/settings" style="text-decoration:none">⚙️ Ayarlarım</a>
+      <a class="btn-secondary" id="linkSettings" href="/settings" style="text-decoration:none">⚙️ Ayarlarım</a>
+      <button class="btn-help-tour" id="btnHelpTour" title="Kullanım kılavuzunu tekrar göster">?</button>
       <button class="btn-secondary" id="btnLogout">Çıkış</button>
     </div>
   </header>
 
   <!-- LEFT PANEL -->
   <aside class="left-panel">
-    <div class="panel-section">
+    <div class="panel-section" id="tourCustomerForm">
       <div class="section-title">Müşteri Bilgileri</div>
       <div class="form-group">
         <label>Ad Soyad</label>
@@ -82,7 +83,7 @@
         </ul>
       </div>
     </div>
-    <div class="panel-section">
+    <div class="panel-section" id="tourScenarioSection">
       <div class="section-title">Senaryo</div>
       <div class="form-group">
         <div class="scenario-row">
@@ -719,6 +720,78 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="ui-kit.js"></script>
+<script src="tour.js"></script>
 <script src="app.js"></script>
+<script>
+// ─── KULLANIM KILAVUZU (onboarding tour) — non-technical danışmanlar için ────
+var APP_TOUR_STEPS = [
+  {
+    title: '👋 PropCall AI\'a Hoş Geldiniz',
+    body: 'Size uygulamayı hızlıca tanıtalım — 8 kısa adım, istediğiniz an "Turu Atla" diyebilirsiniz. Sağ üstteki <b>?</b> ikonuyla bu turu istediğiniz zaman tekrar açabilirsiniz.',
+  },
+  {
+    target: '#tourCustomerForm',
+    title: '1. Müşteri Bilgileri',
+    body: 'Aramak istediğiniz kişinin adını ve telefon numarasını buraya girin. Bölge, referans ve notlar opsiyoneldir.',
+    placement: 'right',
+  },
+  {
+    target: '#tourScenarioSection',
+    title: '2. Senaryo Seçimi',
+    body: 'Konuşma senaryosu (script) seçebilirsiniz — boş bırakırsanız varsayılan senaryo kullanılır. Senaryoları ⚙ ikonundan yönetebilirsiniz.',
+    placement: 'right',
+  },
+  {
+    target: '#btnStartCall',
+    title: '3. Aramayı Başlatın',
+    body: 'Bilgileri girip bu butona bastığınızda sistem otomatik olarak arar. Konuşma buradaki ekranda canlı olarak akar, siz bir şey yapmanıza gerek kalmaz.',
+    placement: 'right',
+    onBefore: function () { if (typeof switchTab === 'function') switchTab('live'); },
+  },
+  {
+    target: '.tab-bar',
+    title: '4. Üst Sekmeler',
+    body: '<b>Takip</b>: randevu almanız gereken kişiler · <b>Geçmiş Aramalar</b>: tüm arama kayıtlarınız · <b>İstatistikler</b>: performans grafikleri · <b>Toplu Arama</b>: Excel/CSV ile yüzlerce kişiyi otomatik arama · <b>Kampanya Geçmişi</b>: geçmiş toplu aramalarınız.',
+    placement: 'bottom',
+  },
+  {
+    target: '#campaignUploadArea',
+    title: '5. Toplu Arama',
+    body: 'Excel veya CSV dosyası yükleyip bir listedeki herkesi otomatik olarak sırayla aratabilirsiniz — siz başka işlerinizle ilgilenirken sistem arka planda çalışmaya devam eder.',
+    placement: 'bottom',
+    onBefore: function () { if (typeof switchTab === 'function') switchTab('campaign'); },
+  },
+  {
+    target: '#creditsWidget',
+    title: '6. Jeton Bakiyeniz',
+    body: 'Her tamamlanan arama buradan jeton (TL) düşer. Bakiyeniz azaldığında "+ Yükle" butonuyla kredi kartınızla anında yükleyebilirsiniz.',
+    placement: 'bottom',
+    onBefore: function () { if (typeof switchTab === 'function') switchTab('live'); },
+  },
+  {
+    target: '#linkSettings',
+    title: '7. Ayarlarım',
+    body: 'Ses, model ve arama kurallarınızı buradan özelleştirebilirsiniz. İlk kullanımda telefon numaranızı buradan seçmeniz gerekir.',
+    placement: 'bottom',
+  },
+  {
+    title: '🎉 Hazırsınız!',
+    body: 'Artık ilk aramanızı yapabilirsiniz. Herhangi bir sorunuz olursa sağ üstteki <b>?</b> ikonuna tıklayıp bu turu istediğiniz an tekrar izleyebilirsiniz.',
+  },
+];
+
+document.addEventListener('DOMContentLoaded', function () {
+  var helpBtn = document.getElementById('btnHelpTour');
+  if (helpBtn) helpBtn.addEventListener('click', function () { startTour(APP_TOUR_STEPS, { force: true }); });
+
+  // İlk giriş — oturum doğrulandıktan sonra kısa bir gecikmeyle otomatik başlat
+  // (checkSession/loadInitialData'nın DOM'u doldurmasına zaman tanımak için).
+  fetch('/api/auth/session').then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+    if (j && j.success) {
+      setTimeout(function () { startTour(APP_TOUR_STEPS, { storageKey: 'propcall_tour_app_v1' }); }, 900);
+    }
+  }).catch(function () {});
+});
+</script>
 </body>
 </html>

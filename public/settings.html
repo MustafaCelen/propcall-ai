@@ -24,18 +24,19 @@
       <span style="font-size:12px;color:var(--txm)">Değişiklikler restart gerekmeden anında geçerli olur.</span>
       <div class="adm-topbar-links">
         <a class="adm-back" href="/">← Uygulama</a>
+        <button class="btn-help-tour" id="btnHelpTour" title="Kullanım kılavuzunu tekrar göster">?</button>
         <button class="adm-logout" id="btnLogout">Çıkış</button>
       </div>
     </div>
 
-    <div class="adm-tabs">
+    <div class="adm-tabs" id="tourSettingsTabs">
       <button class="adm-tab active" data-tab="baglanti">🔑 Hesap Bağlantıları</button>
       <button class="adm-tab" data-tab="asistan">🤖 Asistan Ayarları</button>
       <button class="adm-tab" data-tab="kurallar">⏰ Arama Kuralları</button>
     </div>
 
     <div class="adm-tab-panel active" data-panel="baglanti">
-    <div class="adm-card">
+    <div class="adm-card" id="tourApiKeysCard">
       <div class="adm-section-title">🔑 API Anahtarları</div>
       <div id="fieldsContainer"></div>
     </div>
@@ -256,7 +257,43 @@
 </div>
 
 <script src="ui-kit.js"></script>
+<script src="tour.js"></script>
 <script>
+var SETTINGS_TOUR_STEPS = [
+  {
+    title: '⚙️ Ayarlarım Sayfası',
+    body: 'Burada kendi Vapi/ElevenLabs/Anthropic hesap bilgilerinizi, ses/model tercihlerinizi ve arama kurallarınızı yönetiyorsunuz. Kısa bir tur atalım.',
+  },
+  {
+    target: '#tourApiKeysCard',
+    title: '1. API Anahtarları',
+    body: 'İlk kurulumda buraya Vapi API Key\'inizi girmeniz yeterli — kaydettiğinizde <b>☎️ Telefon Numarası</b> ve <b>🧠 Assistant ID</b> alanları otomatik listeden seçilebilir hale gelir, elle ID aramanıza gerek yok.',
+    placement: 'bottom',
+    onBefore: function () { var t = document.querySelector('[data-tab="baglanti"]'); if (t) t.click(); },
+  },
+  {
+    target: '#tourSettingsTabs',
+    title: '2. Üç Sekme',
+    body: '<b>Hesap Bağlantıları</b>: API key\'leriniz · <b>Asistan Ayarları</b>: ses, model ve konuşma davranışı · <b>Arama Kuralları</b>: hangi saatlerde arama yapılacağı ve aynı numaranın kaç gün tekrar aranmayacağı.',
+    placement: 'bottom',
+  },
+  {
+    target: '[data-tab="kurallar"]',
+    title: '3. Arama Kuralları',
+    body: 'Buradan çağrı saatlerini ve "aynı numarayı tekrar arama koruması" süresini (spam\'den korumak için) ayarlayabilirsiniz.',
+    placement: 'bottom',
+  },
+  {
+    title: '🎉 Hazırsınız!',
+    body: 'Değişiklikleriniz kaydedildiği an, hiçbir restart gerekmeden anında geçerli olur. Sorularınız için sağ üstteki <b>?</b> ikonuna tıklayıp bu turu tekrar izleyebilirsiniz.',
+  },
+];
+
+document.addEventListener('DOMContentLoaded', function () {
+  var helpBtn = document.getElementById('btnHelpTour');
+  if (helpBtn) helpBtn.addEventListener('click', function () { startTour(SETTINGS_TOUR_STEPS, { force: true }); });
+});
+
 const FIELD_META = {
   companyName:         { label: '🏢 Şirket / Takım Adı',       hint: 'Senaryolarda {{companyName}} değişkeni olarak kullanılır (örn. "Keller Williams Platin Karma")' },
   vapiApiKey:          { label: '📞 Vapi API Key',            hint: 'Kendi Vapi hesabınızın Private Key\'i',           verifiable: true },
@@ -283,6 +320,7 @@ async function checkSession() {
   loadAssistantConfig();
   loadCallingHours();
   loadCostConfig();
+  setTimeout(function () { startTour(SETTINGS_TOUR_STEPS, { storageKey: 'propcall_tour_settings_v1' }); }, 900);
 }
 
 // ─── ARAMA KURALLARI (saat aralığı) ─────────────────────────────────────────
