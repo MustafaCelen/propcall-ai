@@ -66,6 +66,38 @@
     </table>
   </div>
 
+  <div class="adm-card">
+    <div class="adm-section-title">📊 Danışman Karşılaştırma</div>
+    <div class="adm-field-hint" style="margin-bottom:12px">Tüm danışmanlar genelinde arama hacmi, dönüşüm oranı ve maliyet karşılaştırması.</div>
+    <table class="adm-table">
+      <thead>
+        <tr><th>Danışman</th><th class="adm-num">Arama</th><th class="adm-num">Cevap Oranı</th><th class="adm-num">Randevu</th><th class="adm-num">Randevu Oranı</th><th class="adm-num">Ort. Süre</th><th class="adm-num">Maliyet ($)</th></tr>
+      </thead>
+      <tbody id="adminStatsBody">
+        <tr><td colspan="7" class="adm-table-empty">Yükleniyor...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <details class="adm-card">
+    <summary class="adm-section-title">🚫 Script Kısıtlamaları <span style="font-weight:400;color:var(--txm);font-size:11px">(tüm danışmanları etkiler)</span></summary>
+    <div class="adm-field-hint" style="margin-bottom:14px">AI ile script/prompt üretilirken uygulanacak şirket geneli kurallar. Yasaklı ifadeler üretilen metinden otomatik SİLİNMEZ (prompt yapısını bozabilir) — sadece uyarı olarak gösterilir; zorunlu açıklama ise metne otomatik eklenir.</div>
+    <div class="form-group">
+      <label class="adm-mini-label">Yasaklı İfadeler <span style="font-weight:400;color:var(--txm)">(virgülle ayır)</span></label>
+      <textarea id="srBannedPhrases" rows="2" placeholder="garanti ederim, kesin fiyat, indirim yapabilirim..."></textarea>
+    </div>
+    <div class="form-group">
+      <label class="adm-mini-label">Zorunlu Açıklama <span style="font-weight:400;color:var(--txm)">(opsiyonel — metinde yoksa otomatik eklenir)</span></label>
+      <textarea id="srDisclosure" rows="2" placeholder="Bu görüşme bir yapay zeka asistanı tarafından yürütülmektedir ve kayıt altına alınabilir."></textarea>
+    </div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin-bottom:14px">
+      <input type="checkbox" id="srForbidPrice" style="width:auto" checked />
+      Fiyat/komisyon/mali taahhüt verilmesini yasakla
+    </label>
+    <button class="adm-btn" id="btnSaveScriptRules">Kaydet</button>
+    <div class="adm-field-status" id="statusScriptRules"></div>
+  </details>
+
 </div>
 
 <script src="ui-kit.js"></script>
@@ -78,7 +110,76 @@ async function checkSession() {
   const j = await r.json();
   if (j.data.role !== 'admin') { location.href = '/'; return; }
   loadUsers();
+  loadAdminStats();
+  loadScriptRules();
 }
+
+async function loadAdminStats() {
+  try {
+    const r = await fetch('/api/admin/stats');
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    const tbody = $('adminStatsBody');
+    if (!j.data.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="adm-table-empty">Henüz arama verisi yok</td></tr>';
+      return;
+    }
+    tbody.innerHTML = j.data.map(r => `
+      <tr>
+        <td>${esc(r.name || r.email)}</td>
+        <td class="adm-num">${r.totalCalls}</td>
+        <td class="adm-num">%${r.answerRate}</td>
+        <td class="adm-num">${r.randevuCount}</td>
+        <td class="adm-num">%${r.randevuRate}</td>
+        <td class="adm-num">${Math.floor(r.avgDuration / 60)}:${String(r.avgDuration % 60).padStart(2, '0')}</td>
+        <td class="adm-num">$${r.totalCost.toFixed(2)}</td>
+      </tr>
+    `).join('');
+  } catch (err) {
+    $('adminStatsBody').innerHTML = '<tr><td colspan="7" class="adm-table-empty">Hata: ' + esc(err.message) + '</td></tr>';
+  }
+}
+
+async function loadScriptRules() {
+  try {
+    const r = await fetch('/api/admin/script-rules');
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    $('srBannedPhrases').value = (j.data.bannedPhrases || []).join(', ');
+    $('srDisclosure').value = j.data.requiredDisclosure || '';
+    $('srForbidPrice').checked = j.data.forbidPriceCommitment !== false;
+  } catch (err) {
+    toast('Script kuralları yüklenemedi: ' + err.message, 'error');
+  }
+}
+
+$('btnSaveScriptRules').addEventListener('click', async () => {
+  const btn = $('btnSaveScriptRules');
+  const status = $('statusScriptRules');
+  const bannedPhrases = $('srBannedPhrases').value.split(',').map(s => s.trim()).filter(Boolean);
+  btn.disabled = true;
+  status.className = 'adm-field-status';
+  status.textContent = '';
+  try {
+    const r = await fetch('/api/admin/script-rules', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        bannedPhrases,
+        requiredDisclosure: $('srDisclosure').value.trim() || null,
+        forbidPriceCommitment: $('srForbidPrice').checked,
+      }),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    status.textContent = '✓ Kaydedildi — bir sonraki AI script üretiminden itibaren geçerli';
+    status.className = 'adm-field-status ok';
+  } catch (err) {
+    status.textContent = '✗ ' + err.message;
+    status.className = 'adm-field-status err';
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 $('btnLogout').addEventListener('click', async () => {
   await fetch('/api/auth/logout', { method: 'POST' });

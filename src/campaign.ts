@@ -42,6 +42,8 @@ interface CampaignEngineEntry {
   startFromIndex: number;
   callLimit: number;
   answeredLimit: number;
+  retryMaxAttempts: number;
+  retryDelayMinutes: number;
   updatedAt: number; // "kullanıcının şu an baktığı kampanya" fallback seçimi için
   // Arama saatleri dışındayken motorun kendisinin YENİ arama başlatmayı geçici
   // olarak ertelemesi — entry.paused'tan FARKLI: kullanıcı hiçbir şey yapmadan,
@@ -63,6 +65,8 @@ export interface CampaignSnapshot {
   startFromIndex?: number;
   callLimit?: number;
   answeredLimit?: number;
+  retryMaxAttempts?: number;
+  retryDelayMinutes?: number;
   autoHeld?: 'calling-hours';
 }
 
@@ -80,7 +84,7 @@ const TICK_IDLE_MS         = 30 * 1000;
 // senkronizasyonunda (recordToEntry, güvenlik ağı) gerçek durumun JSONB'dekinden daha
 // "ileri" olup olmadığını karşılaştırmak için kullanılıyor.
 const STATUS_PRIORITY: Record<string, number> = {
-  'tamamlandı': 4, 'cevapsız': 3, 'meşgul': 2, 'başarısız': 1, 'arıyor': 0, 'bekliyor': -1,
+  'tamamlandı': 4, 'cevapsız': 3, 'meşgul': 2, 'başarısız': 1, 'tekrar-planlandı': 1, 'arıyor': 0, 'bekliyor': -1,
 };
 
 // ─── Durum ───────────────────────────────────────────────────────────────────
@@ -133,6 +137,12 @@ async function recordToEntry(rec: CampaignRecord): Promise<CampaignEngineEntry> 
     const best = bestCalls.get(c.phone);
     if (!best) return next;
 
+    // 'tekrar-planlandı' henüz hiç dial edilmemiş bir bekleme durumu — bestCalls'ta
+    // bulunan kayıt, bu retry'ı TETİKLEYEN eski (zaten cevapsız/meşgul sonuçlanmış)
+    // aramanın ta kendisi. O bilgiyle uzlaştırma yaparsak her restart'ta retry
+    // planı iptal edilip durum geriye ('cevapsız'/'meşgul') düşürülür — atla.
+    if (next.status === 'tekrar-planlandı' && best.vapiCallId === next.vapiCallId) return next;
+
     const mappedStatus  = callStatusToTurkish(best.status) as CampaignContact['status'];
     const currentPriority = STATUS_PRIORITY[next.status]    ?? -1;
     const realPriority    = STATUS_PRIORITY[mappedStatus]   ?? -1;
@@ -173,6 +183,8 @@ async function recordToEntry(rec: CampaignRecord): Promise<CampaignEngineEntry> 
     startFromIndex: rec.startFromIndex || 0,
     callLimit: rec.callLimit || 0,
     answeredLimit: rec.answeredLimit || 0,
+    retryMaxAttempts: rec.retryMaxAttempts || 1,
+    retryDelayMinutes: rec.retryDelayMinutes || 30,
     updatedAt: Date.now(),
   };
 }
@@ -190,6 +202,7 @@ function toSnapshot(e: CampaignEngineEntry | null): CampaignSnapshot {
     running: e.running, paused: e.paused, maxConcurrent: e.maxConcurrent,
     scenarioId: e.scenarioId, startFromIndex: e.startFromIndex,
     callLimit: e.callLimit, answeredLimit: e.answeredLimit,
+    retryMaxAttempts: e.retryMaxAttempts, retryDelayMinutes: e.retryDelayMinutes,
     autoHeld: e.autoHeld,
   };
 }
@@ -261,6 +274,8 @@ export async function campaignLoad(
   callLimit?: number,
   answeredLimit?: number,
   name?: string,
+  retryMaxAttempts?: number,
+  retryDelayMinutes?: number,
 ): Promise<string> {
   const scenario = scenarioId ? await getScenario(userId, scenarioId) : null;
   const record = await createCampaign(userId, {
@@ -271,6 +286,8 @@ export async function campaignLoad(
     startFromIndex: startFromIndex || 0,
     callLimit: callLimit || 0,
     answeredLimit: answeredLimit || 0,
+    retryMaxAttempts,
+    retryDelayMinutes,
     contacts,
   });
   // Yeni oluşan kampanyanın henüz "calls" tablosunda hiç kaydı yok — recordToEntry'nin
@@ -298,6 +315,8 @@ export interface CampaignResumeOverrides {
   maxConcurrent?: number;
   callLimit?: number;
   answeredLimit?: number;
+  retryMaxAttempts?: number;
+  retryDelayMinutes?: number;
 }
 
 // overrides verilirse (örn. "Başlangıç Satırı" değiştirilip devam edilmek istendiğinde)
@@ -313,6 +332,8 @@ export async function campaignResume(
     if (overrides.maxConcurrent  !== undefined) entry.maxConcurrent  = overrides.maxConcurrent;
     if (overrides.callLimit      !== undefined) entry.callLimit      = overrides.callLimit;
     if (overrides.answeredLimit  !== undefined) entry.answeredLimit  = overrides.answeredLimit;
+    if (overrides.retryMaxAttempts  !== undefined) entry.retryMaxAttempts  = overrides.retryMaxAttempts;
+    if (overrides.retryDelayMinutes !== undefined) entry.retryDelayMinutes = overrides.retryDelayMinutes;
     await updateCampaignSettings(userId, entry.id, overrides);
   }
 
@@ -342,7 +363,7 @@ export async function campaignStop(userId: string, campaignId?: string): Promise
   entry.paused    = false;
   entry.updatedAt = Date.now();
   entry.contacts.forEach(c => {
-    if (c.status === 'bekliyor') c.status = 'başarısız';
+    if (c.status === 'bekliyor' || c.status === 'tekrar-planlandı') c.status = 'başarısız';
   });
   await persistContacts(entry);
   await setCampaignStatus(userId, entry.id, 'stopped');
@@ -379,6 +400,19 @@ export async function onCampaignCallEnded(
 
   if (duration && (!c.duration || duration > c.duration)) c.duration = duration;
 
+  // Otomatik yeniden arama: cevapsız/meşgul VE hâlâ deneme hakkı varsa, terminal
+  // durumda bırakmak yerine bir süre sonra tekrar aranmak üzere kuyruğa geri koy.
+  if (
+    (c.status === 'cevapsız' || c.status === 'meşgul') &&
+    entry.retryMaxAttempts > 1 &&
+    (c.attemptCount ?? 1) < entry.retryMaxAttempts
+  ) {
+    const retryAt = new Date(Date.now() + entry.retryDelayMinutes * 60_000).toISOString();
+    console.log(`[Campaign] "${c.name}" ${c.status} — ${entry.retryDelayMinutes} dk sonra tekrar denenecek (deneme ${c.attemptCount ?? 1}/${entry.retryMaxAttempts})`);
+    c.status = 'tekrar-planlandı';
+    c.nextRetryAt = retryAt;
+  }
+
   await persistContacts(entry);
   broadcastFn(entry.userId, 'campaign-contact-update', {
     campaignId: entry.id, index: idx, contact: { ...c }, summary: getCampaignSummary(entry),
@@ -411,7 +445,8 @@ function isDone(entry: CampaignEngineEntry): boolean {
   const active = scope.filter(c => c.status === 'arıyor').length;
   if (active > 0) return false;
 
-  const allDone = scope.every(c => c.status !== 'bekliyor' && c.status !== 'arıyor');
+  // 'tekrar-planlandı' henüz bitmiş sayılmaz — nextRetryAt geçince fillQueue tekrar arayacak.
+  const allDone = scope.every(c => c.status !== 'bekliyor' && c.status !== 'arıyor' && c.status !== 'tekrar-planlandı');
   if (allDone) return true;
 
   if (entry.callLimit && entry.callLimit > 0) {
@@ -435,8 +470,9 @@ function getCampaignSummary(entry: CampaignEngineEntry) {
   const talked      = entry.contacts.filter(c => c.status === 'tamamlandı' && !c.result?.randevu_alindi).length;
   const unreachable = entry.contacts.filter(c => c.status === 'cevapsız' || c.status === 'meşgul').length;
   const error       = entry.contacts.filter(c => c.status === 'başarısız').length;
+  const retrying     = entry.contacts.filter(c => c.status === 'tekrar-planlandı').length;
   const done        = appointment + talked + unreachable + error;
-  return { total, done, active, waiting, appointment, talked, unreachable, error, randevu: appointment, fail: unreachable + error };
+  return { total, done, active, waiting, appointment, talked, unreachable, error, retrying, randevu: appointment, fail: unreachable + error };
 }
 
 async function onCampaignComplete(entry: CampaignEngineEntry): Promise<void> {
@@ -550,7 +586,7 @@ async function fillQueue(entry: CampaignEngineEntry): Promise<void> {
 
   if (entry.answeredLimit && entry.answeredLimit > 0 && answered >= entry.answeredLimit) {
     let changed = false;
-    entry.contacts.forEach(c => { if (c.status === 'bekliyor') { c.status = 'başarısız'; changed = true; } });
+    entry.contacts.forEach(c => { if (c.status === 'bekliyor' || c.status === 'tekrar-planlandı') { c.status = 'başarısız'; changed = true; } });
     // Sıraya alma/tamamlama yazımı önceden "fire-and-forget" idi (void ile) — sunucu
     // tam bu anda yeniden başlarsa (örn. dev respawn) yazım tamamlanmadan kaybolabiliyordu,
     // DB'de bir adım geride kalmış görünüp "sayı azaldı" hissi yaratıyordu. Artık await'li.
@@ -562,7 +598,7 @@ async function fillQueue(entry: CampaignEngineEntry): Promise<void> {
     const dialed = entry.contacts.slice(startIdx).filter(c => c.status !== 'bekliyor').length;
     if (dialed >= entry.callLimit) {
       let changed = false;
-      entry.contacts.forEach(c => { if (c.status === 'bekliyor') { c.status = 'başarısız'; changed = true; } });
+      entry.contacts.forEach(c => { if (c.status === 'bekliyor' || c.status === 'tekrar-planlandı') { c.status = 'başarısız'; changed = true; } });
       if (active === 0) { if (changed) await persistContacts(entry); await onCampaignComplete(entry); }
       return;
     }
@@ -590,7 +626,8 @@ async function fillQueue(entry: CampaignEngineEntry): Promise<void> {
   const todayStart = istanbulTodayStartIso();
   for (let i = startIdx; i < entry.contacts.length && started < slots; i++) {
     const c = entry.contacts[i];
-    if (c.status !== 'bekliyor') continue;
+    const retryDue = c.status === 'tekrar-planlandı' && !!c.nextRetryAt && new Date(c.nextRetryAt) <= new Date();
+    if (c.status !== 'bekliyor' && !retryDue) continue;
 
     // Güvenlik ağı: contact.status yanlış/eski kalmış olsa bile (örn. bir deploy
     // sırasında kaybolan webhook yazımı), bu kişiyi bugün GERÇEKTEN aramadığımızı
@@ -619,6 +656,8 @@ async function callContact(entry: CampaignEngineEntry, idx: number): Promise<voi
   const c      = entry.contacts[idx];
   c.status     = 'arıyor';
   c.callStartTs = Date.now();
+  c.attemptCount = (c.attemptCount ?? 0) + 1;
+  c.nextRetryAt  = null;
 
   broadcastFn(entry.userId, 'campaign-contact-update', {
     campaignId: entry.id, index: idx, contact: { ...c }, summary: getCampaignSummary(entry),
@@ -638,8 +677,9 @@ async function callContact(entry: CampaignEngineEntry, idx: number): Promise<voi
     });
     c.vapiCallId   = vapiCall.id;
 
-    // Aramayı DB'ye kaydet — Geçmiş Aramalar'da VE kampanya analizinde görünmesi için
-    await createCall(entry.userId, vapiCall.id, customer, scenario?.id, scenario?.name, entry.id);
+    // Aramayı DB'ye kaydet — Geçmiş Aramalar'da VE kampanya analizinde görünmesi için.
+    // leadSource boşsa kampanya adı fallback olur — raporlamada hiçbir arama kaynaksız kalmaz.
+    await createCall(entry.userId, vapiCall.id, customer, scenario?.id, scenario?.name, entry.id, c.leadSource || entry.name);
 
     await persistContacts(entry);
     broadcastFn(entry.userId, 'campaign-contact-update', {

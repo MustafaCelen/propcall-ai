@@ -14,11 +14,16 @@ export interface CampaignContact {
   region: string;
   notes: string;
   reference: string;
-  status: 'bekliyor' | 'arıyor' | 'tamamlandı' | 'cevapsız' | 'meşgul' | 'başarısız';
+  leadSource?: string; // hangi ilan/reklam/liste — raporlamada kaynak bazlı dönüşüm için
+  // 'tekrar-planlandı': cevapsız/meşgul sonrası otomatik yeniden arama bekliyor —
+  // nextRetryAt geçince fillQueue() bunu 'bekliyor' gibi tekrar arar (bkz. campaign.ts).
+  status: 'bekliyor' | 'arıyor' | 'tamamlandı' | 'cevapsız' | 'meşgul' | 'başarısız' | 'tekrar-planlandı';
   vapiCallId: string | null;
   result: CallSummary | null;
   duration?: number;
   callStartTs?: number;
+  attemptCount?: number;      // bu kişi kaç kez arandı (fresh + retry toplamı)
+  nextRetryAt?: string | null; // ISO — 'tekrar-planlandı' durumundayken bu zamandan sonra tekrar aranabilir
 }
 
 export type CampaignStatus = 'draft' | 'running' | 'paused' | 'completed' | 'stopped';
@@ -34,6 +39,8 @@ export interface CampaignRecord {
   startFromIndex: number;
   callLimit: number;
   answeredLimit: number;
+  retryMaxAttempts: number;
+  retryDelayMinutes: number;
   contacts: CampaignContact[];
   createdAt: string;
   startedAt?: string;
@@ -74,6 +81,8 @@ function rowToRecord(r: any): CampaignRecord {
     startFromIndex: r.start_from_index,
     callLimit: r.call_limit,
     answeredLimit: r.answered_limit,
+    retryMaxAttempts: r.retry_max_attempts ?? 1,
+    retryDelayMinutes: r.retry_delay_minutes ?? 30,
     contacts: r.contacts || [],
     createdAt: r.created_at?.toISOString?.() ?? r.created_at,
     startedAt: r.started_at?.toISOString?.() ?? r.started_at ?? undefined,
@@ -90,6 +99,8 @@ export async function createCampaign(userId: string, params: {
   startFromIndex: number;
   callLimit: number;
   answeredLimit: number;
+  retryMaxAttempts?: number;
+  retryDelayMinutes?: number;
   contacts: Array<Omit<CampaignContact, 'status' | 'vapiCallId' | 'result'>>;
 }): Promise<CampaignRecord> {
   const id = newCampaignId();
@@ -100,12 +111,13 @@ export async function createCampaign(userId: string, params: {
   const { rows } = await pool.query(
     `INSERT INTO campaigns
        (id, name, scenario_id, scenario_name, status, max_concurrent,
-        start_from_index, call_limit, answered_limit, contacts, user_id)
-     VALUES ($1,$2,$3,$4,'draft',$5,$6,$7,$8,$9,$10)
+        start_from_index, call_limit, answered_limit, retry_max_attempts, retry_delay_minutes, contacts, user_id)
+     VALUES ($1,$2,$3,$4,'draft',$5,$6,$7,$8,$9,$10,$11,$12)
      RETURNING *`,
     [
       id, params.name.trim() || 'İsimsiz Kampanya', params.scenarioId || null, params.scenarioName || null,
       params.maxConcurrent, params.startFromIndex, params.callLimit, params.answeredLimit,
+      Math.max(1, params.retryMaxAttempts || 1), Math.max(1, params.retryDelayMinutes || 30),
       JSON.stringify(contacts), userId,
     ],
   );
@@ -162,7 +174,10 @@ export async function setCampaignStatus(
 export async function updateCampaignSettings(
   userId: string,
   id: string,
-  patch: { startFromIndex?: number; maxConcurrent?: number; callLimit?: number; answeredLimit?: number },
+  patch: {
+    startFromIndex?: number; maxConcurrent?: number; callLimit?: number; answeredLimit?: number;
+    retryMaxAttempts?: number; retryDelayMinutes?: number;
+  },
 ): Promise<void> {
   const sets: string[] = ['updated_at = NOW()'];
   const vals: unknown[] = [id, userId];
@@ -175,6 +190,8 @@ export async function updateCampaignSettings(
   add('max_concurrent', patch.maxConcurrent);
   add('call_limit', patch.callLimit);
   add('answered_limit', patch.answeredLimit);
+  add('retry_max_attempts', patch.retryMaxAttempts);
+  add('retry_delay_minutes', patch.retryDelayMinutes);
   if (sets.length === 1) return; // hiçbir alan verilmemiş
   await pool.query(`UPDATE campaigns SET ${sets.join(', ')} WHERE id = $1 AND user_id = $2`, vals);
 }

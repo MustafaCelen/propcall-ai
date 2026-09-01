@@ -20,7 +20,7 @@ export interface PromptGenInput {
   rawText?: string;
 }
 
-export async function generateVapiPrompt(apiKey: string, input: PromptGenInput): Promise<string> {
+export async function generateVapiPrompt(apiKey: string, input: PromptGenInput, rulesAddendum?: string): Promise<string> {
   if (!apiKey) throw new Error('Anthropic API key tanımlanmamış (Ayarlarım sayfasından ekleyin)');
   const client = new Anthropic({ apiKey });
   const maxDuration = input.maxDurationSeconds || 120;
@@ -83,7 +83,7 @@ KURALLAR:
 - [Error Handling / Fallback] bölümünde şu durumları ele al: yanıt anlaşılmadı, yanlış kişi,
   aranmak istemiyor, konu dışına çıktı — her biri için kısa cevap + "Sonuç:" etiketi
 - Maksimum görüşme süresi olarak verilen saniyeyi kullan, sessizlik zaman aşımını 5 saniye olarak belirt
-- SADECE prompt metnini döndür — açıklama, giriş cümlesi, markdown code fence (\`\`\`) EKLEME`,
+- SADECE prompt metnini döndür — açıklama, giriş cümlesi, markdown code fence (\`\`\`) EKLEME${rulesAddendum || ''}`,
     messages: [{ role: 'user', content: userMessage }],
   });
 

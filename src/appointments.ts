@@ -32,3 +32,18 @@ export async function deleteAppointment(userId: string, id: string): Promise<boo
   );
   return (rowCount ?? 0) > 0;
 }
+
+// Randevu → satış dönüşümü elle işaretlenir (bkz. Appointment.outcome yorumu) —
+// jsonb_set ile tek sorguda güncellenir, ayrı bir okuma gerekmez.
+export async function setAppointmentOutcome(
+  userId: string, id: string, outcome: 'pending' | 'won' | 'lost', outcomeNote?: string,
+): Promise<Appointment | null> {
+  const { rows } = await pool.query(
+    `UPDATE appointments
+     SET data = data || jsonb_build_object('outcome', $3::text, 'outcomeNote', $4::text)
+     WHERE id = $1 AND user_id = $2
+     RETURNING data`,
+    [id, userId, outcome, outcomeNote ?? null],
+  );
+  return rows[0] ? (rows[0].data as Appointment) : null;
+}

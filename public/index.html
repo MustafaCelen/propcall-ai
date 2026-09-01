@@ -370,6 +370,10 @@
             <div class="chart-title">🎭 Senaryo Performansı</div>
             <div class="scenario-perf-table" id="scenarioPerfTable"></div>
           </div>
+          <div class="chart-card span2">
+            <div class="chart-title">🎯 Kaynak Performansı</div>
+            <div class="scenario-perf-table" id="sourcePerfTable"></div>
+          </div>
         </div>
 
       </div>
@@ -403,7 +407,7 @@
             <div class="campaign-upload-area" id="campaignUploadArea">
               <input type="file" id="campaignFile" accept=".xlsx,.xls,.csv" style="display:none"/>
               <button class="btn-upload" id="btnUpload">📂 Excel / CSV Yükle</button>
-              <span class="upload-hint">Ad, Telefon, Bölge, Referans, Notlar sütunları</span>
+              <span class="upload-hint">Ad, Telefon, Bölge, Referans, Kaynak, Notlar sütunları</span>
             </div>
             <div class="concurrency-group camp-name-group" title="Bu kampanyayı geçmişte tanıyacağınız isim — zorunlu">
               <label>Kampanya Adı</label>
@@ -442,6 +446,20 @@
                 <label>Cevaplayan Limiti</label>
                 <input type="number" id="campaignAnsweredLimit" class="camp-limit-input" min="0" placeholder="∞" />
               </div>
+              <div class="concurrency-group" title="Cevapsız/meşgul aramalar otomatik kaç kez tekrar denensin (1 = tekrar arama yok)">
+                <label>Maks. Deneme</label>
+                <select id="campaignRetryAttempts">
+                  <option value="1">1 (tekrar yok)</option>
+                  <option value="2">2</option>
+                  <option value="3">3</option>
+                  <option value="4">4</option>
+                  <option value="5">5</option>
+                </select>
+              </div>
+              <div class="concurrency-group" title="Tekrar aramadan önce beklenecek süre (dakika)">
+                <label>Tekrar Bekleme (dk)</label>
+                <input type="number" id="campaignRetryDelay" class="camp-limit-input" min="5" max="240" placeholder="30" />
+              </div>
             </div>
             <div class="campaign-actions-group">
               <button class="btn-campaign-start" id="btnCampaignStart" disabled>▶ Başlat</button>
@@ -466,6 +484,7 @@
             <span class="ps-item ps-talked"      id="psTalked">💬 0 Görüşüldü</span>
             <span class="ps-item ps-unreachable" id="psUnreachable">📵 0 Ulaşılamadı</span>
             <span class="ps-item ps-error"       id="psError">⚠️ 0 Hata</span>
+            <span class="ps-item ps-retrying"    id="psRetrying" style="display:none">♻️ 0 Tekrar Planlandı</span>
             <span class="ps-item ps-active"      id="psActive">📞 0 Aktif</span>
           </div>
           <div class="calling-hours-notice" id="callingHoursNotice" style="display:none">⏰ Şu an tanımlı arama saatleri dışında — yeni arama başlatılmıyor, pencere açılınca otomatik devam edecek.</div>

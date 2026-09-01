@@ -1438,8 +1438,9 @@ function renderStats(d) {
     plugins: { legend: { position: 'right', labels: { ...baseLegend, boxWidth: 10, padding: 8 } } },
   });
 
-  // Senaryo performans tablosu
+  // Senaryo + kaynak performans tabloları
   renderScenarioPerf(d.scenarioPerformance || []);
+  renderSourcePerf(d.sourcePerformance || []);
 }
 
 function renderScenarioPerf(scenarios) {
@@ -1457,6 +1458,32 @@ function renderScenarioPerf(scenarios) {
         const rateCls = s.randevuRate >= 30 ? 'sp-good' : s.randevuRate >= 15 ? 'sp-mid' : 'sp-low';
         return '<tr>' +
           '<td class="sp-name">' + esc(s.name) + '</td>' +
+          '<td>' + s.calls + '</td>' +
+          '<td>' + s.randevu + '</td>' +
+          '<td><span class="sp-rate ' + rateCls + '">' + s.randevuRate + '%</span></td>' +
+          '<td class="sp-cost">$' + (s.cost || 0).toFixed(2) + '</td>' +
+          '</tr>';
+      }).join('') +
+      '</tbody></table>';
+}
+
+// Hangi ilan/reklam/liste (leadSource) daha çok randevuya çeviriyor — kampanya
+// yüklerken "Kaynak" sütunu girilirse dolar, yoksa kampanya adına düşer.
+function renderSourcePerf(sources) {
+  const tbl = $('sourcePerfTable');
+  if (!tbl) return;
+  if (!sources.length) {
+    tbl.innerHTML = '<div class="sp-empty">Henüz arama verisi yok</div>';
+    return;
+  }
+  tbl.innerHTML =
+    '<table class="sp-table">' +
+      '<thead><tr><th>Kaynak</th><th>Arama</th><th>Randevu</th><th>Dönüşüm</th><th>Maliyet</th></tr></thead>' +
+      '<tbody>' +
+      sources.map(s => {
+        const rateCls = s.randevuRate >= 30 ? 'sp-good' : s.randevuRate >= 15 ? 'sp-mid' : 'sp-low';
+        return '<tr>' +
+          '<td class="sp-name">' + esc(s.source) + '</td>' +
           '<td>' + s.calls + '</td>' +
           '<td>' + s.randevu + '</td>' +
           '<td><span class="sp-rate ' + rateCls + '">' + s.randevuRate + '%</span></td>' +
@@ -1502,22 +1529,100 @@ async function loadAppointments() {
   }
 }
 
+const APT_OUTCOME_META = {
+  pending: { label: '⏳ Beklemede', cls: 'apt-outcome-pending' },
+  won:     { label: '✅ Satıldı',   cls: 'apt-outcome-won' },
+  lost:    { label: '❌ Kaybedildi', cls: 'apt-outcome-lost' },
+};
+
+// Randevu tarih/saatini Date'e çevirir — a.date "YYYY-MM-DD", a.time "HH:MM"
+function appointmentToDate(a) {
+  const [y, m, d] = (a.date || '').split('-').map(Number);
+  const [hh, mm]  = (a.time || '00:00').split(':').map(Number);
+  if (!y || !m || !d) return null;
+  return new Date(y, m - 1, d, hh || 0, mm || 0);
+}
+
+function icsTimestamp(date) {
+  const p = n => String(n).padStart(2, '0');
+  return date.getUTCFullYear() + p(date.getUTCMonth() + 1) + p(date.getUTCDate()) + 'T' +
+         p(date.getUTCHours()) + p(date.getUTCMinutes()) + p(date.getUTCSeconds()) + 'Z';
+}
+
+function icsEscape(s) {
+  return String(s || '').replace(/[\\;,]/g, m => '\\' + m).replace(/\n/g, '\\n');
+}
+
+// Backend/OAuth gerektirmeyen v1 takvim entegrasyonu: .ics indirme + Google Calendar linki.
+function downloadAppointmentIcs(a) {
+  const start = appointmentToDate(a);
+  if (!start) { toast('Geçersiz tarih/saat', 'error'); return; }
+  const end = new Date(start.getTime() + 30 * 60 * 1000);
+  const ics = [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//PropCall AI//TR', 'BEGIN:VEVENT',
+    'UID:' + a.id + '@propcall.ai',
+    'DTSTAMP:' + icsTimestamp(new Date()),
+    'DTSTART:' + icsTimestamp(start),
+    'DTEND:' + icsTimestamp(end),
+    'SUMMARY:' + icsEscape(a.customerName + ' — Randevu'),
+    a.address ? 'LOCATION:' + icsEscape(a.address) : '',
+    'DESCRIPTION:' + icsEscape((a.notes || '') + (a.customerPhone ? '\nTel: ' + a.customerPhone : '')),
+    'END:VEVENT', 'END:VCALENDAR',
+  ].filter(Boolean).join('\r\n');
+
+  const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'randevu-' + (a.customerName || 'musteri').replace(/\s+/g, '-') + '.ics';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function googleCalendarLink(a) {
+  const start = appointmentToDate(a);
+  if (!start) return '#';
+  const end = new Date(start.getTime() + 30 * 60 * 1000);
+  const params = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: a.customerName + ' — Randevu',
+    dates: icsTimestamp(start) + '/' + icsTimestamp(end),
+    details: (a.notes || '') + (a.customerPhone ? '\nTel: ' + a.customerPhone : ''),
+    location: a.address || '',
+  });
+  return 'https://calendar.google.com/calendar/render?' + params.toString();
+}
+
 function renderAppointments(apts) {
   if (!apts.length) {
     DOM.aptList.innerHTML = '<div class="apt-empty">Henüz randevu yok</div>';
     return;
   }
-  DOM.aptList.innerHTML = apts.map(a =>
+  DOM.aptList.innerHTML = apts.map(a => {
+    const outcome = APT_OUTCOME_META[a.outcome] ? a.outcome : 'pending';
+    return (
     '<div class="apt-item">' +
       '<div class="apt-info">' +
         '<div class="apt-name">' + esc(a.customerName) + '</div>' +
         '<div class="apt-meta">' + esc(a.date) + ' ' + esc(a.time) +
           (a.address ? ' · ' + esc(a.address) : '') + '</div>' +
         (a.notes ? '<div class="apt-notes">' + esc(a.notes) + '</div>' : '') +
+        '<div class="apt-cal-links">' +
+          '<button class="apt-cal-btn" data-ics="' + a.id + '" type="button">📥 .ics indir</button>' +
+          '<a class="apt-cal-btn" href="' + googleCalendarLink(a) + '" target="_blank" rel="noopener">📅 Google Calendar</a>' +
+        '</div>' +
+        '<select class="apt-outcome-select ' + APT_OUTCOME_META[outcome].cls + '" data-outcome-id="' + a.id + '">' +
+          Object.keys(APT_OUTCOME_META).map(k =>
+            '<option value="' + k + '"' + (k === outcome ? ' selected' : '') + '>' + APT_OUTCOME_META[k].label + '</option>'
+          ).join('') +
+        '</select>' +
       '</div>' +
       '<button class="btn-del-apt" data-id="' + a.id + '">✕</button>' +
     '</div>'
-  ).join('');
+    );
+  }).join('');
 
   DOM.aptList.querySelectorAll('.btn-del-apt').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -1529,6 +1634,32 @@ function renderAppointments(apts) {
         toast('Randevu silindi', 'info');
       } catch (err) {
         toast('Silme hatası: ' + err.message, 'error');
+      }
+    });
+  });
+
+  DOM.aptList.querySelectorAll('[data-ics]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const a = apts.find(x => x.id === btn.dataset.ics);
+      if (a) downloadAppointmentIcs(a);
+    });
+  });
+
+  DOM.aptList.querySelectorAll('.apt-outcome-select').forEach(sel => {
+    sel.addEventListener('change', async () => {
+      const id = sel.dataset.outcomeId;
+      const outcome = sel.value;
+      sel.className = 'apt-outcome-select ' + APT_OUTCOME_META[outcome].cls;
+      try {
+        const r = await fetch('/api/appointments/' + id + '/outcome', {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ outcome }),
+        });
+        const j = await r.json();
+        if (!j.success) throw new Error(j.error);
+        toast('Randevu durumu güncellendi', 'success');
+      } catch (err) {
+        toast('Güncellenemedi: ' + err.message, 'error');
       }
     });
   });
@@ -2164,7 +2295,7 @@ function parseContacts(rows) {
 
   // Detect header row — look for phone-like column
   let dataStart = 0;
-  let colName = 0, colPhone = 1, colRegion = 2, colNotes = 3, colReference = -1;
+  let colName = 0, colPhone = 1, colRegion = 2, colNotes = 3, colReference = -1, colLeadSource = -1;
 
   const first = rows[0].map(c => String(c).toLowerCase().trim());
   const phoneIdx = first.findIndex(h => h.includes('telefon') || h.includes('phone') || h.includes('tel'));
@@ -2179,6 +2310,8 @@ function parseContacts(rows) {
     if (colNotes < 0) colNotes = -1;
     colReference = first.findIndex(h => h.includes('referans') || h.includes('reference') || h.includes('ref'));
     if (colReference < 0) colReference = -1;
+    colLeadSource = first.findIndex(h => h.includes('kaynak') || h.includes('source') || h.includes('ilan'));
+    if (colLeadSource < 0) colLeadSource = -1;
   }
 
   setFocusedCampaign(null); // yeni yüklenen dosya — var olan bir kampanyaya bağlı değil
@@ -2216,6 +2349,7 @@ function parseContacts(rows) {
       region:    colRegion    >= 0 ? String(row[colRegion]    || '').trim() : '',
       notes:     colNotes     >= 0 ? String(row[colNotes]     || '').trim() : '',
       reference: colReference >= 0 ? String(row[colReference] || '').trim() : '',
+      leadSource: colLeadSource >= 0 ? String(row[colLeadSource] || '').trim() : '',
       status: 'bekliyor',
       vapiCallId: null,
       result: null,
@@ -2393,6 +2527,7 @@ function resolveCampaignStatusTag(c) {
   if (c.status === 'cevapsız')   return '<span class="ctag ct-miss">📵 Cevapsız</span>';
   if (c.status === 'meşgul')     return '<span class="ctag ct-busy">⏰ Meşgul</span>';
   if (c.status === 'başarısız')  return '<span class="ctag ct-error">⚠️ Hata</span>';
+  if (c.status === 'tekrar-planlandı') return '<span class="ctag ct-retry">♻️ Tekrar Planlandı</span>';
   if (c.status === 'tamamlandı') {
     if (c.result && c.result.randevu_alindi === true)  return '<span class="ctag ct-appt">✅ Randevu</span>';
     if (c.result && c.result.randevu_alindi === false) return '<span class="ctag ct-talked">💬 Görüşüldü (Ret)</span>';
@@ -2407,6 +2542,7 @@ function categorizeCampaignContact(c) {
   if (c.status === 'bekliyor')  return 'waiting';
   if (c.status === 'cevapsız' || c.status === 'meşgul') return 'unreachable';
   if (c.status === 'başarısız') return 'error';
+  if (c.status === 'tekrar-planlandı') return 'retrying';
   if (c.status === 'tamamlandı') {
     if (c.result && c.result.randevu_alindi === true) return 'appointment';
     return 'talked'; // Randevu yok veya özet gelmedi ama görüşme oldu
@@ -2453,7 +2589,7 @@ function renderCampaignRow(idx) {
 }
 
 function computeCampaignBuckets() {
-  const buckets = { appointment:0, talked:0, unreachable:0, error:0, active:0, waiting:0 };
+  const buckets = { appointment:0, talked:0, unreachable:0, error:0, active:0, waiting:0, retrying:0 };
   campaign.contacts.forEach(c => {
     const k = categorizeCampaignContact(c);
     buckets[k] = (buckets[k] || 0) + 1;
@@ -2471,6 +2607,12 @@ function paintCampaignProgress(total, done, b) {
   $('psUnreachable').textContent = '📵 ' + b.unreachable + ' Ulaşılamadı';
   $('psError').textContent       = '⚠️ ' + b.error       + ' Hata';
   $('psActive').textContent      = '📞 ' + b.active      + ' Aktif';
+  const retryEl = $('psRetrying');
+  if (retryEl) {
+    const retrying = b.retrying || 0;
+    retryEl.style.display = retrying > 0 ? '' : 'none';
+    retryEl.textContent = '♻️ ' + retrying + ' Tekrar Planlandı';
+  }
 }
 
 function updateCampaignProgress() {
@@ -2495,6 +2637,7 @@ function updateCampaignProgressFromSummary(sum) {
         error:       sum.error       ?? 0,
         active:      sum.active      ?? 0,
         waiting:     sum.waiting     ?? 0,
+        retrying:    sum.retrying    ?? 0,
       }
     : computeCampaignBuckets();
   const done = sum.done ?? (b.appointment + b.talked + b.unreachable + b.error);
@@ -2511,6 +2654,9 @@ async function campaignStart() {
   const startFromIndex  = (startFromRaw  > 1  ? startFromRaw - 1 : 0); // UI 1-tabanlı → 0-tabanlı
   const callLimit       = (callLimitRaw  > 0  ? callLimitRaw   : 0);
   const answeredLimit   = (answeredLimitRaw > 0 ? answeredLimitRaw : 0);
+  const retryMaxAttempts = parseInt(($('campaignRetryAttempts')?.value || '1'), 10) || 1;
+  const retryDelayRaw    = parseInt(($('campaignRetryDelay')?.value    || ''), 10);
+  const retryDelayMinutes = (retryDelayRaw > 0 ? retryDelayRaw : 30);
 
   // Zaten yüklenmiş (var olan) bir kampanya varsa — listeyi sıfırdan yeniden
   // OLUŞTURMAK yerine (bu, tüm birikmiş sonuçları/durumları sıfırlardı) SADECE
@@ -2522,7 +2668,7 @@ async function campaignStart() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           campaignId: campaign.id, maxConcurrent: campaign.maxConcurrent,
-          startFromIndex, callLimit, answeredLimit,
+          startFromIndex, callLimit, answeredLimit, retryMaxAttempts, retryDelayMinutes,
         }),
       });
       const json = await resp.json();
@@ -2561,6 +2707,8 @@ async function campaignStart() {
         callLimit,
         answeredLimit,
         name,
+        retryMaxAttempts,
+        retryDelayMinutes,
       }),
     });
     const json = await resp.json();
@@ -3039,7 +3187,13 @@ async function runPromptGenerate() {
     if (!j.success) throw new Error(j.error);
 
     if (promptGenTargetId) $(promptGenTargetId).value = j.data.systemPrompt;
-    toast('Prompt oluşturuldu — inceleyip kaydedin', 'success');
+    if (j.data.scriptWarnings && j.data.scriptWarnings.length) {
+      toast('⚠️ Şirket kurallarına aykırı olabilecek ifade tespit edildi: ' + j.data.scriptWarnings.join(', ') + ' — kaydetmeden önce inceleyin', 'error');
+    } else if (j.data.disclosureAdded) {
+      toast('Prompt oluşturuldu — zorunlu açıklama otomatik eklendi, inceleyip kaydedin', 'success');
+    } else {
+      toast('Prompt oluşturuldu — inceleyip kaydedin', 'success');
+    }
     closePromptGenModal();
   } catch (err) {
     toast('Prompt oluşturulamadı: ' + err.message, 'error');

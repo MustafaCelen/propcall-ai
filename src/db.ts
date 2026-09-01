@@ -142,6 +142,29 @@ export async function initDb(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_campaigns_created_at ON campaigns (created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_calls_campaign_id    ON calls ((data ->> 'campaignId'));
 
+    -- Otomatik yeniden arama — max_attempts=1 (varsayılan) eski davranışla birebir
+    -- aynı (hiç retry yok). delay_minutes sadece max_attempts>1 iken anlam kazanır.
+    ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS retry_max_attempts  INT NOT NULL DEFAULT 1;
+    ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS retry_delay_minutes INT NOT NULL DEFAULT 30;
+
+    -- Lead kaynağı (hangi ilan/reklam/liste) — raporlamada dönüşüm oranını kaynağa göre kırmak için.
+    -- customer_phone/scenario_id gibi diğer JSONB alanlar da düz sütun değil, fonksiyonel
+    -- index ile sorgulanıyor — aynı örüntü.
+    CREATE INDEX IF NOT EXISTS idx_calls_lead_source ON calls ((data ->> 'leadSource'));
+
+    -- Not: randevu → satış dönüşümü (outcome/outcomeNote) appointments.data JSONB
+    -- içinde tutulur (tablonun geri kalanıyla aynı örüntü) — ayrı sütun gerekmez.
+
+    -- Şirket geneli script kısıtlamaları — admin tanımlar, tüm danışmanların AI prompt
+    -- üretimini etkiler (bkz. src/promptgen.ts). Tek satır, id sabit 'global'.
+    CREATE TABLE IF NOT EXISTS company_script_rules (
+      id                       TEXT PRIMARY KEY DEFAULT 'global',
+      banned_phrases           TEXT[] NOT NULL DEFAULT '{}',
+      required_disclosure      TEXT,
+      forbid_price_commitment  BOOLEAN NOT NULL DEFAULT true,
+      updated_at               TIMESTAMPTZ DEFAULT NOW()
+    );
+
     -- Çok kiracılı veri izolasyonu — nullable (eski kayıtlar boot sırasında admin'e atanır, bkz. src/users.ts backfillOwnerlessRows).
     ALTER TABLE calls        ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id);
     ALTER TABLE appointments ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id);

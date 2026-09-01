@@ -55,6 +55,7 @@ export interface CallRecord {
   scenarioId?: string;
   scenarioName?: string;
   campaignId?: string;
+  leadSource?: string; // hangi ilan/reklam/liste — raporlamada kaynak bazlı dönüşüm için
 }
 
 export interface Appointment {
@@ -66,6 +67,9 @@ export interface Appointment {
   address: string;
   notes: string;
   createdAt: string;
+  // Sistem bunu otomatik bilemez (CRM/tapu entegrasyonu yok) — danışman elle işaretler.
+  outcome?: 'pending' | 'won' | 'lost';
+  outcomeNote?: string;
 }
 
 export interface Scenario {
@@ -132,6 +136,7 @@ export interface StatsData {
   hourlyDistribution: Array<{ hour: number; count: number }>;
   statusBreakdown: Array<{ status: string; count: number }>;
   scenarioPerformance: Array<{ name: string; calls: number; randevu: number; randevuRate: number; cost: number }>;
+  sourcePerformance: Array<{ source: string; calls: number; randevu: number; randevuRate: number; cost: number }>;
   randevuTrend: Array<{ date: string; rate: number; count: number }>;
 }
 

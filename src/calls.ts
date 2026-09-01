@@ -84,6 +84,7 @@ export async function createCall(
   scenarioId?: string,
   scenarioName?: string,
   campaignId?: string,
+  leadSource?: string,
 ): Promise<CallRecord> {
   const record: CallRecord = {
     callId:        `call_${Date.now()}`,
@@ -100,6 +101,7 @@ export async function createCall(
     scenarioId,
     scenarioName,
     campaignId,
+    leadSource: leadSource || undefined,
   };
   await pool.query(
     `INSERT INTO calls (vapi_call_id, data, start_time, status, user_id)
@@ -478,6 +480,7 @@ export async function getStats(userId: string, filters?: StatsFilters): Promise<
     hourRows,
     statusRows,
     scenarioRows,
+    sourceRows,
   ] = await Promise.all([
     // 1 — Temel sayılar
     pool.query<{
@@ -597,6 +600,20 @@ export async function getStats(userId: string, filters?: StatsFilters): Promise<
        GROUP BY name ORDER BY calls DESC`,
       baseParams,
     ),
+
+    // 10 — Kaynak (lead source) performansı — hangi ilan/reklam/liste daha çok randevuya çeviriyor
+    pool.query<{ source: string; calls: string; randevu: string; cost: string }>(
+      `SELECT COALESCE(NULLIF(data->>'leadSource',''),'Belirtilmemiş') AS source,
+              COUNT(*)::int AS calls,
+              COUNT(*) FILTER (
+                WHERE (data->'summary'->>'randevu_alindi')::boolean = true
+              )::int AS randevu,
+              COALESCE(SUM((data->'costs'->>'total')::float), 0) AS cost
+       FROM calls
+       WHERE user_id = $2 ${RANGE}
+       GROUP BY source ORDER BY calls DESC`,
+      baseParams,
+    ),
   ]);
 
   const m            = mainRow.rows[0];
@@ -636,12 +653,75 @@ export async function getStats(userId: string, filters?: StatsFilters): Promise<
         cost: Math.round(Number(r.cost) * 10000) / 10000,
       };
     }),
+    sourcePerformance: sourceRows.rows.map(r => {
+      const calls = Number(r.calls);
+      const randevu = Number(r.randevu);
+      return {
+        source: r.source, calls, randevu,
+        randevuRate: calls ? Math.round(randevu / calls * 100) : 0,
+        cost: Math.round(Number(r.cost) * 10000) / 10000,
+      };
+    }),
     randevuTrend: randevuTrendRows.rows.map(r => {
       const total  = Number(r.total);
       const alindi = Number(r.alindi);
       return { date: r.date, rate: total ? Math.round(alindi / total * 100) : 0, count: alindi };
     }),
   };
+}
+
+export interface AdminUserComparisonRow {
+  userId: string;
+  totalCalls: number;
+  completedCalls: number;
+  answerRate: number;
+  randevuCount: number;
+  randevuRate: number;
+  totalCost: number;
+  avgDuration: number;
+}
+
+// Admin-only, tüm danışmanlar genelinde (cross-tenant) karşılaştırma — hangi danışman
+// daha çok arama yapıyor, daha yüksek dönüşüm/daha düşük maliyet elde ediyor.
+// getStats ile aynı sorgu deseni, tek fark: user_id'ye göre GROUP BY.
+export async function getAdminUserComparison(dateFrom?: string, dateTo?: string): Promise<AdminUserComparisonRow[]> {
+  const fromTs = dateFrom ? `${dateFrom}T00:00:00.000Z` : null;
+  const toTs   = dateTo   ? `${dateTo}T23:59:59.999Z`   : null;
+  const { rows } = await pool.query<{
+    user_id: string; total_calls: string; completed_calls: string;
+    randevu_count: string; with_summary: string; total_cost: string; avg_duration: string;
+  }>(
+    `SELECT
+       user_id,
+       COUNT(*)::int AS total_calls,
+       COUNT(*) FILTER (WHERE status = 'completed')::int AS completed_calls,
+       COUNT(*) FILTER (WHERE (data->'summary'->>'randevu_alindi')::boolean = true)::int AS randevu_count,
+       COUNT(*) FILTER (WHERE data->'summary' IS NOT NULL AND status != 'in-progress')::int AS with_summary,
+       COALESCE(SUM((data->'costs'->>'total')::float), 0) AS total_cost,
+       COALESCE(ROUND(AVG((data->>'duration')::float) FILTER (WHERE status != 'in-progress'))::int, 0) AS avg_duration
+     FROM calls
+     WHERE user_id IS NOT NULL
+       AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
+       AND ($2::timestamptz IS NULL OR start_time <= $2::timestamptz)
+     GROUP BY user_id
+     ORDER BY total_calls DESC`,
+    [fromTs, toTs],
+  );
+  return rows.map(r => {
+    const totalCalls = Number(r.total_calls);
+    const withSummary = Number(r.with_summary);
+    const randevuCount = Number(r.randevu_count);
+    return {
+      userId: r.user_id,
+      totalCalls,
+      completedCalls: Number(r.completed_calls),
+      answerRate: totalCalls ? Math.round(Number(r.completed_calls) / totalCalls * 100) : 0,
+      randevuCount,
+      randevuRate: withSummary ? Math.round(randevuCount / withSummary * 100) : 0,
+      totalCost: Math.round(Number(r.total_cost) * 10000) / 10000,
+      avgDuration: Number(r.avg_duration),
+    };
+  });
 }
 
 export async function exportCSV(userId: string, filters?: CallFilters): Promise<string> {

@@ -16,12 +16,12 @@ import {
   listAssistants, listPhoneNumbers, importAssistant, AssistantConfigPatch,
 } from './vapi';
 import { getElevenLabsCredit, listElevenLabsVoices, estimateTtsCost, generateVoicePreview } from './elevenlabs';
-import { getAllAppointments, saveAppointment, deleteAppointment } from './appointments';
+import { getAllAppointments, saveAppointment, deleteAppointment, setAppointmentOutcome } from './appointments';
 import { getAllScenarios, getScenario, createScenario, updateScenario, deleteScenario, seedDefaultScenario } from './scenarios';
 import {
   getAllCalls, readCall, readCallForUser, createCall, updateCall, updateCallForUser,
   appendTranscript, updateCosts, saveCallSummary, getCallOwnerUserId,
-  endedReasonToStatus, getStats, exportCSV, getCampaignStats, reconcileStaleCalls,
+  endedReasonToStatus, getStats, exportCSV, getCampaignStats, reconcileStaleCalls, getAdminUserComparison,
 } from './calls';
 import { VapiCallRequest, VapiWebhookPayload, VapiCostItem, CallFilters, CallRecord, CallCosts } from './types';
 import {
@@ -45,6 +45,7 @@ import {
 } from './fonzip';
 import { hashPassword, login, logout, getSessionUser, requireUserAuth, requireAdmin } from './auth';
 import { generateVapiPrompt, PromptGenInput } from './promptgen';
+import { getScriptRules, setScriptRules, lintGeneratedPrompt, rulesToSystemPromptAddendum } from './scriptRules';
 import { simulateScenario } from './scenariotest';
 
 const app  = express();
@@ -308,6 +309,23 @@ app.get('/settings', requireUserAuth, (_req: Request, res: Response) => {
 app.get('/api/admin/users', requireAdmin, async (_req: Request, res: Response) => {
   try {
     return res.json({ success: true, data: await listUsers() });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+// Danışmanlar arası (cross-tenant) karşılaştırma — sadece admin görebilir, tek bir
+// danışmanın /api/stats'ından FARKLI: burada GROUP BY user_id, herkes bir arada.
+app.get('/api/admin/stats', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const dateFrom = typeof req.query.dateFrom === 'string' ? req.query.dateFrom : undefined;
+    const dateTo   = typeof req.query.dateTo   === 'string' ? req.query.dateTo   : undefined;
+    const [rows, users] = await Promise.all([getAdminUserComparison(dateFrom, dateTo), listUsers()]);
+    const userMap = new Map(users.map(u => [u.id, u]));
+    const data = rows.map(r => ({
+      ...r,
+      email: userMap.get(r.userId)?.email ?? '—',
+      name: userMap.get(r.userId)?.name ?? null,
+    }));
+    return res.json({ success: true, data });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
 
@@ -1185,6 +1203,17 @@ app.delete('/api/appointments/:id', requireUserAuth, async (req: Request, res) =
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
 
+app.patch('/api/appointments/:id/outcome', requireUserAuth, async (req: Request, res) => {
+  try {
+    const { outcome, outcomeNote } = req.body as { outcome?: string; outcomeNote?: string };
+    if (outcome !== 'pending' && outcome !== 'won' && outcome !== 'lost')
+      return res.status(400).json({ success: false, error: "outcome 'pending'|'won'|'lost' olmalı" });
+    const updated = await setAppointmentOutcome(req.userId!, req.params.id, outcome, outcomeNote);
+    if (!updated) return res.status(404).json({ success: false, error: 'Randevu bulunamadı' });
+    return res.json({ success: true, data: updated });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
 // ─── SENARYOLAR ──────────────────────────────────────────────────────────────
 
 app.get('/api/scenarios', requireUserAuth, async (req: Request, res) => {
@@ -1248,11 +1277,39 @@ app.post('/api/prompt/generate', requireUserAuth, async (req: Request, res: Resp
       return res.status(400).json({ success: false, error: 'Şirket/marka adı ve aramanın amacı zorunlu (veya serbest metin girin)' });
     }
     const anthropicKey = await getUserAnthropicKey(req.userId!);
-    const systemPrompt = await generateVapiPrompt(anthropicKey, input);
-    return res.json({ success: true, data: { systemPrompt } });
+    const rules = await getScriptRules();
+    const raw = await generateVapiPrompt(anthropicKey, input, rulesToSystemPromptAddendum(rules));
+    // Son denetim — LLM kuralı gözden kaçırmış olsa bile burası deterministik son söz
+    // sahibi: yasaklı ifadeler raporlanır (üretilen metinden silinmez, prompt yapısını
+    // bozabilir), zorunlu açıklama eksikse otomatik eklenir.
+    const lint = lintGeneratedPrompt(raw, rules);
+    return res.json({
+      success: true,
+      data: { systemPrompt: lint.text, scriptWarnings: lint.violations, disclosureAdded: lint.disclosureAdded },
+    });
   } catch (err) {
     return res.status(500).json({ success: false, error: String(err) });
   }
+});
+
+// ─── ADMİN — Şirket geneli AI script kısıtlamaları ──────────────────────────
+app.get('/api/admin/script-rules', requireAdmin, async (_req: Request, res: Response) => {
+  try { return res.json({ success: true, data: await getScriptRules() }); }
+  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.put('/api/admin/script-rules', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const { bannedPhrases, requiredDisclosure, forbidPriceCommitment } = req.body as {
+      bannedPhrases?: string[]; requiredDisclosure?: string | null; forbidPriceCommitment?: boolean;
+    };
+    await setScriptRules({
+      bannedPhrases: Array.isArray(bannedPhrases) ? bannedPhrases.filter(p => p?.trim()).map(p => p.trim()) : [],
+      requiredDisclosure: requiredDisclosure?.trim() || null,
+      forbidPriceCommitment: forbidPriceCommitment !== false,
+    });
+    return res.json({ success: true, data: await getScriptRules() });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
 
 // Bir sistem promptunu gerçek para harcamadan (Vapi araması yapmadan) test et —
@@ -1309,17 +1366,20 @@ app.get('/api/campaign', requireUserAuth, (req: Request, res: Response) => {
 // Kişi listesini yükle (henüz başlatma) — mevcut çalışan kampanyaları etkilemez, yenisini ekler.
 app.post('/api/campaign/load', requireUserAuth, async (req: Request, res: Response) => {
   try {
-    const { contacts, maxConcurrent, scenarioId, name } = req.body;
+    const { contacts, maxConcurrent, scenarioId, name, retryMaxAttempts, retryDelayMinutes } = req.body;
     if (!Array.isArray(contacts) || !contacts.length)
       return res.status(400).json({ success: false, error: 'Kişi listesi zorunlu' });
-    const campaignId = await campaignLoad(req.userId!, contacts, maxConcurrent || 1, scenarioId, undefined, undefined, undefined, name);
+    const campaignId = await campaignLoad(
+      req.userId!, contacts, maxConcurrent || 1, scenarioId, undefined, undefined, undefined, name,
+      retryMaxAttempts, retryDelayMinutes,
+    );
     return res.json({ success: true, data: { campaignId } });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
 
 app.post('/api/campaign/start', requireUserAuth, async (req: Request, res: Response) => {
   try {
-    const { contacts, maxConcurrent, scenarioId, startFromIndex, callLimit, answeredLimit, name } = req.body;
+    const { contacts, maxConcurrent, scenarioId, startFromIndex, callLimit, answeredLimit, name, retryMaxAttempts, retryDelayMinutes } = req.body;
     let campaignId: string | undefined = req.body.campaignId;
     if (contacts?.length) {
       if (!name?.trim())
@@ -1327,6 +1387,7 @@ app.post('/api/campaign/start', requireUserAuth, async (req: Request, res: Respo
       campaignId = await campaignLoad(
         req.userId!, contacts, maxConcurrent || 1, scenarioId,
         startFromIndex || 0, callLimit || 0, answeredLimit || 0, name,
+        retryMaxAttempts, retryDelayMinutes,
       );
     }
     if (!campaignId) return res.status(400).json({ success: false, error: 'contacts veya campaignId gerekli' });
@@ -1349,11 +1410,13 @@ app.delete('/api/calls/before-today', requireUserAuth, async (req: Request, res:
 
 app.post('/api/campaign/resume', requireUserAuth, async (req: Request, res: Response) => {
   try {
-    const { campaignId, startFromIndex, maxConcurrent, callLimit, answeredLimit } = req.body as {
+    const { campaignId, startFromIndex, maxConcurrent, callLimit, answeredLimit, retryMaxAttempts, retryDelayMinutes } = req.body as {
       campaignId?: string; startFromIndex?: number; maxConcurrent?: number; callLimit?: number; answeredLimit?: number;
+      retryMaxAttempts?: number; retryDelayMinutes?: number;
     };
-    const hasOverrides = [startFromIndex, maxConcurrent, callLimit, answeredLimit].some(v => v !== undefined);
-    await campaignResume(req.userId!, campaignId, hasOverrides ? { startFromIndex, maxConcurrent, callLimit, answeredLimit } : undefined);
+    const overrides = { startFromIndex, maxConcurrent, callLimit, answeredLimit, retryMaxAttempts, retryDelayMinutes };
+    const hasOverrides = Object.values(overrides).some(v => v !== undefined);
+    await campaignResume(req.userId!, campaignId, hasOverrides ? overrides : undefined);
     return res.json({ success: true, data: getCampaignState(req.userId!, campaignId) });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
