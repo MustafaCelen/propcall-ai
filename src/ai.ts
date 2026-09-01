@@ -3,9 +3,11 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { CustomerInfo, CallSummary } from './types';
 
-// claude-sonnet-4-5 fiyatlandırması ($/milyon token) — model değişirse burada güncelle.
-const ANTHROPIC_INPUT_PER_MTOK  = 3;
-const ANTHROPIC_OUTPUT_PER_MTOK = 15;
+// claude-haiku-4-5 fiyatlandırması ($/milyon token) — model değişirse burada güncelle.
+// Sonnet 4.5'e göre ~%67 daha ucuz ($3/$15 → $1/$5) — görev (transkriptten yapılandırılmış
+// JSON çıkarımı: randevu/ilgi/ret nedeni) Haiku için uygun karmaşıklıkta.
+const ANTHROPIC_INPUT_PER_MTOK  = 1;
+const ANTHROPIC_OUTPUT_PER_MTOK = 5;
 
 export interface CallSummaryResult {
   summary: CallSummary;
@@ -40,7 +42,7 @@ ${scenarioPrompt.trim()}
 aramanın amacını transkriptin kendisinden anla, varsayım yapma.`;
 
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-5',
+    model: 'claude-haiku-4-5-20251001',
     max_tokens: 600,
     system: `Sen bir soğuk arama CRM sistemi için görüşme analisti asistanısın.
 Sana verilen telefon görüşmesi transkriptini, aramanın amacını tanımlayan asistan sistem

@@ -18,7 +18,7 @@ import {
   getBestCallsByPhoneForCampaign, findTodaysCallForPhone, BestCallInfo,
 } from './calls';
 import { getScenario } from './scenarios';
-import { resolveVapiCreds, getUserById, getUserElevenLabsKey } from './users';
+import { resolveVapiCreds, getUserById, getUserElevenLabsKey, CALL_MINUTE_RATE_TRY } from './users';
 import { CustomerInfo, CallSummary } from './types';
 import {
   CampaignContact, CampaignRecord,
@@ -162,7 +162,11 @@ async function recordToEntry(rec: CampaignRecord): Promise<CampaignEngineEntry> 
     userId: rec.userId,
     name: rec.name,
     contacts,
-    running: false, // Kullanıcı "Başlat"a tekrar basana kadar bekle
+    // DB'deki son bilinen niyeti yansıt — bir deploy/restart, danışmanın aktif bir
+    // kampanyasını sessizce duraklatmamalı. "arıyor" durumundaki kişiler yukarıda zaten
+    // calls tablosuyla (gerçek kaynak) uzlaştırıldı, bu yüzden kaldığı yerden güvenle
+    // devam edilebilir — kullanıcının tekrar "Başlat"a basmasını beklemeye gerek yok.
+    running: rec.status === 'running',
     paused: rec.status === 'paused',
     maxConcurrent: rec.maxConcurrent || 1,
     scenarioId: rec.scenarioId,
@@ -532,6 +536,14 @@ async function fillQueue(entry: CampaignEngineEntry): Promise<void> {
     return;
   }
 
+  // Jeton bakiyesi en az 1 dakikalık ücreti karşılamıyorsa yeni arama başlatma —
+  // devam eden görüşme kesilmez, sadece kuyruk doldurma bekletilir (aynı ElevenLabs
+  // kredi tükenmesi mantığı, bkz. pauseForCreditExhaustion).
+  if ((user?.balanceTry ?? 0) < CALL_MINUTE_RATE_TRY) {
+    await pauseForCreditExhaustion(entry, `Jeton bakiyesi yetersiz (kalan: ${(user?.balanceTry ?? 0).toFixed(2)} TL)`);
+    return;
+  }
+
   const startIdx = entry.startFromIndex ?? 0;
   const answered = entry.contacts.filter(c => c.status === 'tamamlandı').length;
   const active   = entry.contacts.filter(c => c.status === 'arıyor').length;
@@ -615,11 +627,15 @@ async function callContact(entry: CampaignEngineEntry, idx: number): Promise<voi
   try {
     const creds    = await resolveVapiCreds(entry.userId);
     const scenario = entry.scenarioId ? await getScenario(entry.userId, entry.scenarioId) : null;
+    const user     = await getUserById(entry.userId);
     const customer: CustomerInfo = {
       name: c.name, phone: c.phone,
       region: c.region || '', notes: c.notes || '', reference: c.reference || '',
     };
-    const vapiCall = await createVapiCall(creds, customer, scenario?.systemPrompt);
+    const vapiCall = await createVapiCall(creds, customer, scenario?.systemPrompt, {
+      agentName: user?.name || undefined,
+      companyName: user?.companyName || undefined,
+    });
     c.vapiCallId   = vapiCall.id;
 
     // Aramayı DB'ye kaydet — Geçmiş Aramalar'da VE kampanya analizinde görünmesi için

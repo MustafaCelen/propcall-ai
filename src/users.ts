@@ -14,10 +14,14 @@ export interface UserRow {
   isActive: boolean;
   vapiPhoneNumberId: string | null;
   vapiAssistantId: string | null;
+  vapiPublicKey: string | null;
   maxConcurrentCalls: number;
   callingHoursStart: number | null;
   callingHoursEnd: number | null;
   elevenLabsCostPer1k: number | null;
+  balanceTry: number;
+  companyName: string | null;
+  fonzipUserId: number | null;
   lastLoginAt: string | null;
   createdAt: string;
 }
@@ -34,8 +38,8 @@ function newUserId(): string {
 }
 
 const USER_COLUMNS =
-  `id, email, name, role, is_active, vapi_phone_number_id, vapi_assistant_id, max_concurrent_calls,
-   calling_hours_start, calling_hours_end, elevenlabs_cost_per_1k, last_login_at, created_at`;
+  `id, email, name, role, is_active, vapi_phone_number_id, vapi_assistant_id, vapi_public_key, max_concurrent_calls,
+   calling_hours_start, calling_hours_end, elevenlabs_cost_per_1k, balance_try, company_name, fonzip_user_id, last_login_at, created_at`;
 
 function rowToUser(r: any): UserRow {
   return {
@@ -46,10 +50,14 @@ function rowToUser(r: any): UserRow {
     isActive: r.is_active,
     vapiPhoneNumberId: r.vapi_phone_number_id,
     vapiAssistantId: r.vapi_assistant_id,
+    vapiPublicKey: r.vapi_public_key,
     maxConcurrentCalls: r.max_concurrent_calls,
     callingHoursStart: r.calling_hours_start,
     callingHoursEnd: r.calling_hours_end,
     elevenLabsCostPer1k: r.elevenlabs_cost_per_1k != null ? Number(r.elevenlabs_cost_per_1k) : null,
+    balanceTry: Number(r.balance_try ?? 0),
+    companyName: r.company_name,
+    fonzipUserId: r.fonzip_user_id != null ? Number(r.fonzip_user_id) : null,
     lastLoginAt: r.last_login_at,
     createdAt: r.created_at,
   };
@@ -78,16 +86,20 @@ export async function getAuthRecord(email: string): Promise<{ id: string; passwo
 }
 
 export async function createUser(params: {
-  email: string; passwordHash: string; name?: string; role?: UserRole;
+  email: string; passwordHash: string; name?: string; role?: UserRole; companyName?: string;
 }): Promise<UserRow> {
   const id = newUserId();
   const { rows } = await pool.query(
-    `INSERT INTO users (id, email, password_hash, name, role)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO users (id, email, password_hash, name, role, company_name)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING ${USER_COLUMNS}`,
-    [id, params.email.toLowerCase().trim(), params.passwordHash, params.name || null, params.role || 'agent'],
+    [id, params.email.toLowerCase().trim(), params.passwordHash, params.name || null, params.role || 'agent', params.companyName || null],
   );
   return rowToUser(rows[0]);
+}
+
+export async function setUserCompanyName(id: string, companyName: string | null): Promise<void> {
+  await pool.query(`UPDATE users SET company_name = $2 WHERE id = $1`, [id, companyName?.trim() || null]);
 }
 
 export async function listUsers(): Promise<UserRow[]> {
@@ -124,14 +136,159 @@ export async function setUserElevenLabsRate(id: string, costPer1k: number | null
   await pool.query(`UPDATE users SET elevenlabs_cost_per_1k = $2 WHERE id = $1`, [id, costPer1k]);
 }
 
+// ─── Jeton (TL bakiyesi) ────────────────────────────────────────────────────
+// 1 jeton = 1 TL. Dakika başı ücret CALL_MINUTE_RATE_TRY — başlayan her dakika
+// tam ücretlendirilir (çağrı merkezi standardı), aramanın gerçek süresine göre
+// yukarı yuvarlanır. Her bakiye değişikliği credit_transactions'a kalıcı bir satır
+// olarak yazılır — balance_try sadece hızlı okunabilir güncel toplam.
+export const CALL_MINUTE_RATE_TRY = 20;
+
+function newTxId(): string {
+  return 'tx_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+}
+
+export async function getUserBalance(userId: string): Promise<number> {
+  const { rows } = await pool.query(`SELECT balance_try FROM users WHERE id = $1`, [userId]);
+  return rows[0] ? Number(rows[0].balance_try) : 0;
+}
+
+// Admin bakiye yükleme veya elle düzeltme — amount negatif de olabilir (hatalı
+// yüklemeyi geri almak için). Dönüş: işlem sonrası güncel bakiye.
+export async function adjustUserBalance(
+  userId: string, amount: number, type: 'topup' | 'adjustment', note?: string,
+): Promise<number> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `INSERT INTO credit_transactions (id, user_id, amount, type, note) VALUES ($1, $2, $3, $4, $5)`,
+      [newTxId(), userId, amount, type, note || null],
+    );
+    const { rows } = await client.query(
+      `UPDATE users SET balance_try = balance_try + $2 WHERE id = $1 RETURNING balance_try`,
+      [userId, amount],
+    );
+    await client.query('COMMIT');
+    return Number(rows[0].balance_try);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// Bir aramanın süresine göre bakiyeden düşer. Aynı vapiCallId için ikinci kez
+// çağrılırsa (örn. bir deploy sırasında Vapi'nin webhook'u tekrar göndermesi)
+// DB'deki partial unique index sayesinde sessizce hiçbir şey yapmaz — aynı arama
+// asla iki kez ücretlendirilemez. Dönüş: gerçekten ücretlendirildiyse true.
+export async function chargeForCall(userId: string, vapiCallId: string, durationSeconds: number): Promise<boolean> {
+  const minutes = Math.ceil(durationSeconds / 60);
+  if (minutes <= 0) return false;
+  const amount = -(minutes * CALL_MINUTE_RATE_TRY);
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const inserted = await client.query(
+      `INSERT INTO credit_transactions (id, user_id, amount, type, vapi_call_id, note)
+       VALUES ($1, $2, $3, 'call_charge', $4, $5)
+       ON CONFLICT (vapi_call_id) WHERE type = 'call_charge' DO NOTHING`,
+      [newTxId(), userId, amount, vapiCallId, `${minutes} dakika × ${CALL_MINUTE_RATE_TRY} TL`],
+    );
+    if (inserted.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return false; // zaten ücretlendirilmiş
+    }
+    await client.query(`UPDATE users SET balance_try = balance_try + $2 WHERE id = $1`, [userId, amount]);
+    await client.query('COMMIT');
+    return true;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export interface CreditTransactionRow {
+  id: string;
+  amount: number;
+  type: string;
+  vapiCallId: string | null;
+  note: string | null;
+  createdAt: string;
+}
+
+export async function listCreditTransactions(userId: string, limit = 50): Promise<CreditTransactionRow[]> {
+  const { rows } = await pool.query(
+    `SELECT id, amount, type, vapi_call_id, note, created_at
+     FROM credit_transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`,
+    [userId, limit],
+  );
+  return rows.map(r => ({
+    id: r.id, amount: Number(r.amount), type: r.type,
+    vapiCallId: r.vapi_call_id, note: r.note, createdAt: r.created_at,
+  }));
+}
+
+// ─── Fonzip (kredi kartıyla jeton yükleme) ─────────────────────────────────
+
+export async function setFonzipUserId(userId: string, fonzipUserId: number): Promise<void> {
+  await pool.query(`UPDATE users SET fonzip_user_id = $2 WHERE id = $1`, [userId, fonzipUserId]);
+}
+
+// Fonzip'te bir borç açıldığı anda çağrılır — bakiyeyi henüz ETKİLEMEZ (amount=0),
+// sadece "bu debt_id bize ait, ödeme onayını bekliyoruz" diye işaretler. Webhook
+// geldiğinde creditFonzipTopup bu satırı bulup gerçek tutarla günceller.
+export async function createPendingFonzipTopup(userId: string, fonzipDebtId: string, requestedAmount: number): Promise<void> {
+  await pool.query(
+    `INSERT INTO credit_transactions (id, user_id, amount, type, fonzip_debt_id, note)
+     VALUES ($1, $2, 0, 'card_topup', $3, $4)`,
+    [newTxId(), userId, fonzipDebtId, `Bekliyor — ${requestedAmount} TL talep edildi`],
+  );
+}
+
+// Fonzip webhook'u ödemeyi onayladığında çağrılır. WHERE amount = 0 koşulu iki şeyi
+// aynı anda garanti eder: (1) bu debt_id bize ait DEĞİLSE (örn. alakasız gerçek bir
+// aidat ödemesiyse) hiçbir satır bulunamaz → sessizce false döner, bakiyeye dokunmaz;
+// (2) aynı webhook tekrar gelirse (Fonzip retry) satır artık amount=0 olmadığından
+// tekrar eşleşmez → bakiye asla iki kez yüklenmez.
+export async function creditFonzipTopup(fonzipDebtId: string, amountTry: number): Promise<{ credited: boolean; userId?: string }> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const updated = await client.query(
+      `UPDATE credit_transactions SET amount = $2, note = $3
+       WHERE fonzip_debt_id = $1 AND type = 'card_topup' AND amount = 0
+       RETURNING user_id`,
+      [fonzipDebtId, amountTry, `${amountTry} TL kart ile yüklendi (Fonzip)`],
+    );
+    if (updated.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return { credited: false };
+    }
+    const userId = updated.rows[0].user_id;
+    await client.query(`UPDATE users SET balance_try = balance_try + $2 WHERE id = $1`, [userId, amountTry]);
+    await client.query('COMMIT');
+    return { credited: true, userId };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 // ─── Vapi credentials ───────────────────────────────────────────────────────
 
 export async function setUserVapiCredentials(userId: string, patch: {
-  apiKey?: string; phoneNumberId?: string; assistantId?: string; serverSecret?: string;
+  apiKey?: string; publicKey?: string; phoneNumberId?: string; assistantId?: string; serverSecret?: string;
 }): Promise<void> {
   const sets: string[] = [];
   const vals: unknown[] = [userId];
   if (patch.apiKey !== undefined)        { vals.push(encryptSecret(patch.apiKey));       sets.push(`vapi_api_key_enc = $${vals.length}`); }
+  if (patch.publicKey !== undefined)     { vals.push(patch.publicKey);                   sets.push(`vapi_public_key = $${vals.length}`); }
   if (patch.phoneNumberId !== undefined) { vals.push(patch.phoneNumberId);               sets.push(`vapi_phone_number_id = $${vals.length}`); }
   if (patch.assistantId !== undefined)   { vals.push(patch.assistantId);                 sets.push(`vapi_assistant_id = $${vals.length}`); }
   if (patch.serverSecret !== undefined)  { vals.push(encryptSecret(patch.serverSecret));  sets.push(`vapi_server_secret_enc = $${vals.length}`); }
@@ -198,16 +355,18 @@ export interface UserSettingField {
 
 export interface UserSettingsView {
   vapiApiKey: UserSettingField;
+  vapiPublicKey: UserSettingField;
   vapiPhoneNumberId: UserSettingField;
   vapiAssistantId: UserSettingField;
   elevenlabsApiKey: UserSettingField;
   anthropicApiKey: UserSettingField;
+  companyName: UserSettingField;
 }
 
 export async function getSettingsForUser(userId: string): Promise<UserSettingsView> {
   const { rows } = await pool.query(
-    `SELECT vapi_api_key_enc, vapi_phone_number_id, vapi_assistant_id,
-            elevenlabs_api_key_enc, anthropic_api_key_enc
+    `SELECT vapi_api_key_enc, vapi_public_key, vapi_phone_number_id, vapi_assistant_id,
+            elevenlabs_api_key_enc, anthropic_api_key_enc, company_name
      FROM users WHERE id = $1`,
     [userId],
   );
@@ -221,10 +380,12 @@ export async function getSettingsForUser(userId: string): Promise<UserSettingsVi
   });
   return {
     vapiApiKey: secretField(r.vapi_api_key_enc),
+    vapiPublicKey: plainField(r.vapi_public_key),
     vapiPhoneNumberId: plainField(r.vapi_phone_number_id),
     vapiAssistantId: plainField(r.vapi_assistant_id),
     elevenlabsApiKey: secretField(r.elevenlabs_api_key_enc),
     anthropicApiKey: secretField(r.anthropic_api_key_enc),
+    companyName: plainField(r.company_name),
   };
 }
 

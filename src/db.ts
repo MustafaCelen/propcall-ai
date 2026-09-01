@@ -31,6 +31,7 @@ export async function initDb(): Promise<void> {
       role                   TEXT NOT NULL DEFAULT 'agent', -- 'agent' | 'admin'
       is_active              BOOLEAN NOT NULL DEFAULT true,
       vapi_api_key_enc       TEXT,
+      vapi_public_key        TEXT,  -- tarayıcıdan sesli test için — private key'den farklı, açığa çıkması güvenli
       vapi_phone_number_id   TEXT,
       vapi_assistant_id      TEXT,
       vapi_server_secret_enc TEXT,
@@ -40,6 +41,7 @@ export async function initDb(): Promise<void> {
       calling_hours_start    INT,  -- 0-23, NULL = sınır yok
       calling_hours_end      INT,  -- 0-23, NULL = sınır yok
       elevenlabs_cost_per_1k NUMERIC,  -- $/1000 karakter, NULL = kullanıcı henüz girmedi
+      balance_try            NUMERIC NOT NULL DEFAULT 0,  -- jeton bakiyesi (TL) — 1 jeton = 1 TL
       last_login_at          TIMESTAMPTZ,
       created_at             TIMESTAMPTZ DEFAULT NOW()
     );
@@ -49,6 +51,40 @@ export async function initDb(): Promise<void> {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS calling_hours_start INT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS calling_hours_end   INT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS elevenlabs_cost_per_1k NUMERIC;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS vapi_public_key TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS balance_try NUMERIC NOT NULL DEFAULT 0;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS company_name TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS fonzip_user_id INT;  -- Fonzip'teki karşılık gelen üye id'si (kart ile jeton yükleme için)
+
+    -- Jeton (TL) hareketleri — her yükleme/ücretlendirme kalıcı bir satır. balance_try
+    -- hızlı okunabilir güncel bakiye, buradaki kayıtlar denetim/geçmiş içindir.
+    CREATE TABLE IF NOT EXISTS credit_transactions (
+      id             TEXT PRIMARY KEY,
+      user_id        TEXT NOT NULL REFERENCES users(id),
+      amount         NUMERIC NOT NULL,   -- pozitif: yükleme/düzeltme, negatif: arama ücreti
+      type           TEXT NOT NULL,      -- 'topup' | 'call_charge' | 'adjustment' | 'card_topup'
+      vapi_call_id   TEXT,               -- call_charge işlemleri için
+      fonzip_debt_id TEXT,               -- card_topup işlemleri için (Fonzip borç id'si)
+      note           TEXT,
+      created_at     TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_credit_tx_user ON credit_transactions(user_id);
+    ALTER TABLE credit_transactions ADD COLUMN IF NOT EXISTS fonzip_debt_id TEXT;
+    -- Aynı aramayı iki kez ücretlendirmeyi DB seviyesinde imkansız kılar — bir webhook
+    -- (örn. deploy sırasında) tekrar gönderilse bile ikinci ücretlendirme sessizce reddedilir.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_credit_tx_call_charge
+      ON credit_transactions(vapi_call_id) WHERE type = 'call_charge';
+    -- Aynı Fonzip ödemesi (webhook tekrar gönderilse bile) bakiyeye iki kez işlenemez.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_credit_tx_fonzip_debt
+      ON credit_transactions(fonzip_debt_id) WHERE type = 'card_topup';
+
+    -- Fonzip OAuth token'ı hesaplar arası paylaşılır ve tekrar-kullanılmalıdır (aynı anda
+    -- ikinci bir token isteği 409 döner) — bu yüzden süreç hafızası yerine DB'de tutulur.
+    CREATE TABLE IF NOT EXISTS fonzip_config (
+      key        TEXT PRIMARY KEY,
+      value      TEXT NOT NULL,
+      expires_at TIMESTAMPTZ
+    );
 
     CREATE TABLE IF NOT EXISTS user_sessions (
       id         TEXT PRIMARY KEY,

@@ -15,9 +15,9 @@ import {
   getSignedRecordingUrl, verifyVapiApiKey, getAssistantConfig, updateAssistantConfig, updateAssistantServer,
   listAssistants, listPhoneNumbers, importAssistant, AssistantConfigPatch,
 } from './vapi';
-import { getElevenLabsCredit, listElevenLabsVoices, estimateTtsCost } from './elevenlabs';
+import { getElevenLabsCredit, listElevenLabsVoices, estimateTtsCost, generateVoicePreview } from './elevenlabs';
 import { getAllAppointments, saveAppointment, deleteAppointment } from './appointments';
-import { getAllScenarios, getScenario, createScenario, updateScenario, deleteScenario } from './scenarios';
+import { getAllScenarios, getScenario, createScenario, updateScenario, deleteScenario, seedDefaultScenario } from './scenarios';
 import {
   getAllCalls, readCall, readCallForUser, createCall, updateCall, updateCallForUser,
   appendTranscript, updateCosts, saveCallSummary, getCallOwnerUserId,
@@ -35,7 +35,14 @@ import {
   listUsers, createUser, setUserActive, setUserPassword, setUserMaxConcurrent, setUserCallingHours,
   setUserElevenLabsRate, setUserVapiCredentials, setUserElevenLabsKey, setUserAnthropicKey,
   getUserVapiCredentials, getUserElevenLabsKey, getUserAnthropicKey, resolveVapiCreds, getUserById,
+  getUserBalance, adjustUserBalance, chargeForCall, listCreditTransactions, CALL_MINUTE_RATE_TRY,
+  setUserCompanyName, createPendingFonzipTopup, creditFonzipTopup,
 } from './users';
+import {
+  isFonzipConfigured, resolveFonzipUserId, createTopupDebt, generateTopupLink,
+  getDebtAmount, getDebtDetails, verifyWebhookAuthToken, ensureWebhookRegistered,
+  findPendingTopup, cleanupStalePendingTopups,
+} from './fonzip';
 import { hashPassword, login, logout, getSessionUser, requireUserAuth, requireAdmin } from './auth';
 import { generateVapiPrompt, PromptGenInput } from './promptgen';
 import { simulateScenario } from './scenariotest';
@@ -99,10 +106,12 @@ app.put('/api/settings', requireUserAuth, async (req: Request, res: Response) =>
     const v = value.trim();
     switch (key) {
       case 'vapiApiKey':          await setUserVapiCredentials(req.userId!, { apiKey: v }); break;
+      case 'vapiPublicKey':       await setUserVapiCredentials(req.userId!, { publicKey: v }); break;
       case 'vapiPhoneNumberId':   await setUserVapiCredentials(req.userId!, { phoneNumberId: v }); break;
       case 'vapiAssistantId':     await setUserVapiCredentials(req.userId!, { assistantId: v }); break;
       case 'elevenlabsApiKey':    await setUserElevenLabsKey(req.userId!, v); break;
       case 'anthropicApiKey':     await setUserAnthropicKey(req.userId!, v); break;
+      case 'companyName':         await setUserCompanyName(req.userId!, v); break;
       default: return res.status(400).json({ success: false, error: 'Geçersiz anahtar' });
     }
     if (key === 'vapiApiKey' || key === 'vapiPhoneNumberId' || key === 'vapiAssistantId') {
@@ -272,6 +281,24 @@ app.get('/api/settings/elevenlabs-voices', requireUserAuth, async (req: Request,
   }
 });
 
+// Danışmanın seçtiği sesi, KENDİ script metniyle seslendirip döner — API key
+// sunucuda kalır, tarayıcı sadece ses baytlarını alır (audio/mpeg).
+app.post('/api/settings/voice-preview', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const { voiceId, text } = req.body as { voiceId?: string; text?: string };
+    if (!voiceId?.trim() || !text?.trim()) {
+      return res.status(400).json({ success: false, error: 'Ses ve metin zorunlu' });
+    }
+    const key = await getUserElevenLabsKey(req.userId!);
+    const audio = await generateVoicePreview(key, voiceId.trim(), text);
+    res.set('Content-Type', 'audio/mpeg');
+    res.set('Content-Length', String(audio.length));
+    return res.send(audio);
+  } catch (err) {
+    return res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
 app.get('/settings', requireUserAuth, (_req: Request, res: Response) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'settings.html'));
 });
@@ -284,14 +311,54 @@ app.get('/api/admin/users', requireAdmin, async (_req: Request, res: Response) =
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
 
+// Yeni danışman oluşturulduğunda mümkün olan her yeri firma varsayılanıyla doldurur —
+// sadece telefon numarası danışmana özel kalır, o admin/danışman tarafından Ayarlarım'dan
+// elle atanır. Hiçbir DEFAULT_* env değişkeni tanımlı değilse (henüz kurulmamışsa) sessizce
+// atlanır — hesap oluşturmayı bloklamaz, alanlar mevcut akışta olduğu gibi boş kalır.
+async function provisionNewUserDefaults(userId: string, name?: string, companyNameInput?: string): Promise<void> {
+  try {
+    const companyName = companyNameInput?.trim() || process.env.DEFAULT_COMPANY_NAME?.trim() || '';
+    if (companyName) await setUserCompanyName(userId, companyName);
+
+    const defVapiKey      = process.env.DEFAULT_VAPI_API_KEY?.trim();
+    const defAssistantId  = process.env.DEFAULT_VAPI_ASSISTANT_ID?.trim();
+    const defElevenKey    = process.env.DEFAULT_ELEVENLABS_API_KEY?.trim();
+    const defAnthropicKey = process.env.DEFAULT_ANTHROPIC_API_KEY?.trim();
+
+    if (defVapiKey)      await setUserVapiCredentials(userId, { apiKey: defVapiKey });
+    if (defElevenKey)    await setUserElevenLabsKey(userId, defElevenKey);
+    if (defAnthropicKey) await setUserAnthropicKey(userId, defAnthropicKey);
+
+    if (defVapiKey && defAssistantId) {
+      try {
+        const created = await importAssistant(defVapiKey, defAssistantId, defVapiKey, name);
+        await setUserVapiCredentials(userId, { assistantId: created.id });
+      } catch (err) {
+        console.warn(`[Onboarding] Varsayılan asistan klonlanamadı (userId=${userId}):`, err);
+      }
+    }
+  } catch (err) {
+    console.warn(`[Onboarding] Varsayılan kimlik bilgileri kopyalanamadı (userId=${userId}):`, err);
+  }
+
+  try {
+    await seedDefaultScenario(userId);
+  } catch (err) {
+    console.warn(`[Onboarding] Varsayılan senaryo oluşturulamadı (userId=${userId}):`, err);
+  }
+}
+
 app.post('/api/admin/users', requireAdmin, async (req: Request, res: Response) => {
   try {
-    const { email, name, password, role } = req.body as { email: string; name?: string; password: string; role?: 'agent' | 'admin' };
+    const { email, name, password, role, companyName } = req.body as {
+      email: string; name?: string; password: string; role?: 'agent' | 'admin'; companyName?: string;
+    };
     if (!email?.trim() || !password?.trim()) {
       return res.status(400).json({ success: false, error: 'E-posta ve geçici şifre zorunlu' });
     }
-    const user = await createUser({ email, name, passwordHash: hashPassword(password), role });
-    return res.status(201).json({ success: true, data: user });
+    const user = await createUser({ email, name, passwordHash: hashPassword(password), role, companyName });
+    await provisionNewUserDefaults(user.id, user.name || undefined, companyName);
+    return res.status(201).json({ success: true, data: await getUserById(user.id) });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
 
@@ -304,6 +371,20 @@ app.patch('/api/admin/users/:id', requireAdmin, async (req: Request, res: Respon
     if (password?.trim())      await setUserPassword(req.params.id, hashPassword(password));
     if (maxConcurrentCalls !== undefined) await setUserMaxConcurrent(req.params.id, maxConcurrentCalls);
     return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+// Jeton (TL bakiyesi) yükleme/düzeltme — amount negatif de olabilir (hatalı
+// yüklemeyi geri almak için). 1 jeton = 1 TL, dakika ücreti CALL_MINUTE_RATE_TRY.
+app.post('/api/admin/users/:id/balance', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const { amount, note } = req.body as { amount: number; note?: string };
+    if (typeof amount !== 'number' || amount === 0 || !Number.isFinite(amount)) {
+      return res.status(400).json({ success: false, error: 'Geçerli bir tutar girin (TL, 0 olamaz)' });
+    }
+    const type = amount > 0 ? 'topup' : 'adjustment';
+    const newBalance = await adjustUserBalance(req.params.id, amount, type, note);
+    return res.json({ success: true, data: { balanceTry: newBalance } });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
 
@@ -347,9 +428,18 @@ app.post('/api/call', requireUserAuth, async (req: Request, res: Response) => {
     if (!customer?.name || !customer?.phone)
       return res.status(400).json({ success: false, error: 'Ad ve telefon zorunlu' });
 
+    const balance = await getUserBalance(req.userId!);
+    if (balance < CALL_MINUTE_RATE_TRY) {
+      return res.status(402).json({ success: false, error: `Jeton bakiyeniz yetersiz (kalan: ${balance.toFixed(2)} TL) — en az ${CALL_MINUTE_RATE_TRY} TL gerekli` });
+    }
+
     const creds    = await resolveVapiCreds(req.userId!);
     const scenario = scenarioId ? await getScenario(req.userId!, scenarioId) : null;
-    const vapiCall = await createVapiCall(creds, customer, scenario?.systemPrompt);
+    const user     = await getUserById(req.userId!);
+    const vapiCall = await createVapiCall(creds, customer, scenario?.systemPrompt, {
+      agentName: user?.name || undefined,
+      companyName: user?.companyName || undefined,
+    });
     const record   = await createCall(req.userId!, vapiCall.id, customer, scenario?.id, scenario?.name);
 
     console.log(`[Vapi] Arama başlatıldı: ${vapiCall.id} → ${customer.phone}`);
@@ -430,6 +520,35 @@ app.post('/webhook', (req: Request, res: Response) => {
   trackWebhook(handleWebhook(req.body as VapiWebhookPayload).catch(console.error));
 });
 
+// Fonzip ödeme bildirimi — kart ile jeton yükleme tamamlandığında gelir. Vapi
+// webhook'undaki gibi hemen 200 dönülür (Fonzip'in retry etmemesi için) — hem
+// başarı hem hata/sahtekarlık durumunda, bilgi sızdırmamak için.
+app.post('/webhook/fonzip', async (req: Request, res: Response) => {
+  res.sendStatus(200);
+  try {
+    const valid = await verifyWebhookAuthToken(req.header('X-FZ-Auth-Token'));
+    if (!valid) {
+      console.warn('[Fonzip Webhook] SPOOF ATTEMPT (auth token uyuşmuyor)');
+      return;
+    }
+
+    const { id, operation, status } = req.body as { id?: number; operation?: number; status?: number };
+    // operation 2 = Subscription (aidat/borç), status 3 = başarılı ödeme
+    if (operation !== 2 || status !== 3 || !id) return;
+
+    const amount = await getDebtAmount(id);
+    if (amount == null) return;
+
+    const result = await creditFonzipTopup(String(id), amount);
+    if (result.credited && result.userId) {
+      broadcast(result.userId, 'balance-update', { balanceTry: await getUserBalance(result.userId) });
+      console.log(`[Fonzip] Jeton yüklendi: userId=${result.userId}, tutar=${amount} TL, debtId=${id}`);
+    }
+  } catch (err) {
+    console.error('[Fonzip Webhook] Hata:', err);
+  }
+});
+
 // ─── Graceful shutdown ───────────────────────────────────────────────────────
 // Webhook'lar Vapi'ye hızlı yanıt vermek için hemen 200 dönüyor, DB yazımı
 // (handleWebhook) arka planda fire-and-forget devam ediyor. Bir deploy/restart
@@ -508,7 +627,6 @@ async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
     case 'end-of-call-report': {
       if (!vapiCallId) break;
       const endedAt   = msg.call?.endedAt || new Date().toISOString();
-      const duration  = msg.call?.duration;
       const endReason = msg.endedReason || msg.call?.endedReason;
       const recording = msg.recordingUrl || msg.artifact?.recordingUrl;
       const newCosts  = parseCosts(msg.costs, msg.cost);
@@ -516,6 +634,15 @@ async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
       // Mevcut kaydı bir kez oku — transcript karşılaştırma + cost merge için
       const existing = await readCall(vapiCallId);
       const existingTranscriptLen = existing?.transcript?.length ?? 0;
+
+      // Vapi'nin kendi duration alanı güvenilir gelmiyor (neredeyse hiç dolu gelmiyor) —
+      // başlangıç/bitiş saatlerinden hesaplayıp fallback kullanıyoruz. Bu değer artık
+      // sadece istatistiklerde değil, dakika bazlı jeton ücretlendirmesinde de kullanılıyor,
+      // bu yüzden güvenilir olması kritik.
+      let duration = msg.call?.duration;
+      if (!duration && existing?.startTime) {
+        duration = Math.max(0, Math.round((new Date(endedAt).getTime() - new Date(existing.startTime).getTime()) / 1000));
+      }
 
       // hasUserSpeech: artifact.messages'ta veya streaming transcript'te user rolünde mesaj var mı?
       const artifactHasUserSpeech = !!(msg.artifact?.messages as any[] | undefined)?.some(m => {
@@ -581,6 +708,19 @@ async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
       // zaten trackWebhook() ile korunuyor — bunu await etmek onu da o korumanın içine alır.
       await onCampaignCallEnded(vapiCallId, status, duration).catch(console.error);
       generateSummaryForCall(vapiCallId).catch(console.error);
+
+      // Jeton ücretlendirmesi — sadece gerçekten bağlanıp konuşulan aramalar için
+      // (cevapsız/meşgul/hata durumlarında dakika ücreti alınmaz). chargeForCall
+      // aynı vapiCallId için iki kez çağrılsa bile (webhook tekrarı) DB seviyesinde
+      // korumalı, ikinci kez düşülmez.
+      if (ownerId && status === 'completed' && duration && duration > 0) {
+        try {
+          const charged = await chargeForCall(ownerId, vapiCallId, duration);
+          if (charged) broadcast(ownerId, 'balance-update', { balanceTry: await getUserBalance(ownerId) });
+        } catch (err) {
+          console.error('[Billing] Jeton ücretlendirme hatası:', err);
+        }
+      }
       break;
     }
 
@@ -931,8 +1071,10 @@ app.post('/api/generate-summary', requireUserAuth, async (req: Request, res: Res
 
 app.get('/api/stats', requireUserAuth, async (req: Request, res: Response) => {
   try {
-    const period = req.query.period ? parseInt(String(req.query.period), 10) : undefined;
-    return res.json({ success: true, data: await getStats(req.userId!, period && period > 0 ? period : undefined) });
+    const dateFrom   = typeof req.query.dateFrom   === 'string' ? req.query.dateFrom   : undefined;
+    const dateTo     = typeof req.query.dateTo     === 'string' ? req.query.dateTo     : undefined;
+    const scenarioId = typeof req.query.scenarioId === 'string' ? req.query.scenarioId : undefined;
+    return res.json({ success: true, data: await getStats(req.userId!, { dateFrom, dateTo, scenarioId }) });
   } catch (err) {
     return res.status(500).json({ success: false, error: String(err) });
   }
@@ -946,6 +1088,63 @@ app.get('/api/credits', requireUserAuth, async (req: Request, res: Response) => 
     getElevenLabsCredit(elevenlabsKey),
   ]);
   return res.json({ success: true, data: { vapi, elevenlabs } });
+});
+
+// ─── JETON (TL bakiyesi) ──────────────────────────────────────────────────────
+app.get('/api/billing', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const [balanceTry, transactions] = await Promise.all([
+      getUserBalance(req.userId!),
+      listCreditTransactions(req.userId!, 50),
+    ]);
+    return res.json({ success: true, data: { balanceTry, ratePerMinute: CALL_MINUTE_RATE_TRY, transactions, fonzipEnabled: isFonzipConfigured() } });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+// Kredi kartıyla kendi kendine jeton yükleme — Fonzip'te bir borç açar, danışmanı
+// Fonzip'in kendi hosted ödeme sayfasına yönlendirecek linki döner. Kart bilgisi hiçbir
+// zaman bize uğramaz; ödeme tamamlanınca bakiye POST /webhook/fonzip ile kredilenir.
+const MIN_TOPUP_TRY = 50;
+app.post('/api/billing/topup', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    if (!isFonzipConfigured()) {
+      return res.status(400).json({ success: false, error: 'Kart ile yükleme şu an yapılandırılmamış' });
+    }
+    const { amount } = req.body as { amount: number };
+    if (typeof amount !== 'number' || !Number.isFinite(amount) || amount < MIN_TOPUP_TRY) {
+      return res.status(400).json({ success: false, error: `En az ${MIN_TOPUP_TRY} TL girin` });
+    }
+    const user = await getUserById(req.userId!);
+    if (!user?.email) return res.status(400).json({ success: false, error: 'Hesabınızda e-posta tanımlı değil' });
+
+    const fonzipUserId = await resolveFonzipUserId(req.userId!, user.name || user.email, user.email);
+
+    // Danışman aynı talebi tekrar açarsa (örn. bir önceki sekmeyi kapatıp tekrar denedi)
+    // aynı tutar için ikinci bir borç açmak yerine mevcut bekleyen borcun linkini tekrar
+    // ver — Fonzip kaydında gereksiz tekrarlanan borç birikmesin.
+    let debtId: number | string | undefined;
+    try {
+      const pending = await findPendingTopup(req.userId!);
+      if (pending) {
+        const details = await getDebtDetails(pending.fonzipDebtId);
+        if (details && details.status === 1 && details.amount === amount) {
+          debtId = pending.fonzipDebtId;
+        }
+      }
+    } catch (err) {
+      console.warn('[Fonzip] Bekleyen borç kontrolü başarısız, yeni borç açılacak:', err);
+    }
+    if (!debtId) {
+      debtId = await createTopupDebt(fonzipUserId, amount, `PropCall Jeton Yükleme — ${user.email}`);
+      await createPendingFonzipTopup(req.userId!, String(debtId), amount);
+    }
+    const link = await generateTopupLink(fonzipUserId);
+
+    return res.json({ success: true, data: { link } });
+  } catch (err) {
+    console.error('[Fonzip] Topup hatası:', err);
+    return res.status(500).json({ success: false, error: String(err) });
+  }
 });
 
 // ─── CSV EXPORT ───────────────────────────────────────────────────────────────
@@ -1065,7 +1264,8 @@ app.post('/api/prompt/simulate', requireUserAuth, async (req: Request, res: Resp
       return res.status(400).json({ success: false, error: 'Sistem promptu zorunlu' });
     }
     const anthropicKey = await getUserAnthropicKey(req.userId!);
-    const scenarios = await simulateScenario(anthropicKey, systemPrompt, customerName);
+    const user = await getUserById(req.userId!);
+    const scenarios = await simulateScenario(anthropicKey, systemPrompt, customerName, user?.name || undefined, user?.companyName || undefined);
     return res.json({ success: true, data: { scenarios } });
   } catch (err) {
     return res.status(500).json({ success: false, error: String(err) });
@@ -1210,6 +1410,24 @@ initDb()
       if (creds && !creds.serverSecret) {
         await provisionWebhookIfReady(u.id).catch(err => console.warn(`[Webhook] ${u.email} otomatik kurulum hatası:`, err));
       }
+    }
+
+    if (isFonzipConfigured() && process.env.APP_URL) {
+      ensureWebhookRegistered(`${process.env.APP_URL}/webhook/fonzip`)
+        .catch(err => console.warn('[Fonzip] Webhook kaydı başarısız:', err));
+
+      // Ödeme sayfasından vazgeçilip terk edilen (1 saatten eski, hâlâ ödenmemiş) borçları
+      // düzenli tarayıp Fonzip'ten siler — kaçırılmış bir webhook varsa da burada
+      // kendiliğinden düzeltilir. 20 dakikada bir yeterli, acil bir işlem değil.
+      setInterval(() => {
+        cleanupStalePendingTopups()
+          .then(({ healedUserIds }) => {
+            for (const uid of healedUserIds) {
+              getUserBalance(uid).then(balanceTry => broadcast(uid, 'balance-update', { balanceTry })).catch(() => {});
+            }
+          })
+          .catch(err => console.error('[Fonzip] Bekleyen yükleme temizliği hatası:', err));
+      }, 20 * 60 * 1000).unref();
     }
 
     const adminSettings = await getSettingsForUser(admin.id);

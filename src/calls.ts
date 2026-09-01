@@ -290,12 +290,23 @@ export interface CampaignStatsData {
   ilgiDistribution: Array<{ seviye: string; count: number }>;
   retNedeniDistribution: Array<{ neden: string; count: number }>;
   statusBreakdown: Array<{ status: string; count: number }>;
+  hourlyPerformance: Array<{ hour: number; calls: number; randevu: number }>;
+  regionPerformance: Array<{ region: string; calls: number; randevu: number; randevuRate: number }>;
+  mulkTipiDistribution: Array<{ tip: string; count: number }>;
+  retryEffect: {
+    multiAttemptContacts: number;
+    multiAttemptSuccessRate: number;
+    singleAttemptSuccessRate: number;
+  } | null;
 }
 
 // Tek bir kampanyaya ait aramaların analizi — getStats ile aynı SQL desenini
 // kullanır ama tarih aralığı yerine campaignId ile filtreler.
 export async function getCampaignStats(userId: string, campaignId: string): Promise<CampaignStatsData> {
-  const [mainRow, ilgiRows, retRows, statusRows] = await Promise.all([
+  const [
+    mainRow, ilgiRows, retRows, statusRows,
+    hourRows, regionRows, mulkRows, retryRow,
+  ] = await Promise.all([
     pool.query<{
       total_calls: string; completed_calls: string; avg_duration: string;
       total_cost: string; randevu_count: string; with_summary: string;
@@ -330,6 +341,48 @@ export async function getCampaignStats(userId: string, campaignId: string): Prom
       `SELECT status, COUNT(*)::int AS count FROM calls WHERE data->>'campaignId' = $1 AND user_id = $2 GROUP BY status`,
       [campaignId, userId],
     ),
+    // Saatlik performans — bu kampanyada hangi saatte arayınca daha çok randevu alınıyor
+    pool.query<{ hour: string; calls: string; randevu: string }>(
+      `SELECT EXTRACT(HOUR FROM start_time)::int AS hour,
+              COUNT(*)::int AS calls,
+              COUNT(*) FILTER (WHERE (data->'summary'->>'randevu_alindi')::boolean = true)::int AS randevu
+       FROM calls WHERE data->>'campaignId' = $1 AND user_id = $2 AND start_time IS NOT NULL
+       GROUP BY hour ORDER BY hour`,
+      [campaignId, userId],
+    ),
+    // Bölge bazlı performans
+    pool.query<{ region: string; calls: string; randevu: string }>(
+      `SELECT COALESCE(NULLIF(data->'customerInfo'->>'region', ''), 'Belirtilmemiş') AS region,
+              COUNT(*)::int AS calls,
+              COUNT(*) FILTER (WHERE (data->'summary'->>'randevu_alindi')::boolean = true)::int AS randevu
+       FROM calls WHERE data->>'campaignId' = $1 AND user_id = $2
+       GROUP BY region ORDER BY calls DESC LIMIT 10`,
+      [campaignId, userId],
+    ),
+    // Mülk tipi dağılımı
+    pool.query<{ tip: string; count: string }>(
+      `SELECT data->'summary'->>'mulk_tipi' AS tip, COUNT(*)::int AS count
+       FROM calls WHERE data->>'campaignId' = $1 AND user_id = $2 AND data->'summary'->>'mulk_tipi' IS NOT NULL
+       GROUP BY tip ORDER BY count DESC LIMIT 8`,
+      [campaignId, userId],
+    ),
+    // Tekrar arama etkisi — aynı numara birden fazla kez arandıysa, tek seferde
+    // arananlara kıyasla sonuca ulaşma oranı ne kadar değişiyor
+    pool.query<{ multi_count: string; multi_success: string; single_count: string; single_success: string }>(
+      `WITH phone_counts AS (
+         SELECT data->>'customerPhone' AS phone, COUNT(*)::int AS attempts,
+                BOOL_OR(status = 'completed') AS ever_completed
+         FROM calls WHERE data->>'campaignId' = $1 AND user_id = $2
+         GROUP BY phone
+       )
+       SELECT
+         COUNT(*) FILTER (WHERE attempts > 1)::int AS multi_count,
+         COUNT(*) FILTER (WHERE attempts > 1 AND ever_completed)::int AS multi_success,
+         COUNT(*) FILTER (WHERE attempts = 1)::int AS single_count,
+         COUNT(*) FILTER (WHERE attempts = 1 AND ever_completed)::int AS single_success
+       FROM phone_counts`,
+      [campaignId, userId],
+    ),
   ]);
 
   const m = mainRow.rows[0];
@@ -341,6 +394,29 @@ export async function getCampaignStats(userId: string, campaignId: string): Prom
   const ilgiOrder = ['yüksek', 'orta', 'düşük', 'yok'];
   const ilgiMap   = Object.fromEntries(ilgiRows.rows.map(r => [r.seviye, Number(r.count)]));
 
+  const hourMap = Object.fromEntries(hourRows.rows.map(r => [Number(r.hour), r]));
+  const hourlyPerformance = Array.from({ length: 24 }, (_, hour) => {
+    const r = hourMap[hour];
+    return { hour, calls: r ? Number(r.calls) : 0, randevu: r ? Number(r.randevu) : 0 };
+  });
+
+  const regionPerformance = regionRows.rows.map(r => {
+    const calls = Number(r.calls);
+    const randevu = Number(r.randevu);
+    return { region: r.region, calls, randevu, randevuRate: calls ? Math.round(randevu / calls * 100) : 0 };
+  });
+
+  const rr = retryRow.rows[0];
+  const multiCount   = Number(rr?.multi_count ?? 0);
+  const multiSuccess = Number(rr?.multi_success ?? 0);
+  const singleCount  = Number(rr?.single_count ?? 0);
+  const singleSuccess = Number(rr?.single_success ?? 0);
+  const retryEffect = multiCount > 0 ? {
+    multiAttemptContacts: multiCount,
+    multiAttemptSuccessRate: Math.round(multiSuccess / multiCount * 100),
+    singleAttemptSuccessRate: singleCount ? Math.round(singleSuccess / singleCount * 100) : 0,
+  } : null;
+
   return {
     totalCalls, completedCalls,
     answerRate:  totalCalls ? Math.round(completedCalls / totalCalls * 100) : 0,
@@ -351,16 +427,47 @@ export async function getCampaignStats(userId: string, campaignId: string): Prom
     ilgiDistribution: ilgiOrder.map(s => ({ seviye: s, count: ilgiMap[s] || 0 })),
     retNedeniDistribution: retRows.rows.map(r => ({ neden: r.neden, count: Number(r.count) })),
     statusBreakdown: statusRows.rows.map(r => ({ status: r.status, count: Number(r.count) })),
+    hourlyPerformance,
+    regionPerformance,
+    mulkTipiDistribution: mulkRows.rows.map(r => ({ tip: r.tip, count: Number(r.count) })),
+    retryEffect,
   };
 }
 
-export async function getStats(userId: string, periodDays?: number): Promise<StatsData> {
-  const days   = periodDays && periodDays > 0 ? Math.min(periodDays, 90) : 30;
-  const cutoff = periodDays && periodDays > 0
-    ? new Date(Date.now() - periodDays * 86400000).toISOString()
-    : null;
+export interface StatsFilters {
+  dateFrom?: string;   // 'YYYY-MM-DD', dahil
+  dateTo?: string;     // 'YYYY-MM-DD', dahil
+  scenarioId?: string; // '__none__' = senaryosuz (varsayılan prompt) aramalar
+}
 
-  // Tüm ağır hesaplamalar PostgreSQL'de paralel çalışır — Node'a sadece sonuç gelir
+export async function getStats(userId: string, filters?: StatsFilters): Promise<StatsData> {
+  const fromTs      = filters?.dateFrom ? `${filters.dateFrom}T00:00:00.000Z` : null;
+  const toTs        = filters?.dateTo   ? `${filters.dateTo}T23:59:59.999Z`   : null;
+  const scenarioId  = filters?.scenarioId || null;
+
+  // Günlük grafik penceresi: özel aralık verildiyse aynen o kullanılır (KPI'lar zaten
+  // fromTs/toTs ile tam o aralığı yansıtıyor); verilmediyse (Hepsi/varsayılan) grafik
+  // son 30 günü gösterir — aksi halde aylar süren tek bir çizgi grafik anlamsızlaşır.
+  // Çok uzun bir özel aralık verilirse (>90 gün) grafik yine de sondan 90 güne kırpılır.
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const seriesEndDate = filters?.dateTo || todayStr;
+  const addDays = (dateStr: string, delta: number) => {
+    const d = new Date(dateStr + 'T00:00:00.000Z');
+    d.setUTCDate(d.getUTCDate() + delta);
+    return d.toISOString().slice(0, 10);
+  };
+  let seriesStartDate = filters?.dateFrom || addDays(seriesEndDate, -29);
+  const spanDays = Math.round((new Date(seriesEndDate).getTime() - new Date(seriesStartDate).getTime()) / 86400000);
+  if (spanDays > 90) seriesStartDate = addDays(seriesEndDate, -90);
+
+  // Tüm sorgularda paylaşılan filtre: tarih aralığı ($1/$3) + senaryo ($4, '__none__'
+  // senaryosuz aramalar demek). Tüm ağır hesaplamalar PostgreSQL'de paralel çalışır.
+  const RANGE = `
+    AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
+    AND ($3::timestamptz IS NULL OR start_time <= $3::timestamptz)
+    AND ($4::text IS NULL OR ($4 = '__none__' AND data->>'scenarioId' IS NULL) OR data->>'scenarioId' = $4)`;
+  const baseParams = [fromTs, userId, toTs, scenarioId];
+
   const [
     mainRow,
     dailyRows,
@@ -388,36 +495,35 @@ export async function getStats(userId: string, periodDays?: number): Promise<Sta
          COUNT(*) FILTER (WHERE data->'summary' IS NOT NULL
            AND status != 'in-progress')::int                                  AS with_summary
        FROM calls
-       WHERE user_id = $2 AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)`,
-      [cutoff, userId],
+       WHERE user_id = $2 ${RANGE}`,
+      baseParams,
     ),
 
     // 2 — Günlük arama + maliyet (generate_series → sıfırlı günler dahil)
+    // NOT: fromTs/toTs burada kasıtlı olarak YOK — pencere zaten seriesStartDate/
+    // seriesEndDate ile tam olarak sınırlanıyor. baseParams'ı olduğu gibi ekleyip
+    // $1/$3'ü sorgu metninde hiç kullanmamak "could not determine data type of
+    // parameter $1" hatasına yol açıyordu (Postgres, bağlanan her parametrenin
+    // metinde en az bir yerde geçmesini ve tipinin çıkarılabilir olmasını ister).
     pool.query<{ date: string; count: string; cost: string }>(
       `WITH ds AS (
-         SELECT generate_series(
-           CURRENT_DATE - ($2::int - 1) * INTERVAL '1 day',
-           CURRENT_DATE, '1 day'
-         )::date AS d
+         SELECT generate_series($3::date, $4::date, '1 day')::date AS d
        )
        SELECT ds.d::text AS date,
               COALESCE(COUNT(c.vapi_call_id), 0)::int                AS count,
               COALESCE(SUM((c.data->'costs'->>'total')::float), 0)   AS cost
        FROM ds
        LEFT JOIN calls c ON c.start_time::date = ds.d
-         AND c.user_id = $3
-         AND ($1::timestamptz IS NULL OR c.start_time >= $1::timestamptz)
+         AND c.user_id = $1
+         AND ($2::text IS NULL OR ($2 = '__none__' AND c.data->>'scenarioId' IS NULL) OR c.data->>'scenarioId' = $2)
        GROUP BY ds.d ORDER BY ds.d`,
-      [cutoff, days, userId],
+      [userId, scenarioId, seriesStartDate, seriesEndDate],
     ),
 
-    // 3 — Randevu dönüşüm trendi
+    // 3 — Randevu dönüşüm trendi (aynı sebeple kendi minimal parametre listesi)
     pool.query<{ date: string; total: string; alindi: string }>(
       `WITH ds AS (
-         SELECT generate_series(
-           CURRENT_DATE - ($2::int - 1) * INTERVAL '1 day',
-           CURRENT_DATE, '1 day'
-         )::date AS d
+         SELECT generate_series($3::date, $4::date, '1 day')::date AS d
        )
        SELECT ds.d::text AS date,
               COUNT(c.vapi_call_id) FILTER (WHERE c.data->'summary' IS NOT NULL)::int AS total,
@@ -426,10 +532,10 @@ export async function getStats(userId: string, periodDays?: number): Promise<Sta
               )::int AS alindi
        FROM ds
        LEFT JOIN calls c ON c.start_time::date = ds.d
-         AND c.user_id = $3
-         AND ($1::timestamptz IS NULL OR c.start_time >= $1::timestamptz)
+         AND c.user_id = $1
+         AND ($2::text IS NULL OR ($2 = '__none__' AND c.data->>'scenarioId' IS NULL) OR c.data->>'scenarioId' = $2)
        GROUP BY ds.d ORDER BY ds.d`,
-      [cutoff, days, userId],
+      [userId, scenarioId, seriesStartDate, seriesEndDate],
     ),
 
     // 4 — İlgi seviyesi dağılımı
@@ -437,20 +543,18 @@ export async function getStats(userId: string, periodDays?: number): Promise<Sta
       `SELECT COALESCE(data->'summary'->>'ilgi_seviyesi','yok') AS seviye,
               COUNT(*)::int AS count
        FROM calls
-       WHERE user_id = $2 AND data->'summary' IS NOT NULL AND status != 'in-progress'
-         AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
+       WHERE user_id = $2 AND data->'summary' IS NOT NULL AND status != 'in-progress' ${RANGE}
        GROUP BY seviye`,
-      [cutoff, userId],
+      baseParams,
     ),
 
     // 5 — Ret nedeni dağılımı
     pool.query<{ neden: string; count: string }>(
       `SELECT data->'summary'->>'ret_nedeni' AS neden, COUNT(*)::int AS count
        FROM calls
-       WHERE user_id = $2 AND data->'summary'->>'ret_nedeni' IS NOT NULL
-         AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
+       WHERE user_id = $2 AND data->'summary'->>'ret_nedeni' IS NOT NULL ${RANGE}
        GROUP BY neden ORDER BY count DESC LIMIT 8`,
-      [cutoff, userId],
+      baseParams,
     ),
 
     // 6 — Aksiyon dağılımı
@@ -458,28 +562,26 @@ export async function getStats(userId: string, periodDays?: number): Promise<Sta
       `SELECT COALESCE(data->'summary'->>'tavsiye_edilen_aksiyon','Belirsiz') AS action,
               COUNT(*)::int AS count
        FROM calls
-       WHERE user_id = $2 AND data->'summary' IS NOT NULL AND status != 'in-progress'
-         AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
+       WHERE user_id = $2 AND data->'summary' IS NOT NULL AND status != 'in-progress' ${RANGE}
        GROUP BY action`,
-      [cutoff, userId],
+      baseParams,
     ),
 
     // 7 — Saatlik dağılım
     pool.query<{ hour: string; count: string }>(
       `SELECT EXTRACT(HOUR FROM start_time)::int AS hour, COUNT(*)::int AS count
        FROM calls
-       WHERE user_id = $2 AND start_time IS NOT NULL
-         AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
+       WHERE user_id = $2 AND start_time IS NOT NULL ${RANGE}
        GROUP BY hour ORDER BY hour`,
-      [cutoff, userId],
+      baseParams,
     ),
 
     // 8 — Durum dağılımı
     pool.query<{ status: string; count: string }>(
       `SELECT status, COUNT(*)::int AS count FROM calls
-       WHERE user_id = $2 AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
+       WHERE user_id = $2 ${RANGE}
        GROUP BY status`,
-      [cutoff, userId],
+      baseParams,
     ),
 
     // 9 — Senaryo performansı
@@ -491,9 +593,9 @@ export async function getStats(userId: string, periodDays?: number): Promise<Sta
               )::int AS randevu,
               COALESCE(SUM((data->'costs'->>'total')::float), 0) AS cost
        FROM calls
-       WHERE user_id = $2 AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
+       WHERE user_id = $2 ${RANGE}
        GROUP BY name ORDER BY calls DESC`,
-      [cutoff, userId],
+      baseParams,
     ),
   ]);
 

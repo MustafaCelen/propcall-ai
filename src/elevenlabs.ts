@@ -71,3 +71,31 @@ export async function listElevenLabsVoices(apiKey: string): Promise<ElevenLabsVo
     voiceId: v.voice_id, name: v.name, category: v.category, previewUrl: v.preview_url,
   }));
 }
+
+const PREVIEW_MAX_CHARS = 500; // önizleme için yeterli, gereksiz karakter harcamasın
+
+// Danışmanın KENDİ script metnini, seçtiği sesle seslendirip döner — ElevenLabs'ın
+// hazır örnek sesi yerine gerçek senaryo cümlesini duymak için. API key sunucuda
+// kalır, tarayıcıya sadece ses baytları gider.
+export async function generateVoicePreview(apiKey: string, voiceId: string, text: string): Promise<Buffer> {
+  if (!apiKey) throw new Error('ElevenLabs API Key tanımlanmamış (Ayarlarım sayfasından ekleyin)');
+  if (!voiceId) throw new Error('Ses seçilmedi');
+  const trimmed = text.trim().slice(0, PREVIEW_MAX_CHARS);
+  if (!trimmed) throw new Error('Önizleme metni boş olamaz');
+
+  const resp = await fetch(`${ELEVENLABS_BASE}/v1/text-to-speech/${encodeURIComponent(voiceId)}`, {
+    method: 'POST',
+    headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
+    body: JSON.stringify({
+      text: trimmed,
+      model_id: 'eleven_multilingual_v2',
+      voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+    }),
+  });
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => '');
+    throw new Error(`ElevenLabs önizleme hatası: ${resp.status} ${errText.slice(0, 200)}`);
+  }
+  const arrayBuffer = await resp.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
