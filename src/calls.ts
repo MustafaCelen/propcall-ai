@@ -202,11 +202,13 @@ export async function getBestCallsByPhoneForCampaign(
   return map;
 }
 
-// Aynı kişiyi aynı gün ikinci kez aramayı önleyen güvenlik ağı — kampanya motorunun
+// Aynı kişiyi kısa sürede ikinci kez aramayı önleyen güvenlik ağı — kampanya motorunun
 // KENDİ durum takibi (contact.status) bir nedenle yanlış/eski kalmış olsa bile
 // (örn. bir deploy sırasında kaybolan webhook yazımı), gerçek arama geçmişine bakan
-// bu DIŞARIDAN doğrulama ikinci bir güvence katmanı sağlar.
-export async function findTodaysCallForPhone(
+// bu DIŞARIDAN doğrulama ikinci bir güvence katmanı sağlar. sinceIso koruma penceresinin
+// başlangıcı — danışmanın duplicateCallProtectionDays ayarına göre hesaplanır (1 gün =
+// sadece bugün, 90 güne kadar — bkz. src/campaign.ts protectionWindowStartIso).
+export async function findRecentCallForPhone(
   userId: string, phone: string, sinceIso: string,
 ): Promise<BestCallInfo | null> {
   const { rows } = await pool.query<{ vapi_call_id: string; status: string; summary: CallSummary | null }>(

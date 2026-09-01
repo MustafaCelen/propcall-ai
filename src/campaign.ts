@@ -15,7 +15,7 @@ import { createVapiCall } from './vapi';
 import { getElevenLabsCredit } from './elevenlabs';
 import {
   readCall, createCall, callStatusToTurkish,
-  getBestCallsByPhoneForCampaign, findTodaysCallForPhone, BestCallInfo,
+  getBestCallsByPhoneForCampaign, findRecentCallForPhone, BestCallInfo,
 } from './calls';
 import { getScenario } from './scenarios';
 import { resolveVapiCreds, getUserById, getUserElevenLabsKey, CALL_MINUTE_RATE_TRY } from './users';
@@ -501,11 +501,16 @@ function currentIstanbulHour(): number {
   return Number(new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Istanbul', hour: 'numeric', hour12: false }).format(new Date()));
 }
 
-// Bugünün İstanbul saatiyle 00:00'ı, UTC ISO string olarak — "aynı kişiyi aynı gün
-// tekrar arama" güvenlik kontrolünde start_time karşılaştırması için kullanılıyor.
-function istanbulTodayStartIso(): string {
+// "Aynı numarayı tekrar arama koruması" penceresinin başlangıcı, UTC ISO string —
+// danışmanın duplicateCallProtectionDays ayarına göre (1-90 gün, varsayılan 1 = sadece
+// bugün). days=1 için İstanbul bugün 00:00 ile TAM aynı sonucu verir (geriye dönük
+// uyumlu); days>1 için o kadar gün geriye giden İstanbul takvim-günü başlangıcı.
+function protectionWindowStartIso(days: number): string {
+  const clamped = Math.max(1, Math.min(90, Math.round(days || 1)));
   const ymd = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-  return new Date(`${ymd}T00:00:00+03:00`).toISOString();
+  const todayStart = new Date(`${ymd}T00:00:00+03:00`);
+  todayStart.setUTCDate(todayStart.getUTCDate() - (clamped - 1));
+  return todayStart.toISOString();
 }
 
 function isWithinCallingHours(start: number | null, end: number | null): boolean {
@@ -623,23 +628,23 @@ async function fillQueue(entry: CampaignEngineEntry): Promise<void> {
 
   let started = 0;
   let reconciledAny = false;
-  const todayStart = istanbulTodayStartIso();
+  const protectionWindowStart = protectionWindowStartIso(user?.duplicateCallProtectionDays ?? 1);
   for (let i = startIdx; i < entry.contacts.length && started < slots; i++) {
     const c = entry.contacts[i];
     const retryDue = c.status === 'tekrar-planlandı' && !!c.nextRetryAt && new Date(c.nextRetryAt) <= new Date();
     if (c.status !== 'bekliyor' && !retryDue) continue;
 
     // Güvenlik ağı: contact.status yanlış/eski kalmış olsa bile (örn. bir deploy
-    // sırasında kaybolan webhook yazımı), bu kişiyi bugün GERÇEKTEN aramadığımızı
-    // arama başlatmadan hemen önce, DIŞARIDAN (calls tablosundan) bağımsızca
-    // doğrula. Aksi halde aynı kişi ikinci kez, gereksiz maliyetle aranabilir.
-    const already: BestCallInfo | null = await findTodaysCallForPhone(entry.userId, c.phone, todayStart);
+    // sırasında kaybolan webhook yazımı), bu kişiyi koruma penceresi içinde GERÇEKTEN
+    // aramadığımızı arama başlatmadan hemen önce, DIŞARIDAN (calls tablosundan)
+    // bağımsızca doğrula. Aksi halde aynı kişi ikinci kez, gereksiz maliyetle aranabilir.
+    const already: BestCallInfo | null = await findRecentCallForPhone(entry.userId, c.phone, protectionWindowStart);
     if (already) {
       const mappedStatus = callStatusToTurkish(already.status) as CampaignContact['status'];
       if (already.summary) c.result = already.summary;
       if ((STATUS_PRIORITY[mappedStatus] ?? -1) > (STATUS_PRIORITY[c.status] ?? -1)) c.status = mappedStatus;
       reconciledAny = true;
-      console.warn(`[Campaign] "${c.name}" (${c.phone}) bugün zaten arandı (${already.vapiCallId}) — tekrar aranmadı, durum senkronize edildi.`);
+      console.warn(`[Campaign] "${c.name}" (${c.phone}) koruma penceresi içinde zaten arandı (${already.vapiCallId}) — tekrar aranmadı, durum senkronize edildi.`);
       continue;
     }
 

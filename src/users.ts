@@ -18,6 +18,7 @@ export interface UserRow {
   maxConcurrentCalls: number;
   callingHoursStart: number | null;
   callingHoursEnd: number | null;
+  duplicateCallProtectionDays: number;
   elevenLabsCostPer1k: number | null;
   balanceTry: number;
   companyName: string | null;
@@ -39,7 +40,8 @@ function newUserId(): string {
 
 const USER_COLUMNS =
   `id, email, name, role, is_active, vapi_phone_number_id, vapi_assistant_id, vapi_public_key, max_concurrent_calls,
-   calling_hours_start, calling_hours_end, elevenlabs_cost_per_1k, balance_try, company_name, fonzip_user_id, last_login_at, created_at`;
+   calling_hours_start, calling_hours_end, duplicate_call_protection_days, elevenlabs_cost_per_1k, balance_try,
+   company_name, fonzip_user_id, last_login_at, created_at`;
 
 function rowToUser(r: any): UserRow {
   return {
@@ -54,6 +56,7 @@ function rowToUser(r: any): UserRow {
     maxConcurrentCalls: r.max_concurrent_calls,
     callingHoursStart: r.calling_hours_start,
     callingHoursEnd: r.calling_hours_end,
+    duplicateCallProtectionDays: r.duplicate_call_protection_days ?? 1,
     elevenLabsCostPer1k: r.elevenlabs_cost_per_1k != null ? Number(r.elevenlabs_cost_per_1k) : null,
     balanceTry: Number(r.balance_try ?? 0),
     companyName: r.company_name,
@@ -127,6 +130,11 @@ export async function setUserMaxConcurrent(id: string, max: number): Promise<voi
 // sadece verilen saat aralığının dışında yeni arama başlatmayı durdurur.
 export async function setUserCallingHours(id: string, start: number | null, end: number | null): Promise<void> {
   await pool.query(`UPDATE users SET calling_hours_start = $2, calling_hours_end = $3 WHERE id = $1`, [id, start, end]);
+}
+
+export async function setUserDuplicateCallProtection(id: string, days: number): Promise<void> {
+  const clamped = Math.max(1, Math.min(90, Math.round(days)));
+  await pool.query(`UPDATE users SET duplicate_call_protection_days = $2 WHERE id = $1`, [id, clamped]);
 }
 
 // Vapi'nin kendi maliyet raporu BYO ElevenLabs kullanıldığında TTS kalemini içermez

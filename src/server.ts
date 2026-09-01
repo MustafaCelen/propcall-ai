@@ -32,7 +32,7 @@ import {
 import { listCampaigns, getCampaign } from './campaigns';
 import {
   ensureBootstrapAdmin, backfillOwnerlessRows, getSettingsForUser,
-  listUsers, createUser, setUserActive, setUserPassword, setUserMaxConcurrent, setUserCallingHours,
+  listUsers, createUser, setUserActive, setUserPassword, setUserMaxConcurrent, setUserCallingHours, setUserDuplicateCallProtection,
   setUserElevenLabsRate, setUserVapiCredentials, setUserElevenLabsKey, setUserAnthropicKey,
   getUserVapiCredentials, getUserElevenLabsKey, getUserAnthropicKey, resolveVapiCreds, getUserById,
   getUserBalance, adjustUserBalance, chargeForCall, listCreditTransactions, CALL_MINUTE_RATE_TRY,
@@ -203,6 +203,7 @@ app.get('/api/settings/calling-limits', requireUserAuth, async (req: Request, re
         maxConcurrentCalls: user.maxConcurrentCalls,
         callingHoursStart: user.callingHoursStart,
         callingHoursEnd: user.callingHoursEnd,
+        duplicateCallProtectionDays: user.duplicateCallProtectionDays,
       },
     });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
@@ -210,8 +211,8 @@ app.get('/api/settings/calling-limits', requireUserAuth, async (req: Request, re
 
 app.put('/api/settings/calling-limits', requireUserAuth, async (req: Request, res: Response) => {
   try {
-    const { callingHoursStart, callingHoursEnd } = req.body as {
-      callingHoursStart?: number | null; callingHoursEnd?: number | null;
+    const { callingHoursStart, callingHoursEnd, duplicateCallProtectionDays } = req.body as {
+      callingHoursStart?: number | null; callingHoursEnd?: number | null; duplicateCallProtectionDays?: number;
     };
     const bothNull = callingHoursStart == null && callingHoursEnd == null;
     const bothSet  = callingHoursStart != null && callingHoursEnd != null
@@ -221,6 +222,12 @@ app.put('/api/settings/calling-limits', requireUserAuth, async (req: Request, re
       return res.status(400).json({ success: false, error: 'Başlangıç ve bitiş saati ikisi birden 0-23 arası olmalı, ya da ikisi de boş bırakılmalı' });
     }
     await setUserCallingHours(req.userId!, callingHoursStart ?? null, callingHoursEnd ?? null);
+    if (duplicateCallProtectionDays != null) {
+      if (!Number.isInteger(duplicateCallProtectionDays) || duplicateCallProtectionDays < 1 || duplicateCallProtectionDays > 90) {
+        return res.status(400).json({ success: false, error: 'Koruma süresi 1-90 gün arası olmalı' });
+      }
+      await setUserDuplicateCallProtection(req.userId!, duplicateCallProtectionDays);
+    }
     return res.json({ success: true });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });

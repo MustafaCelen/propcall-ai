@@ -238,6 +238,18 @@
       <button class="adm-save-btn" id="btnSaveCallingHours" style="margin-top:12px">Kaydet</button>
       <div class="adm-field-status" id="statusCallingHours"></div>
     </div>
+
+    <div class="adm-card">
+      <div class="adm-section-title">🛡️ Aynı Numarayı Tekrar Arama Koruması</div>
+      <div class="adm-field-hint" style="margin-bottom:12px">Bir numara bu süre içinde zaten arandıysa, kampanya onu tekrar aramaz — müşterileri spam aramadan korur. 1 gün = sadece bugün (varsayılan).</div>
+      <div class="field-slider-row">
+        <input type="range" id="chDuplicateProtectionDays" data-slider data-suffix=" gün" min="1" max="90" />
+        <span class="field-slider-value" id="chDuplicateProtectionDaysVal">1 gün</span>
+      </div>
+      <div class="field-slider-scale"><span>1 gün — sadece bugün</span><span>90 gün</span></div>
+      <button class="adm-save-btn" id="btnSaveDuplicateProtection" style="margin-top:12px">Kaydet</button>
+      <div class="adm-field-status" id="statusDuplicateProtection"></div>
+    </div>
     </div>
   </div>
 
@@ -291,6 +303,8 @@ async function loadCallingHours() {
   if (!j.success) return;
   $('chStart').value = j.data.callingHoursStart ?? '';
   $('chEnd').value   = j.data.callingHoursEnd   ?? '';
+  $('chDuplicateProtectionDays').value = j.data.duplicateCallProtectionDays ?? 1;
+  initSliders();
 }
 
 async function loadCostConfig() {
@@ -340,6 +354,31 @@ $('btnSaveCallingHours').addEventListener('click', async () => {
       body: JSON.stringify({
         callingHoursStart: startVal === '' ? null : parseInt(startVal, 10),
         callingHoursEnd:   endVal   === '' ? null : parseInt(endVal, 10),
+      }),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    status.textContent = '✓ Kaydedildi, anında geçerli';
+    status.className = 'adm-field-status ok';
+  } catch (err) {
+    status.textContent = '✗ ' + err.message;
+    status.className = 'adm-field-status err';
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('btnSaveDuplicateProtection').addEventListener('click', async () => {
+  const btn = $('btnSaveDuplicateProtection');
+  const status = $('statusDuplicateProtection');
+  status.className = 'adm-field-status';
+  status.textContent = '';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/settings/calling-limits', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        duplicateCallProtectionDays: parseInt($('chDuplicateProtectionDays').value, 10) || 1,
       }),
     });
     const j = await r.json();

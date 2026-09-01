@@ -55,6 +55,11 @@ export async function initDb(): Promise<void> {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS balance_try NUMERIC NOT NULL DEFAULT 0;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS company_name TEXT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS fonzip_user_id INT;  -- Fonzip'teki karşılık gelen üye id'si (kart ile jeton yükleme için)
+    -- Aynı numarayı tekrar arama koruması — kaç gün içinde aranmış bir numara "zaten
+    -- arandı" sayılıp tekrar aranmasın. Varsayılan 1 = sadece bugün (önceki sabit
+    -- davranışla birebir aynı, geriye dönük uyumlu). Müşterileri spam aramadan korumak
+    -- için 90'a kadar çıkarılabilir (bkz. src/campaign.ts fillQueue).
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS duplicate_call_protection_days INT NOT NULL DEFAULT 1;
 
     -- Jeton (TL) hareketleri — her yükleme/ücretlendirme kalıcı bir satır. balance_try
     -- hızlı okunabilir güncel bakiye, buradaki kayıtlar denetim/geçmiş içindir.
