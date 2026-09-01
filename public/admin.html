@@ -8,48 +8,10 @@
   <style>
     html,body{height:100%;overflow-y:auto}
     body{background:var(--bg);min-height:100vh;padding:40px 20px}
-    .adm-wrap{max-width:820px;margin:0 auto}
-    .adm-header{text-align:center;margin-bottom:28px}
-    .adm-logo{width:52px;height:52px;background:var(--primary);border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:24px;margin:0 auto 12px}
-    .adm-title{font-size:20px;font-weight:700}
-    .adm-sub{font-size:13px;color:var(--tx2);margin-top:4px}
-    .adm-card{background:var(--s1);border:1px solid var(--border);border-radius:14px;padding:26px;margin-bottom:16px}
-    .adm-topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
-    .adm-topbar-links{display:flex;gap:8px}
-    .adm-logout, .adm-back{background:transparent;border:1px solid var(--border);color:var(--tx2);border-radius:8px;padding:7px 14px;font-size:12px;cursor:pointer;transition:all .15s;text-decoration:none;display:inline-flex;align-items:center}
-    .adm-logout:hover{border-color:var(--red);color:var(--red)}
-    .adm-back:hover{border-color:var(--primary);color:var(--primary)}
-    .adm-section-title{font-size:14px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:8px}
-
-    .adm-form-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
-    .adm-form-row input{flex:1;min-width:140px;font-size:13px;padding:9px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;color:var(--tx);font-family:'Sora',sans-serif;outline:none}
-    .adm-form-row input:focus{border-color:var(--border-a)}
-    .adm-btn{background:var(--primary);color:#000;border:none;border-radius:8px;padding:9px 18px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;transition:opacity .15s}
-    .adm-btn:hover:not(:disabled){opacity:.85}
-    .adm-btn:disabled{opacity:.4;cursor:not-allowed}
-    .adm-form-err{font-size:12px;color:var(--red);display:none;margin-bottom:10px}
-    .adm-form-err.show{display:block}
-    .adm-form-ok{font-size:12px;color:var(--primary);display:none;margin-bottom:10px}
-    .adm-form-ok.show{display:block}
-
-    table.adm-table{width:100%;border-collapse:collapse;font-size:13px}
-    table.adm-table th{text-align:left;font-size:11px;color:var(--txm);text-transform:uppercase;letter-spacing:.4px;padding:0 10px 8px;font-weight:600}
-    table.adm-table td{padding:10px;border-top:1px solid var(--border);vertical-align:middle}
-    .adm-role-tag{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:700;text-transform:uppercase}
-    .adm-role-tag.admin{background:rgba(0,200,150,.15);color:var(--primary)}
-    .adm-role-tag.agent{background:rgba(74,158,255,.15);color:var(--blue)}
-    .adm-status-tag{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:700}
-    .adm-status-tag.active{background:rgba(0,200,150,.15);color:var(--primary)}
-    .adm-status-tag.inactive{background:rgba(255,83,112,.15);color:var(--red)}
-    .adm-row-actions{display:flex;gap:6px;flex-wrap:wrap}
-    .adm-mini-btn{background:transparent;border:1px solid var(--border);color:var(--tx2);border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;transition:all .15s}
-    .adm-mini-btn:hover{border-color:var(--border-a);color:var(--tx)}
-    .adm-mini-btn.danger:hover{border-color:var(--red);color:var(--red)}
-    .adm-table-empty{padding:24px;text-align:center;color:var(--txm);font-size:13px}
   </style>
 </head>
 <body>
-<div class="adm-wrap">
+<div class="adm-wrap wide">
 
   <div class="adm-header">
     <div class="adm-logo">👥</div>
@@ -71,28 +33,42 @@
     <div class="adm-form-err" id="createErr"></div>
     <div class="adm-form-ok" id="createOk"></div>
     <div class="adm-form-row">
-      <input type="email" id="newEmail" placeholder="E-posta" />
-      <input type="text"  id="newName"  placeholder="Ad Soyad (opsiyonel)" />
-      <input type="text"  id="newPassword" placeholder="Geçici şifre" />
+      <div class="adm-form-field">
+        <label class="adm-mini-label">E-posta</label>
+        <input type="email" id="newEmail" placeholder="ornek@sirket.com" />
+      </div>
+      <div class="adm-form-field">
+        <label class="adm-mini-label">Ad Soyad <span style="font-weight:400;color:var(--txm)">(opsiyonel)</span></label>
+        <input type="text" id="newName" placeholder="Ahmet Yılmaz" />
+      </div>
+      <div class="adm-form-field">
+        <label class="adm-mini-label">Şirket/Takım Adı <span style="font-weight:400;color:var(--txm)">(opsiyonel)</span></label>
+        <input type="text" id="newCompanyName" placeholder="Keller Williams Platin&Karma" />
+      </div>
+      <div class="adm-form-field">
+        <label class="adm-mini-label">Geçici Şifre</label>
+        <input type="text" id="newPassword" placeholder="İlk giriş için" />
+      </div>
       <button class="adm-btn" id="btnCreate">Ekle</button>
     </div>
-    <div style="font-size:11px;color:var(--txm)">Danışman ilk girişten sonra şifresini kendi değiştiremez henüz — gerekirse buradan sıfırlayabilirsin.</div>
+    <div class="adm-form-hint">Danışman ilk girişten sonra şifresini kendi değiştiremez henüz — gerekirse buradan sıfırlayabilirsin. Vapi/ElevenLabs/Anthropic ve varsayılan senaryo otomatik atanır (tanımlıysa) — sadece telefon numarasını danışman kendisi Ayarlarım'dan seçmeli.</div>
   </div>
 
   <div class="adm-card">
     <div class="adm-section-title">📋 Tüm Danışmanlar</div>
     <table class="adm-table">
       <thead>
-        <tr><th>E-posta</th><th>Ad</th><th>Rol</th><th>Durum</th><th>Son Giriş</th><th>İşlemler</th></tr>
+        <tr><th>E-posta</th><th>Ad</th><th>Rol</th><th>Durum</th><th>Bakiye (TL)</th><th>Son Giriş</th><th>İşlemler</th></tr>
       </thead>
       <tbody id="usersBody">
-        <tr><td colspan="6" class="adm-table-empty">Yükleniyor...</td></tr>
+        <tr><td colspan="7" class="adm-table-empty">Yükleniyor...</td></tr>
       </tbody>
     </table>
   </div>
 
 </div>
 
+<script src="ui-kit.js"></script>
 <script>
 function $(id) { return document.getElementById(id); }
 
@@ -126,7 +102,7 @@ async function loadUsers() {
 function renderUsers(users) {
   const tbody = $('usersBody');
   if (!users.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="adm-table-empty">Henüz danışman yok</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="adm-table-empty">Henüz danışman yok</td></tr>';
     return;
   }
   tbody.innerHTML = users.map(u => `
@@ -135,9 +111,11 @@ function renderUsers(users) {
       <td>${esc(u.name || '—')}</td>
       <td><span class="adm-role-tag ${u.role}">${u.role === 'admin' ? 'Admin' : 'Danışman'}</span></td>
       <td><span class="adm-status-tag ${u.isActive ? 'active' : 'inactive'}">${u.isActive ? 'Aktif' : 'Pasif'}</span></td>
+      <td class="adm-balance" data-balance>${Number(u.balanceTry || 0).toFixed(2)} TL</td>
       <td>${fmtDate(u.lastLoginAt)}</td>
       <td>
         <div class="adm-row-actions">
+          <button class="adm-mini-btn" data-action="topup">Jeton Yükle</button>
           <button class="adm-mini-btn" data-action="toggle">${u.isActive ? 'Devre Dışı Bırak' : 'Aktifleştir'}</button>
           <button class="adm-mini-btn" data-action="reset-pw">Şifre Sıfırla</button>
         </div>
@@ -151,6 +129,36 @@ function renderUsers(users) {
   tbody.querySelectorAll('[data-action="reset-pw"]').forEach(btn => {
     btn.addEventListener('click', () => resetPassword(btn.closest('tr').dataset.id));
   });
+  tbody.querySelectorAll('[data-action="topup"]').forEach(btn => {
+    btn.addEventListener('click', () => topUpBalance(btn.closest('tr').dataset.id, btn));
+  });
+}
+
+// Pozitif tutar yükleme, negatif tutar (örn. -50) hatalı yüklemeyi geri almak için.
+async function topUpBalance(id, btn) {
+  const raw = await uiPrompt('Yüklenecek/düzeltilecek tutar (TL) — çıkarmak için negatif girin (örn. -50):', {
+    title: 'Jeton Yükle', type: 'text', placeholder: 'örn. 100 veya -50',
+  });
+  if (!raw) return;
+  const amount = parseFloat(String(raw).replace(',', '.'));
+  if (!amount || !Number.isFinite(amount)) { toast('Geçerli bir tutar girin', 'error'); return; }
+
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/admin/users/' + id + '/balance', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount }),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error || 'Yüklenemedi');
+    const row = btn.closest('tr');
+    row.querySelector('[data-balance]').textContent = Number(j.data.balanceTry).toFixed(2) + ' TL';
+    toast('Bakiye güncellendi', 'success');
+  } catch (err) {
+    toast('Hata: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function esc(s) {
@@ -159,28 +167,38 @@ function esc(s) {
 
 async function toggleActive(id, btn) {
   const row = btn.closest('tr');
+  const email = row.querySelector('td')?.textContent || 'bu danışman';
   const isActive = row.querySelector('.adm-status-tag').classList.contains('active');
+  if (isActive) {
+    const sure = await uiConfirm(
+      email + ' devre dışı bırakılacak — arama başlatamayacak, mevcut kampanyaları duraklatılmış sayılacak.',
+      { title: 'Danışmanı Devre Dışı Bırak', confirmLabel: 'Evet, devre dışı bırak', danger: true },
+    );
+    if (!sure) return;
+  }
   btn.disabled = true;
   await fetch('/api/admin/users/' + id, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ isActive: !isActive }),
   });
+  toast(isActive ? 'Danışman devre dışı bırakıldı' : 'Danışman aktifleştirildi', 'info');
   loadUsers();
 }
 
 async function resetPassword(id) {
-  const pw = prompt('Yeni geçici şifre girin:');
+  const pw = await uiPrompt('Yeni geçici şifre girin:', { title: 'Şifre Sıfırla', placeholder: 'yeni şifre' });
   if (!pw || !pw.trim()) return;
   await fetch('/api/admin/users/' + id, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ password: pw.trim() }),
   });
-  alert('Şifre güncellendi.');
+  toast('Şifre güncellendi', 'success');
 }
 
 $('btnCreate').addEventListener('click', async () => {
   const email = $('newEmail').value.trim();
   const name = $('newName').value.trim();
+  const companyName = $('newCompanyName').value.trim();
   const password = $('newPassword').value.trim();
   const errEl = $('createErr');
   const okEl = $('createOk');
@@ -196,7 +214,7 @@ $('btnCreate').addEventListener('click', async () => {
   $('btnCreate').disabled = true;
   const r = await fetch('/api/admin/users', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, name, password }),
+    body: JSON.stringify({ email, name, companyName, password }),
   });
   const j = await r.json();
   $('btnCreate').disabled = false;
@@ -211,6 +229,7 @@ $('btnCreate').addEventListener('click', async () => {
   okEl.classList.add('show');
   $('newEmail').value = '';
   $('newName').value = '';
+  $('newCompanyName').value = '';
   $('newPassword').value = '';
   loadUsers();
 });

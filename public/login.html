@@ -8,33 +8,21 @@
   <style>
     html,body{height:100%}
     body{background:var(--bg);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
-    .lg-wrap{max-width:380px;width:100%}
-    .lg-header{text-align:center;margin-bottom:28px}
-    .lg-logo{width:52px;height:52px;background:var(--primary);border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:24px;margin:0 auto 12px}
-    .lg-title{font-size:20px;font-weight:700}
-    .lg-sub{font-size:13px;color:var(--tx2);margin-top:4px}
-    .lg-card{background:var(--s1);border:1px solid var(--border);border-radius:14px;padding:26px}
-    .lg-card input{width:100%;font-size:14px;padding:11px 14px;background:var(--s2);border:1px solid var(--border);border-radius:8px;color:var(--tx);font-family:'Sora',sans-serif;outline:none;transition:border-color .15s;margin-bottom:12px}
-    .lg-card input:focus{border-color:var(--border-a)}
-    .lg-btn{width:100%;background:var(--primary);color:#000;border:none;border-radius:8px;padding:11px 20px;font-size:14px;font-weight:700;cursor:pointer;transition:opacity .15s;font-family:'Sora',sans-serif}
-    .lg-btn:hover:not(:disabled){opacity:.85}
-    .lg-btn:disabled{opacity:.4;cursor:not-allowed}
-    .lg-err{color:var(--red);font-size:12px;margin-top:10px;display:none;text-align:center}
-    .lg-err.show{display:block}
+    .adm-wrap{width:100%;max-width:380px}
   </style>
 </head>
 <body>
-<div class="lg-wrap">
-  <div class="lg-header">
-    <div class="lg-logo">📞</div>
-    <div class="lg-title">PropCall AI</div>
-    <div class="lg-sub">Danışman girişi</div>
+<div class="adm-wrap">
+  <div class="adm-header">
+    <div class="adm-logo">📞</div>
+    <div class="adm-title">PropCall AI</div>
+    <div class="adm-sub">Danışman girişi</div>
   </div>
-  <div class="lg-card">
+  <div class="adm-card adm-form">
     <input type="email" id="emailInput" placeholder="E-posta" autocomplete="username" />
     <input type="password" id="pwInput" placeholder="Şifre" autocomplete="current-password" />
-    <button class="lg-btn" id="btnLogin">Giriş Yap</button>
-    <div class="lg-err" id="loginErr"></div>
+    <button class="adm-btn-block" id="btnLogin">Giriş Yap</button>
+    <div class="adm-warn" id="loginErr" style="text-align:center;margin-top:10px;margin-bottom:0"></div>
   </div>
 </div>
 <script>

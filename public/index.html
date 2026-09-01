@@ -32,6 +32,11 @@
           <span class="credit-lbl">ElevenLabs</span>
           <span class="credit-val" id="creditEl">—</span>
         </div>
+        <div class="credit-chip credit-balance">
+          <span class="credit-lbl">Bakiye</span>
+          <span class="credit-val" id="creditBalance">—</span>
+          <button class="credit-topup-btn" id="btnTopupBalance" title="Kredi kartıyla jeton yükle" style="display:none">+ Yükle</button>
+        </div>
         <button class="credit-refresh" id="btnCreditRefresh" title="Yenile">↻</button>
       </div>
       <button class="btn-secondary" id="btnToggleApts">📅 Randevular</button>
@@ -259,6 +264,27 @@
           <button class="chip" data-period="0">Hepsi</button>
           <div class="chip-spacer"></div>
           <button class="chip-refresh" id="statsRefresh" title="Yenile">↻</button>
+        </div>
+
+        <div class="filter-bar">
+          <div class="filter-group">
+            <label>Başlangıç</label>
+            <input type="date" id="statsDateFrom" />
+          </div>
+          <div class="filter-group">
+            <label>Bitiş</label>
+            <input type="date" id="statsDateTo" />
+          </div>
+          <div class="filter-group">
+            <label>Senaryo</label>
+            <select id="statsScenarioFilter">
+              <option value="">Tümü</option>
+              <option value="__none__">— Varsayılan (Senaryosuz) —</option>
+            </select>
+          </div>
+          <div class="filter-actions">
+            <button class="btn-filter-clear" id="btnStatsClearFilter">✕ Temizle</button>
+          </div>
         </div>
 
         <div class="stat-cards">
@@ -673,6 +699,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="ui-kit.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

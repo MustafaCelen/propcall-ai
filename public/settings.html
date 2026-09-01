@@ -8,53 +8,6 @@
   <style>
     html,body{height:100%;overflow-y:auto}
     body{background:var(--bg);min-height:100vh;padding:40px 20px}
-    .adm-wrap{max-width:600px;margin:0 auto}
-    .adm-header{text-align:center;margin-bottom:28px}
-    .adm-logo{width:52px;height:52px;background:var(--primary);border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:24px;margin:0 auto 12px}
-    .adm-title{font-size:20px;font-weight:700}
-    .adm-sub{font-size:13px;color:var(--tx2);margin-top:4px}
-
-    .adm-card{background:var(--s1);border:1px solid var(--border);border-radius:14px;padding:26px;margin-bottom:16px}
-
-    .adm-topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
-    .adm-topbar-links{display:flex;gap:8px}
-    .adm-logout, .adm-back{background:transparent;border:1px solid var(--border);color:var(--tx2);border-radius:8px;padding:7px 14px;font-size:12px;cursor:pointer;transition:all .15s;text-decoration:none;display:inline-flex;align-items:center}
-    .adm-logout:hover{border-color:var(--red);color:var(--red)}
-    .adm-back:hover{border-color:var(--primary);color:var(--primary)}
-
-    .adm-field{margin-bottom:18px}
-    .adm-field:last-child{margin-bottom:0}
-    .adm-label-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
-    .adm-label{font-size:13px;font-weight:600;color:var(--tx)}
-    .adm-source{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px}
-    .adm-source.db{background:rgba(0,200,150,.15);color:var(--primary)}
-    .adm-source.none{background:rgba(255,83,112,.15);color:var(--red)}
-
-    .adm-input-row{display:flex;gap:8px}
-    .adm-input-row input{flex:1;font-size:13px;padding:9px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;color:var(--tx);font-family:'JetBrains Mono',monospace;outline:none;transition:border-color .15s}
-    .adm-input-row input:focus{border-color:var(--border-a)}
-    .adm-save-btn{background:var(--s2);border:1px solid var(--border);color:var(--tx2);border-radius:8px;padding:9px 14px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap}
-    .adm-save-btn:hover:not(:disabled){border-color:var(--primary);color:var(--primary)}
-    .adm-save-btn:disabled{opacity:.4;cursor:not-allowed}
-
-    .adm-field-status{margin-top:6px;font-size:11px;display:none}
-    .adm-field-status.ok{color:var(--primary);display:block}
-    .adm-field-status.err{color:var(--red);display:block}
-    .adm-field-hint{font-size:11px;color:var(--txm);margin-top:4px}
-
-    .adm-section-title{font-size:14px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:8px}
-    .adm-row{display:flex;gap:12px}
-    .adm-col{flex:1;min-width:0}
-    .adm-mini-label{display:block;font-size:11px;font-weight:600;color:var(--tx2);margin-bottom:5px}
-    #settingsView select, #settingsView textarea, #settingsView input[type="text"], #settingsView input[type="number"] {
-      width:100%;font-size:13px;padding:9px 12px;background:var(--s2);border:1px solid var(--border);
-      border-radius:8px;color:var(--tx);font-family:'Sora',sans-serif;outline:none;transition:border-color .15s;
-    }
-    #settingsView select:focus, #settingsView textarea:focus, #settingsView input:focus{border-color:var(--border-a)}
-    #settingsView .form-group{margin-bottom:12px}
-    #settingsView .form-group:last-of-type{margin-bottom:0}
-    .adm-warn{font-size:11px;color:var(--red);margin-bottom:10px;display:none}
-    .adm-warn.show{display:block}
   </style>
 </head>
 <body>
@@ -75,30 +28,20 @@
       </div>
     </div>
 
+    <div class="adm-tabs">
+      <button class="adm-tab active" data-tab="baglanti">🔑 Hesap Bağlantıları</button>
+      <button class="adm-tab" data-tab="asistan">🤖 Asistan Ayarları</button>
+      <button class="adm-tab" data-tab="kurallar">⏰ Arama Kuralları</button>
+    </div>
+
+    <div class="adm-tab-panel active" data-panel="baglanti">
     <div class="adm-card">
       <div class="adm-section-title">🔑 API Anahtarları</div>
       <div id="fieldsContainer"></div>
     </div>
 
-    <div class="adm-card">
-      <div class="adm-section-title">⏰ Arama Kuralları</div>
-      <div class="adm-row">
-        <div class="adm-col">
-          <label class="adm-mini-label">Arama Başlangıç Saati</label>
-          <select id="chStart"><option value="">— Sınır yok —</option></select>
-        </div>
-        <div class="adm-col">
-          <label class="adm-mini-label">Arama Bitiş Saati</label>
-          <select id="chEnd"><option value="">— Sınır yok —</option></select>
-        </div>
-      </div>
-      <div class="adm-field-hint">Bu saat aralığı dışında kampanyalar yeni arama başlatmaz — devam eden bir görüşme kesilmez, sadece kuyruk beklemeye alınır. Pencere tekrar açılınca hiçbir şey yapmanıza gerek kalmadan otomatik devam eder.</div>
-      <button class="adm-save-btn" id="btnSaveCallingHours" style="margin-top:12px">Kaydet</button>
-      <div class="adm-field-status" id="statusCallingHours"></div>
-    </div>
-
-    <div class="adm-card">
-      <div class="adm-section-title">📥 Başka Bir Hesaptan Asistan İçe Aktar</div>
+    <details class="adm-card">
+      <summary class="adm-section-title">📥 Başka Bir Hesaptan Asistan İçe Aktar <span style="font-weight:400;color:var(--txm);font-size:11px">(gelişmiş, nadiren gerekir)</span></summary>
       <div class="adm-field-hint" style="margin-bottom:12px">Bir başka Vapi hesabındaki hazır bir asistanın (model, ses, prompt, davranış — hepsi) tam kopyasını kendi hesabınızda yeni bir asistan olarak oluşturur. Önce yukarıda kendi Vapi API Key ve Telefon Numarası ID'nizi kaydetmiş olmanız gerekir.</div>
       <div class="adm-form-err" id="importErr" style="color:var(--red);font-size:12px;display:none;margin-bottom:10px"></div>
       <div class="adm-form-ok" id="importOk" style="color:var(--primary);font-size:12px;display:none;margin-bottom:10px"></div>
@@ -115,6 +58,16 @@
         <input type="text" id="importNewName" placeholder="Boş bırakılırsa kaynaktaki isim kullanılır" />
       </div>
       <button class="adm-save-btn" id="btnImportGo" type="button" disabled>İçe Aktar</button>
+    </details>
+    </div>
+
+    <div class="adm-tab-panel" data-panel="asistan">
+    <div class="adm-card">
+      <div class="adm-section-title">🎙️ Sesli Test (Tarayıcıdan)</div>
+      <div class="adm-field-hint" style="margin-bottom:12px">Gerçek arama yapmadan, tarayıcınızın mikrofonuyla doğrudan asistanınızla konuşup script/ses/model ayarlarını hızlıca deneyin. Vapi Public Key ve Assistant ID kayıtlı olmalı (🔑 Hesap Bağlantıları sekmesi).</div>
+      <div class="adm-warn" id="voiceTestWarn"></div>
+      <button class="adm-save-btn" id="btnStartVoiceTest" type="button">🎙️ Testi Başlat</button>
+      <div class="adm-field-status" id="statusVoiceTest"></div>
     </div>
 
     <div class="adm-card">
@@ -152,12 +105,27 @@
           </select>
         </div>
         <div class="adm-col">
-          <label class="adm-mini-label">Hız (0.7 – 1.2)</label>
-          <input type="number" id="acVoiceSpeed" min="0.7" max="1.2" step="0.05" />
+          <label class="adm-mini-label">Hız</label>
+          <div class="field-slider-row">
+            <input type="range" id="acVoiceSpeed" data-slider data-suffix="×" min="0.7" max="1.2" step="0.05" />
+            <span class="field-slider-value" id="acVoiceSpeedVal">1.00×</span>
+          </div>
+          <div class="field-slider-scale"><span>0.7× yavaş</span><span>1.2× hızlı</span></div>
         </div>
       </div>
       <button class="adm-save-btn" id="btnSaveVoice" style="margin-top:12px">Kaydet</button>
       <div class="adm-field-status" id="statusVoice"></div>
+
+      <div class="form-group" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+        <label class="adm-mini-label">Kendi Scriptinizle Önizleyin</label>
+        <textarea id="voicePreviewText" rows="2" placeholder="Merhaba, ben Zek Büyüme'den arıyorum...">Merhaba, ben Zek Büyüme'den arıyorum, uygun bir zamanınız var mı?</textarea>
+        <div class="adm-input-row" style="margin-top:8px">
+          <button class="adm-save-btn" id="btnPreviewVoice" type="button">▶ Önizle</button>
+          <span class="adm-field-hint" id="voicePreviewCost" style="margin:0;align-self:center"></span>
+        </div>
+        <audio id="voicePreviewAudio" style="display:none;width:100%;margin-top:8px" controls></audio>
+        <div class="adm-field-status" id="statusVoicePreview"></div>
+      </div>
 
       <div class="adm-field-hint" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
         💰 <strong>Maliyet takibi:</strong> Vapi'nin maliyet raporu kendi (BYO) ElevenLabs hesabınızı
@@ -192,8 +160,12 @@
       </div>
       <div class="adm-row" style="margin-top:12px">
         <div class="adm-col">
-          <label class="adm-mini-label">Confidence Threshold (0–1)</label>
-          <input type="number" id="acConfidenceThreshold" min="0" max="1" step="0.05" />
+          <label class="adm-mini-label">Confidence Threshold</label>
+          <div class="field-slider-row">
+            <input type="range" id="acConfidenceThreshold" data-slider min="0" max="1" step="0.05" />
+            <span class="field-slider-value" id="acConfidenceThresholdVal">0.65</span>
+          </div>
+          <div class="field-slider-scale"><span>0 gürültüye duyarlı</span><span>1 sadece net konuşma</span></div>
           <div class="adm-field-hint">Düşük değer gürültüyü de "konuşma" sayar. Önerilen: 0.6–0.7</div>
         </div>
         <div class="adm-col" style="display:flex;flex-direction:column;justify-content:flex-end">
@@ -219,29 +191,64 @@
       </div>
       <div class="adm-row">
         <div class="adm-col">
-          <label class="adm-mini-label">Maks. Süre (sn)</label>
-          <input type="number" id="acMaxDuration" min="30" max="600" />
+          <label class="adm-mini-label">Maks. Süre</label>
+          <div class="field-slider-row">
+            <input type="range" id="acMaxDuration" data-slider data-suffix=" sn" min="30" max="600" step="10" />
+            <span class="field-slider-value" id="acMaxDurationVal">120 sn</span>
+          </div>
+          <div class="field-slider-scale"><span>30 sn</span><span>600 sn</span></div>
         </div>
         <div class="adm-col">
-          <label class="adm-mini-label">Sessizlik Aşımı (sn)</label>
-          <input type="number" id="acSilenceTimeout" min="3" max="60" />
+          <label class="adm-mini-label">Sessizlik Aşımı</label>
+          <div class="field-slider-row">
+            <input type="range" id="acSilenceTimeout" data-slider data-suffix=" sn" min="3" max="60" />
+            <span class="field-slider-value" id="acSilenceTimeoutVal">10 sn</span>
+          </div>
+          <div class="field-slider-scale"><span>3 sn</span><span>60 sn</span></div>
         </div>
         <div class="adm-col">
           <label class="adm-mini-label">Kesme Hassasiyeti</label>
-          <input type="number" id="acStopWords" min="1" max="10" />
+          <div class="field-slider-row">
+            <input type="range" id="acStopWords" data-slider data-suffix=" kelime" min="1" max="10" />
+            <span class="field-slider-value" id="acStopWordsVal">4 kelime</span>
+          </div>
+          <div class="field-slider-scale"><span>1 çabuk susar</span><span>10 geç susar</span></div>
         </div>
       </div>
       <div class="adm-field-hint">Kesme hassasiyeti: kaç kelime duyunca asistan susar. Düşük = çabuk susar. Önerilen: 4–5</div>
       <button class="adm-save-btn" id="btnSaveBehavior" style="margin-top:12px">Kaydet</button>
       <div class="adm-field-status" id="statusBehavior"></div>
     </div>
+    </div>
+
+    <div class="adm-tab-panel" data-panel="kurallar">
+    <div class="adm-card">
+      <div class="adm-section-title">⏰ Arama Kuralları</div>
+      <div class="adm-row">
+        <div class="adm-col">
+          <label class="adm-mini-label">Arama Başlangıç Saati</label>
+          <select id="chStart"><option value="">— Sınır yok —</option></select>
+        </div>
+        <div class="adm-col">
+          <label class="adm-mini-label">Arama Bitiş Saati</label>
+          <select id="chEnd"><option value="">— Sınır yok —</option></select>
+        </div>
+      </div>
+      <div class="adm-field-hint">Bu saat aralığı dışında kampanyalar yeni arama başlatmaz — devam eden bir görüşme kesilmez, sadece kuyruk beklemeye alınır. Pencere tekrar açılınca hiçbir şey yapmanıza gerek kalmadan otomatik devam eder.</div>
+      <button class="adm-save-btn" id="btnSaveCallingHours" style="margin-top:12px">Kaydet</button>
+      <div class="adm-field-status" id="statusCallingHours"></div>
+    </div>
+    </div>
   </div>
 
 </div>
 
+<script src="ui-kit.js"></script>
 <script>
 const FIELD_META = {
+  companyName:         { label: '🏢 Şirket / Takım Adı',       hint: 'Senaryolarda {{companyName}} değişkeni olarak kullanılır (örn. "Keller Williams Platin Karma")' },
   vapiApiKey:          { label: '📞 Vapi API Key',            hint: 'Kendi Vapi hesabınızın Private Key\'i',           verifiable: true },
+  vapiPublicKey:       { label: '🌐 Vapi Public Key',          hint: 'Vapi Dashboard → API Keys → "Public Key" (Private Key\'den farklı) — tarayıcıdan sesli test için gerekli, opsiyonel' },
   vapiPhoneNumberId:   { label: '☎️ Vapi Telefon Numarası ID', hint: 'Vapi hesabınızdaki numaralardan seçin — ID\'yi elle bulmanıza gerek yok', listType: 'phone-numbers' },
   vapiAssistantId:     { label: '🧠 Vapi Assistant ID',        hint: 'Vapi hesabınızdaki asistanlardan seçin — ID\'yi elle bulmanıza gerek yok', listType: 'assistants' },
   elevenlabsApiKey:    { label: '🔊 ElevenLabs API Key',       hint: 'Ses kotası görüntüleme için (opsiyonel)' },
@@ -249,6 +256,13 @@ const FIELD_META = {
 };
 
 function $(id) { return document.getElementById(id); }
+
+document.querySelectorAll('.adm-tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.adm-tab').forEach(b => b.classList.toggle('active', b === btn));
+    document.querySelectorAll('.adm-tab-panel').forEach(p => p.classList.toggle('active', p.dataset.panel === btn.dataset.tab));
+  });
+});
 
 async function checkSession() {
   const r = await fetch('/api/auth/session');
@@ -285,6 +299,7 @@ async function loadCostConfig() {
   const j = await r.json();
   if (!j.success) return;
   $('elCostPer1k').value = j.data.elevenLabsCostPer1k ?? '';
+  updateVoicePreviewCost();
 }
 
 $('btnSaveElCost').addEventListener('click', async () => {
@@ -556,18 +571,52 @@ async function saveField(key) {
 
 // ─── ASİSTAN AYARLARI (model / ses / transkripsiyon / davranış) ────────────
 
+// NOT: Vapi bu listeyi çekebileceğimiz bir API sunmuyor (doğrulandı) — bu yüzden elle
+// tutuluyor. Vapi modelleri sık değiştirdiği için (bkz. docs.vapi.ai/providers/model/*)
+// zaman zaman eskiyebilir; bir model "deprecated" hatası verirse buradan güncelleyin.
+// Son doğrulama: 2026-08-31.
 const MODEL_OPTIONS = {
   groq: [
-    { value: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile' },
-    { value: 'llama-3.1-8b-instant',    label: 'Llama 3.1 8B Instant — hızlı' },
+    { value: 'openai/gpt-oss-120b',                       label: 'GPT-OSS 120B' },
+    { value: 'openai/gpt-oss-20b',                         label: 'GPT-OSS 20B — hızlı' },
+    { value: 'moonshotai/kimi-k2-instruct-0905',           label: 'Kimi K2 Instruct' },
+    { value: 'meta-llama/llama-4-scout-17b-16e-instruct',  label: 'Llama 4 Scout 17B' },
+    { value: 'compound-beta',                              label: 'Compound Beta' },
+    { value: 'compound-beta-mini',                         label: 'Compound Beta Mini — hızlı' },
   ],
   openai: [
-    { value: 'gpt-4o',      label: 'GPT-4o' },
-    { value: 'gpt-4o-mini', label: 'GPT-4o mini — hızlı' },
+    { value: 'gpt-5.6-sol',   label: 'GPT-5.6 Sol' },
+    { value: 'gpt-5.6-terra', label: 'GPT-5.6 Terra' },
+    { value: 'gpt-5.6-luna',  label: 'GPT-5.6 Luna' },
+    { value: 'gpt-5.5',       label: 'GPT-5.5' },
+    { value: 'gpt-5.4',       label: 'GPT-5.4' },
+    { value: 'gpt-5.4-mini',  label: 'GPT-5.4 mini — hızlı' },
+    { value: 'gpt-5.4-nano',  label: 'GPT-5.4 nano — en hızlı' },
+    { value: 'gpt-5.2',       label: 'GPT-5.2' },
+    { value: 'gpt-5.1',       label: 'GPT-5.1' },
+    { value: 'gpt-5',         label: 'GPT-5' },
+    { value: 'gpt-5-mini',    label: 'GPT-5 mini — hızlı' },
+    { value: 'gpt-5-nano',    label: 'GPT-5 nano — en hızlı' },
+    { value: 'gpt-4.1',       label: 'GPT-4.1' },
+    { value: 'gpt-4.1-mini',  label: 'GPT-4.1 mini — hızlı' },
+    { value: 'gpt-4o-mini',   label: 'GPT-4o mini — hızlı' },
+    { value: 'o3',            label: 'o3 — akıl yürütme' },
   ],
   anthropic: [
-    { value: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet' },
-    { value: 'claude-3-5-haiku-20241022',  label: 'Claude 3.5 Haiku — hızlı' },
+    { value: 'claude-opus-4-6',             label: 'Claude Opus 4.6 — en güçlü' },
+    { value: 'claude-opus-4-5-20251101',    label: 'Claude Opus 4.5' },
+    { value: 'claude-sonnet-5',             label: 'Claude Sonnet 5' },
+    { value: 'claude-sonnet-4-6',           label: 'Claude Sonnet 4.6' },
+    { value: 'claude-sonnet-4-5-20250929',  label: 'Claude Sonnet 4.5' },
+    { value: 'claude-haiku-4-5-20251001',   label: 'Claude Haiku 4.5 — hızlı' },
+  ],
+  google: [
+    { value: 'gemini-3.5-flash',          label: 'Gemini 3.5 Flash' },
+    { value: 'gemini-3.1-flash-lite',     label: 'Gemini 3.1 Flash Lite — en hızlı' },
+    { value: 'gemini-3-flash-preview',    label: 'Gemini 3 Flash (Preview)' },
+    { value: 'gemini-2.5-pro',            label: 'Gemini 2.5 Pro' },
+    { value: 'gemini-2.5-flash',          label: 'Gemini 2.5 Flash — hızlı' },
+    { value: 'gemini-2.5-flash-lite',     label: 'Gemini 2.5 Flash Lite' },
   ],
 };
 
@@ -611,6 +660,7 @@ async function loadAssistantConfig() {
     $('acMaxDuration').value = d.maxDurationSeconds;
     $('acSilenceTimeout').value = d.silenceTimeoutSeconds;
     $('acStopWords').value = d.stopSpeakingNumWords;
+    initSliders();
 
     loadVoices(d.voiceId);
   } catch (err) {
@@ -700,6 +750,121 @@ $('btnSaveBehavior').addEventListener('click', () => {
     silenceTimeoutSeconds: parseInt($('acSilenceTimeout').value, 10),
     stopSpeakingNumWords: parseInt($('acStopWords').value, 10),
   }, 'statusBehavior', 'btnSaveBehavior');
+});
+
+// ─── SESLİ TEST (Vapi Web SDK — tarayıcıdan mikrofonla test araması) ───────
+// Bundler kullanmadığımız için Vapi'nin resmi script-tag yükleyicisini
+// (VapiAI/html-script-tag) kullanıyoruz — window.vapiSDK.run() kendi
+// yuvarlak arama butonunu enjekte edip Vapi'nin gerçek SDK'sını arkada yönetiyor.
+let vapiTestStarted = false;
+
+function loadVapiScriptTagSdk() {
+  return new Promise((resolve, reject) => {
+    if (window.vapiSDK) { resolve(); return; }
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/gh/VapiAI/html-script-tag@latest/dist/assets/index.js';
+    script.defer = true;
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Vapi SDK yüklenemedi (ağ/CDN erişimi kontrol edin)'));
+    document.body.appendChild(script);
+  });
+}
+
+$('btnStartVoiceTest').addEventListener('click', async () => {
+  const btn = $('btnStartVoiceTest');
+  const warn = $('voiceTestWarn');
+  const status = $('statusVoiceTest');
+  warn.classList.remove('show');
+  status.className = 'adm-field-status';
+  status.textContent = '';
+
+  if (vapiTestStarted) {
+    status.textContent = 'Test zaten aktif — sağ alt köşedeki butona bakın';
+    status.className = 'adm-field-status ok';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Yükleniyor...';
+  try {
+    const r = await fetch('/api/settings');
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    const publicKey   = j.data.vapiPublicKey?.value;
+    const assistantId = j.data.vapiAssistantId?.value;
+    if (!publicKey)   throw new Error('Önce Vapi Public Key\'inizi kaydedin (🔑 Hesap Bağlantıları sekmesi)');
+    if (!assistantId) throw new Error('Önce Vapi Assistant ID\'nizi kaydedin (🔑 Hesap Bağlantıları sekmesi)');
+
+    await loadVapiScriptTagSdk();
+    window.vapiSDK.run({
+      apiKey: publicKey,
+      assistant: assistantId,
+      config: { position: 'bottom-right', size: 'medium', theme: 'dark' },
+    });
+
+    vapiTestStarted = true;
+    btn.textContent = '🎙️ Test Aktif — Sağ Alt Köşeye Bakın';
+    status.textContent = '✓ Sağ alt köşede beliren butona tıklayıp mikrofonla konuşabilirsiniz. Kapatmak için sayfayı yenileyin.';
+    status.className = 'adm-field-status ok';
+  } catch (err) {
+    warn.textContent = '✗ ' + err.message;
+    warn.classList.add('show');
+    btn.disabled = false;
+    btn.textContent = '🎙️ Testi Başlat';
+  }
+});
+
+// ─── SES ÖNİZLEME (kendi script metniyle, ElevenLabs'ın hazır örneği değil) ─
+function updateVoicePreviewCost() {
+  const el = $('voicePreviewCost');
+  const textEl = $('voicePreviewText');
+  if (!el || !textEl) return;
+  const text = textEl.value;
+  const rate = parseFloat($('elCostPer1k').value);
+  if (!rate || !text.trim()) { el.textContent = ''; return; }
+  const cost = (text.length / 1000) * rate;
+  el.textContent = '~$' + cost.toFixed(4) + ' (' + text.length + ' karakter)';
+}
+$('voicePreviewText').addEventListener('input', updateVoicePreviewCost);
+$('elCostPer1k').addEventListener('input', updateVoicePreviewCost);
+
+$('btnPreviewVoice').addEventListener('click', async () => {
+  const btn = $('btnPreviewVoice');
+  const status = $('statusVoicePreview');
+  const audioEl = $('voicePreviewAudio');
+  const voiceId = $('acVoiceId').value;
+  const text = $('voicePreviewText').value.trim();
+  status.className = 'adm-field-status';
+  status.textContent = '';
+
+  if (!voiceId) { status.textContent = '✗ Önce bir ses seçin'; status.className = 'adm-field-status err'; return; }
+  if (!text)    { status.textContent = '✗ Önizleme metni boş olamaz'; status.className = 'adm-field-status err'; return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Oluşturuluyor...';
+  try {
+    const r = await fetch('/api/settings/voice-preview', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ voiceId, text }),
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || ('HTTP ' + r.status));
+    }
+    const blob = await r.blob();
+    audioEl.src = URL.createObjectURL(blob);
+    audioEl.style.display = 'block';
+    audioEl.play();
+    status.textContent = '✓ Hazır';
+    status.className = 'adm-field-status ok';
+  } catch (err) {
+    status.textContent = '✗ ' + err.message;
+    status.className = 'adm-field-status err';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '▶ Önizle';
+  }
 });
 
 checkSession();

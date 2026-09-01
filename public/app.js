@@ -27,11 +27,11 @@ const state = {
   sseSource: null,
   historyData: [],        // Geçmiş aramalar son fetched datası (search için)
   historySearch: '',
-  statsPeriod:  30,        // gün
 };
 const FILTER_STORAGE_KEY = 'propcall.historyFilters.v1';
 const FOLLOWUP_STORAGE_KEY = 'propcall.followupSearch.v1';
 const FOCUSED_CAMPAIGN_KEY = 'propcall.focusedCampaignId.v1';
+const PENDING_CAMPAIGN_KEY = 'propcall.pendingCampaignDraft.v1';
 
 // localStorage'dan SENKRON okunuyor — sayfa yüklenir yüklenmez, herhangi bir SSE
 // olayı veya loadCampaignState() fetch'i tamamlanmadan ÖNCE campaign.id doludur.
@@ -159,10 +159,70 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 function initCredits() {
   const btn = $('btnCreditRefresh');
-  if (btn) btn.addEventListener('click', loadCredits);
+  if (btn) btn.addEventListener('click', () => { loadCredits(); loadBalance(); });
+  const topupBtn = $('btnTopupBalance');
+  if (topupBtn) topupBtn.addEventListener('click', startTopup);
   loadCredits();
+  loadBalance();
   // 5 dakikada bir tazele
-  setInterval(loadCredits, 5 * 60 * 1000);
+  setInterval(() => { loadCredits(); loadBalance(); }, 5 * 60 * 1000);
+}
+
+// ─── JETON (TL bakiyesi) ────────────────────────────────────────────────────
+async function loadBalance() {
+  try {
+    const r = await fetch('/api/billing');
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    renderBalance(j.data.balanceTry);
+    const topupBtn = $('btnTopupBalance');
+    if (topupBtn) topupBtn.style.display = j.data.fonzipEnabled ? 'inline-block' : 'none';
+  } catch (err) {
+    const bEl = $('creditBalance');
+    if (bEl) bEl.textContent = '—';
+  }
+}
+
+// Kredi kartıyla kendi kendine jeton yükleme — tutarı sorup Fonzip'in kendi
+// (hosted) ödeme sayfasını yeni sekmede açar. Kart bilgisi hiç bize uğramaz;
+// ödeme tamamlanınca bakiye webhook üzerinden otomatik güncellenir (bkz.
+// balance-update SSE olayı).
+async function startTopup() {
+  const raw = await uiPrompt('Kredi kartıyla yüklenecek tutar (TL, en az 50):', {
+    title: 'Jeton Yükle', placeholder: 'örn. 100', value: '100',
+  });
+  if (!raw) return;
+  const amount = parseFloat(String(raw).replace(',', '.'));
+  if (!amount || !Number.isFinite(amount) || amount < 50) {
+    toast('Geçerli bir tutar girin (en az 50 TL)', 'error');
+    return;
+  }
+
+  const btn = $('btnTopupBalance');
+  if (btn) { btn.disabled = true; btn.textContent = 'Hazırlanıyor...'; }
+  try {
+    const r = await fetch('/api/billing/topup', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount }),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error || 'Yükleme başlatılamadı');
+    window.open(j.data.link, '_blank');
+    toast('Ödeme sayfası yeni sekmede açıldı — ödeme tamamlanınca bakiyeniz otomatik güncellenir', 'info');
+  } catch (err) {
+    toast('Hata: ' + err.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '+ Yükle'; }
+  }
+}
+
+function renderBalance(balanceTry) {
+  const bEl = $('creditBalance');
+  if (!bEl) return;
+  bEl.textContent = Number(balanceTry).toFixed(0) + ' TL';
+  // Eşikler: bir dakikalık ücretin (20 TL) katları — 1 dakikanın altı kritik,
+  // 5 dakikanın altı uyarı.
+  bEl.className = 'credit-val ' + creditLevelCls(balanceTry, [20, 100]);
 }
 
 async function loadCredits() {
@@ -258,6 +318,11 @@ function connectSSE() {
 
   src.addEventListener('connected', () => {
     console.log('[SSE] Bağlandı');
+    // Bağlantı yeni kurulduysa (ilk yükleme) ya da yeniden kurulduysa (örn. sunucu
+    // deploy/restart) — kopukluk sırasında kaçırılmış olabilecek campaign-contact-update
+    // olaylarını telafi etmek için güncel kampanya durumunu doğrudan sunucudan tazele.
+    // Aksi halde tablo, kaçırılan geçişler için (örn. "bekliyor" → "arıyor") eski kalır.
+    loadCampaignState();
   });
 
   src.addEventListener('call-started', e => {
@@ -343,6 +408,12 @@ function connectSSE() {
   src.addEventListener('campaign-credit-paused', e => {
     const { name, reason } = JSON.parse(e.data);
     toast('⚠️ "' + name + '" duraklatıldı: ' + reason, 'error');
+  });
+
+  // Her arama sonrası jeton bakiyesi düşünce header'daki rakamı anında güncelle.
+  src.addEventListener('balance-update', e => {
+    const { balanceTry } = JSON.parse(e.data);
+    renderBalance(balanceTry);
   });
 
   src.addEventListener('campaign-contact-update', e => {
@@ -1088,24 +1159,75 @@ function renderDrawer(call) {
 
 // ─── STATS ───────────────────────────────────────────────────────────────────
 
+// Hazır seçim çipleri artık sadece tarih inputlarını dolduruyor — gerçek filtreleme
+// state.statsPeriod gibi ayrı bir sayaç yerine doğrudan tarih/senaryo inputlarından
+// okunuyor, böylece hazır seçim ile özel aralık aynı mekanizmayı paylaşıyor.
+function applyStatsPeriodChip(period) {
+  const dateFrom = $('statsDateFrom');
+  const dateTo   = $('statsDateTo');
+  if (!dateFrom || !dateTo) return;
+  if (!period || period <= 0) { // Hepsi
+    dateFrom.value = '';
+    dateTo.value   = '';
+    return;
+  }
+  const today = new Date();
+  const from  = new Date(today);
+  from.setDate(from.getDate() - (period - 1));
+  dateTo.value   = today.toISOString().slice(0, 10);
+  dateFrom.value = from.toISOString().slice(0, 10);
+}
+
 function initStatsChips() {
   const bar = $('statsChips');
   if (!bar) return;
+  applyStatsPeriodChip(30); // varsayılan: "Son 30 gün" çipiyle eşleşen tarih aralığı
+
   bar.querySelectorAll('.chip').forEach(btn => {
     btn.addEventListener('click', () => {
       bar.querySelectorAll('.chip').forEach(b => b.classList.toggle('active', b === btn));
-      state.statsPeriod = parseInt(btn.dataset.period, 10);
+      applyStatsPeriodChip(parseInt(btn.dataset.period, 10));
       loadStats();
     });
   });
   const refresh = $('statsRefresh');
   if (refresh) refresh.addEventListener('click', loadStats);
+
+  const deactivateChips = () => bar.querySelectorAll('.chip').forEach(b => b.classList.remove('active'));
+  const dateFrom = $('statsDateFrom');
+  const dateTo   = $('statsDateTo');
+  const scenarioSel = $('statsScenarioFilter');
+  [dateFrom, dateTo, scenarioSel].forEach(el => {
+    if (!el) return;
+    el.addEventListener('change', () => {
+      if (el !== scenarioSel) deactivateChips(); // özel tarih girilince hazır seçim aktifliği kalkar
+      loadStats();
+    });
+  });
+
+  const clearBtn = $('btnStatsClearFilter');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      if (dateFrom) dateFrom.value = '';
+      if (dateTo)   dateTo.value   = '';
+      if (scenarioSel) scenarioSel.value = '';
+      bar.querySelectorAll('.chip').forEach(b => b.classList.toggle('active', b.dataset.period === '0'));
+      loadStats();
+    });
+  }
 }
 
 async function loadStats() {
   try {
-    const qs = state.statsPeriod > 0 ? '?period=' + state.statsPeriod : '';
-    const resp = await fetch('/api/stats' + qs);
+    const params = new URLSearchParams();
+    const dateFrom   = $('statsDateFrom')?.value;
+    const dateTo     = $('statsDateTo')?.value;
+    const scenarioId = $('statsScenarioFilter')?.value;
+    if (dateFrom)   params.set('dateFrom', dateFrom);
+    if (dateTo)     params.set('dateTo', dateTo);
+    if (scenarioId) params.set('scenarioId', scenarioId);
+    const qs = params.toString();
+    const resp = await fetch('/api/stats' + (qs ? '?' + qs : ''));
     const json = await resp.json();
     if (!json.success) throw new Error(json.error);
     renderStats(json.data);
@@ -1141,11 +1263,21 @@ function renderStats(d) {
     ? '$' + (d.totalCost / d.randevuCount).toFixed(2) + ' / randevu'
     : 'henüz randevu yok';
 
-  // Günlük chart başlığı dönem'e göre
+  // Günlük chart başlığı seçili tarih aralığına göre
   const dailyTitle = $('chartDailyTitle');
   if (dailyTitle) {
+    const df = $('statsDateFrom')?.value;
+    const dt = $('statsDateTo')?.value;
     const labelMap = { 1: 'Bugün', 7: 'Son 7 Gün', 30: 'Son 30 Gün' };
-    dailyTitle.textContent = 'Günlük Arama Sayısı — ' + (labelMap[state.statsPeriod] || 'Tümü');
+    const short = iso => iso.slice(8, 10) + '.' + iso.slice(5, 7);
+    let label = 'Tüm Zamanlar';
+    if (df && dt) {
+      const days = Math.round((new Date(dt) - new Date(df)) / 86400000) + 1;
+      label = labelMap[days] || (short(df) + ' – ' + short(dt));
+    } else if (df || dt) {
+      label = (df ? short(df) + ' sonrası' : short(dt) + ' öncesi');
+    }
+    dailyTitle.textContent = 'Günlük Arama Sayısı — ' + label;
   }
 
   const labels30      = d.dailyCalls.map(x => x.date.slice(5));
@@ -1513,7 +1645,8 @@ function initFollowupToolbar() {
   const deleteBtn = $('btnDeleteOldCalls');
   if (deleteBtn) {
     deleteBtn.addEventListener('click', async () => {
-      if (!confirm('Bugün öncesi tüm arama kayıtları silinecek. Bu işlem geri alınamaz. Devam edilsin mi?')) return;
+      const sureDelete = await uiConfirm('Bugün öncesi tüm arama kayıtları silinecek. Bu işlem geri alınamaz.', { title: 'Eski Kayıtları Sil', confirmLabel: 'Evet, sil', danger: true });
+      if (!sureDelete) return;
       deleteBtn.disabled = true;
       deleteBtn.textContent = '⏳ Siliniyor...';
       try {
@@ -1922,8 +2055,63 @@ function initCampaign() {
   $('btnCampaignStop').addEventListener('click', campaignStop);
   $('campaignConcurrency').addEventListener('change', function() {
     campaign.maxConcurrent = parseInt(this.value, 10);
+    savePendingCampaignDraft();
   });
+  const nameInput = $('campaignName');
+  if (nameInput) nameInput.addEventListener('input', savePendingCampaignDraft);
   loadCampaignState();
+}
+
+// "Başlat"a basılmadan önceki (henüz sunucuya kaydedilmemiş) listeyi tarayıcıda
+// saklar — Excel yükleyip sayfa yenilenirse (kaza/refleks) liste kaybolmasın diye.
+// Kampanya gerçekten sunucuda başlatılınca (bkz. campaignStart) temizlenir.
+function savePendingCampaignDraft() {
+  try {
+    if (!campaign.contacts.length) { localStorage.removeItem(PENDING_CAMPAIGN_KEY); return; }
+    const nameInput    = $('campaignName');
+    const scenarioSel  = $('campaignScenario');
+    localStorage.setItem(PENDING_CAMPAIGN_KEY, JSON.stringify({
+      contacts:      campaign.contacts,
+      name:          nameInput   ? nameInput.value   : '',
+      maxConcurrent: campaign.maxConcurrent,
+      scenarioId:    scenarioSel ? scenarioSel.value : '',
+      savedAt:       Date.now(),
+    }));
+  } catch(_) {}
+}
+
+function loadPendingCampaignDraft() {
+  try {
+    const raw = localStorage.getItem(PENDING_CAMPAIGN_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch(_) { return null; }
+}
+
+function clearPendingCampaignDraft() {
+  try { localStorage.removeItem(PENDING_CAMPAIGN_KEY); } catch(_) {}
+}
+
+// Sunucuda odaklanacak aktif/kayıtlı bir kampanya yoksa (bkz. loadCampaignState),
+// tarayıcıda bekleyen bir taslak var mı diye bakar ve varsa geri yükler.
+function restorePendingCampaignDraftIfAny() {
+  const draft = loadPendingCampaignDraft();
+  if (!draft || !draft.contacts || !draft.contacts.length) return;
+
+  campaign.contacts      = draft.contacts;
+  campaign.maxConcurrent = draft.maxConcurrent || 1;
+  campaign.running       = false;
+  campaign.paused        = false;
+
+  const nameInput = $('campaignName');
+  if (nameInput && draft.name) nameInput.value = draft.name;
+  const sel = $('campaignConcurrency');
+  if (sel) sel.value = String(campaign.maxConcurrent);
+  const scenarioSel = $('campaignScenario');
+  if (scenarioSel && draft.scenarioId) scenarioSel.value = draft.scenarioId;
+
+  renderCampaignTable();
+  $('btnCampaignStart').disabled = false;
+  toast('Kaydedilmemiş kampanya listesi geri yüklendi (' + campaign.contacts.length + ' kişi)', 'info');
 }
 
 function onFileSelected(e) {
@@ -2043,6 +2231,7 @@ function parseContacts(rows) {
   $('btnCampaignStart').disabled = false;
   $('campaignProgressBar').style.display = 'none';
   renderCampaignTable();
+  savePendingCampaignDraft();
 }
 
 function renderImportSummary(loadedCount, skipped) {
@@ -2103,6 +2292,7 @@ async function loadCampaignState() {
 
     if (!json.success || !json.data || !json.data.contacts || !json.data.contacts.length) {
       setFocusedCampaign(null);
+      restorePendingCampaignDraftIfAny();
       return;
     }
 
@@ -2341,6 +2531,7 @@ async function campaignStart() {
       campaign.running = true;
       campaign.paused  = false;
       syncCampaignButtons();
+      clearPendingCampaignDraft();
       toast('Kampanya bu ayarlarla devam ediyor — mevcut sonuçlar korundu', 'success');
     } catch (err) {
       toast('Kampanya devam ettirilemedi: ' + err.message, 'error');
@@ -2377,6 +2568,7 @@ async function campaignStart() {
     setFocusedCampaign((json.data && json.data.id) || null);
     $('campaignProgressBar').style.display = 'block';
     syncCampaignButtons();
+    clearPendingCampaignDraft();
     toast('Kampanya sunucuda başlatıldı — tarayıcıyı kapatabilirsiniz', 'success');
   } catch(err) {
     toast('Kampanya başlatılamadı: ' + err.message, 'error');
@@ -2573,13 +2765,18 @@ function renderCampaignDetail(data) {
     '</div>'
   ).join('');
 
+  // Ret nedenleri tam cümle olabiliyor — 80px'lik yan etikete sığdırıp kesmek yerine
+  // (eskiden 14 karaktere kesiliyordu, sadece hover'da tam görünüyordu) metni barın
+  // ÜSTÜNE koyup satır kaydırmasına izin veriyoruz, tam metin her zaman görünür.
   const retMax = Math.max(1, ...(s.retNedeniDistribution || []).map(x => x.count));
   const retHtml = (s.retNedeniDistribution || []).length
     ? s.retNedeniDistribution.map(x =>
-        '<div class="cd-bar-row">' +
-          '<span class="cd-bar-label" title="' + esc(x.neden) + '">' + esc(x.neden.slice(0, 14)) + '</span>' +
-          '<div class="cd-bar-track"><div class="cd-bar-fill" style="width:' + (x.count / retMax * 100) + '%;background:#FF5370"></div></div>' +
-          '<span class="cd-bar-count">' + x.count + '</span>' +
+        '<div class="cd-bar-row-stacked">' +
+          '<div class="cd-bar-label-full">' + esc(x.neden) + '</div>' +
+          '<div class="cd-bar-row">' +
+            '<div class="cd-bar-track"><div class="cd-bar-fill" style="width:' + (x.count / retMax * 100) + '%;background:#FF5370"></div></div>' +
+            '<span class="cd-bar-count">' + x.count + '</span>' +
+          '</div>' +
         '</div>'
       ).join('')
     : '<div class="fu-empty">Ret nedeni kaydı yok</div>';
@@ -2591,6 +2788,58 @@ function renderCampaignDetail(data) {
     '</span>'
   ).join('') || '<div class="fu-empty">Kayıt yok</div>';
 
+  // Saatlik performans — sadece o kampanyada gerçekten arama yapılmış saatler
+  // gösteriliyor (24 satırlık boş bir liste yerine), kronolojik sırada.
+  const hourlyData = (s.hourlyPerformance || []).filter(h => h.calls > 0);
+  const hourlyMax  = Math.max(1, ...hourlyData.map(h => h.calls));
+  const hourlyHtml = hourlyData.length
+    ? hourlyData.map(h =>
+        '<div class="cd-bar-row">' +
+          '<span class="cd-bar-label">' + String(h.hour).padStart(2, '0') + ':00</span>' +
+          '<div class="cd-bar-track"><div class="cd-bar-fill" style="width:' + (h.calls / hourlyMax * 100) + '%;background:#4A9EFF"></div></div>' +
+          '<span class="cd-bar-count">' + h.calls + (h.randevu ? ' · ' + h.randevu + '📅' : '') + '</span>' +
+        '</div>'
+      ).join('')
+    : '<div class="fu-empty">Saat verisi yok</div>';
+
+  const regionHtml = (s.regionPerformance || []).length
+    ? s.regionPerformance.map(r =>
+        '<div class="cd-bar-row-stacked">' +
+          '<div class="cd-bar-label-full">' + esc(r.region) + '</div>' +
+          '<div class="cd-bar-row">' +
+            '<div class="cd-bar-track"><div class="cd-bar-fill" style="width:' + (r.calls / Math.max(1, ...s.regionPerformance.map(x => x.calls)) * 100) + '%;background:#00C896"></div></div>' +
+            '<span class="cd-bar-count">' + r.calls + (r.randevu ? ' (%' + r.randevuRate + ')' : '') + '</span>' +
+          '</div>' +
+        '</div>'
+      ).join('')
+    : '<div class="fu-empty">Bölge bilgisi girilmemiş</div>';
+
+  const mulkHtml = (s.mulkTipiDistribution || []).length
+    ? s.mulkTipiDistribution.map(x =>
+        '<div class="cd-bar-row-stacked">' +
+          '<div class="cd-bar-label-full">' + esc(x.tip) + '</div>' +
+          '<div class="cd-bar-row">' +
+            '<div class="cd-bar-track"><div class="cd-bar-fill" style="width:' + (x.count / Math.max(1, ...s.mulkTipiDistribution.map(y => y.count)) * 100) + '%;background:#B464FF"></div></div>' +
+            '<span class="cd-bar-count">' + x.count + '</span>' +
+          '</div>' +
+        '</div>'
+      ).join('')
+    : '<div class="fu-empty">Mülk tipi bilgisi yok</div>';
+
+  const retryHtml = s.retryEffect
+    ? '<div class="cd-kpis" style="grid-template-columns:repeat(2,1fr)">' +
+        '<div class="cd-kpi hl">' +
+          '<div class="cd-kpi-label">Birden Fazla Arandı (' + s.retryEffect.multiAttemptContacts + ' kişi)</div>' +
+          '<div class="cd-kpi-value">%' + s.retryEffect.multiAttemptSuccessRate + '</div>' +
+        '</div>' +
+        '<div class="cd-kpi">' +
+          '<div class="cd-kpi-label">Tek Seferde Arandı</div>' +
+          '<div class="cd-kpi-value">%' + s.retryEffect.singleAttemptSuccessRate + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="adm-field-hint" style="margin-top:8px">Yüzdeler "tamamlandı" durumuna ulaşma oranı — tekrar aramanın gerçekten işe yarayıp yaramadığını gösterir.</div>'
+    : '';
+
   $('cdBody').innerHTML =
     kpiHtml +
     '<div class="drawer-section">' +
@@ -2601,6 +2850,19 @@ function renderCampaignDetail(data) {
       '<div class="cd-section-title">En Sık Ret Nedenleri</div>' +
       retHtml +
     '</div>' +
+    '<div class="drawer-section">' +
+      '<div class="cd-section-title">Saatlik Performans</div>' +
+      hourlyHtml +
+    '</div>' +
+    '<div class="drawer-section">' +
+      '<div class="cd-section-title">Bölge Bazlı Performans</div>' +
+      regionHtml +
+    '</div>' +
+    '<div class="drawer-section">' +
+      '<div class="cd-section-title">Mülk Tipi Dağılımı</div>' +
+      mulkHtml +
+    '</div>' +
+    (retryHtml ? '<div class="drawer-section"><div class="cd-section-title">Tekrar Arama Etkisi</div>' + retryHtml + '</div>' : '') +
     '<div class="drawer-section">' +
       '<div class="cd-section-title">Durum Dağılımı</div>' +
       '<div>' + statusHtml + '</div>' +
@@ -2810,12 +3072,12 @@ async function loadVapiLivePrompt() {
 async function saveVapiLivePrompt() {
   const prompt = $('vlpPrompt').value.trim();
   if (!prompt) { toast('Prompt boş olamaz', 'error'); return; }
-  const sure = confirm(
+  const sure = await uiConfirm(
     'Bu, Vapi\'deki PAYLAŞILAN varsayılan promptu kalıcı olarak DEĞİŞTİRECEK.\n\n' +
     'Senaryo seçilmeden yapılan TÜM aramalar bundan sonra bu yeni promptu kullanacak — ' +
     'mevcut/eski prompt geri getirilemez şekilde kaybolacak.\n\n' +
-    'Sadece yeni bir senaryo denemek istiyorsanız bunun yerine "Yerel Senaryolar" bölümünü kullanın.\n\n' +
-    'Yine de devam etmek istiyor musunuz?'
+    'Sadece yeni bir senaryo denemek istiyorsanız bunun yerine "Yerel Senaryolar" bölümünü kullanın.',
+    { title: 'Vapi Paylaşılan Promptunu Değiştir', confirmLabel: 'Evet, kalıcı olarak değiştir', danger: true },
   );
   if (!sure) return;
   const btn = $('btnVlpSave');
@@ -2874,6 +3136,21 @@ function refreshScenarioSelects() {
       fsel.appendChild(opt);
     });
     fsel.value = fcur;
+  }
+
+  // İstatistikler filter selector
+  const ssel = $('statsScenarioFilter');
+  if (ssel) {
+    const scur = ssel.value;
+    ssel.innerHTML = '<option value="">Tümü</option><option value="__none__">— Varsayılan (Senaryosuz) —</option>';
+    scenariosCache.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      opt.textContent = s.name;
+      if (s.id === scur) opt.selected = true;
+      ssel.appendChild(opt);
+    });
+    ssel.value = scur;
   }
 
   // Campaign (toplu arama) selector
@@ -2979,7 +3256,8 @@ async function saveScenario() {
 async function deleteScenarioUI(id) {
   const s = scenariosCache.find(x => x.id === id);
   if (!s) return;
-  if (!confirm('"' + s.name + '" silinsin mi?')) return;
+  const sureDeleteScenario = await uiConfirm('"' + s.name + '" senaryosu silinsin mi?', { title: 'Senaryoyu Sil', confirmLabel: 'Evet, sil', danger: true });
+  if (!sureDeleteScenario) return;
   try {
     const r = await fetch('/api/scenarios/' + id, { method: 'DELETE' });
     const j = await r.json();

@@ -48,6 +48,9 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--tx);font-siz
 .credit-dashboard-link:hover{text-decoration:underline}
 .credit-refresh{width:22px;height:22px;background:transparent;border:none;color:var(--txm);border-radius:50%;cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center;transition:all .2s}
 .credit-refresh:hover{color:var(--primary);transform:rotate(180deg)}
+.credit-topup-btn{margin-top:2px;background:var(--primary);color:#000;border:none;border-radius:8px;padding:1px 7px;font-size:9px;font-weight:700;cursor:pointer;white-space:nowrap;transition:opacity .15s}
+.credit-topup-btn:hover:not(:disabled){opacity:.85}
+.credit-topup-btn:disabled{opacity:.5;cursor:not-allowed}
 
 /* ── LEFT PANEL ── */
 .left-panel{background:var(--s1);border-right:1px solid var(--border);overflow-y:auto;display:flex;flex-direction:column}
@@ -725,6 +728,12 @@ mark.tr-highlight{background:rgba(0,200,150,.3);color:var(--tx);border-radius:2p
 .cd-bar-fill{height:100%;border-radius:4px;background:var(--primary)}
 .cd-bar-count{width:36px;text-align:right;flex-shrink:0;font-family:'JetBrains Mono',monospace;color:var(--txm)}
 
+/* Ret nedeni gibi tam cümle olabilen etiketler için — yan tarafa sığdırıp kesmek
+   yerine üstte tam satır, altında bar+sayı */
+.cd-bar-row-stacked{margin-bottom:10px}
+.cd-bar-row-stacked .cd-bar-row{margin-bottom:0}
+.cd-bar-label-full{font-size:12px;color:var(--tx2);margin-bottom:4px;line-height:1.4}
+
 /* ── CSV İÇE AKTARMA SONUÇ RAPORU ── */
 .import-summary{margin:0 16px 12px;background:var(--s1);border:1px solid var(--border);border-radius:var(--rs);padding:10px 14px}
 .import-summary.has-issues{border-color:rgba(255,159,64,.35)}
@@ -756,4 +765,147 @@ mark.tr-highlight{background:rgba(0,200,150,.3);color:var(--tx);border-radius:2p
 .pg-mode-btn{flex:1;padding:8px 12px;background:none;border:none;border-radius:7px;color:var(--tx2);font-family:'Sora',sans-serif;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
 .pg-mode-btn:hover{color:var(--tx)}
 .pg-mode-btn.active{background:var(--primary);color:#000}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   SHARED SHELL — login / settings / admin pages
+   (single source of truth — do not redeclare .adm-* in a page's own <style>)
+   ══════════════════════════════════════════════════════════════════════════ */
+.adm-wrap{max-width:600px;margin:0 auto}
+.adm-wrap.wide{max-width:820px}
+.adm-header{text-align:center;margin-bottom:28px}
+.adm-logo{width:52px;height:52px;background:var(--primary);border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:24px;margin:0 auto 12px}
+.adm-title{font-size:20px;font-weight:700}
+.adm-sub{font-size:13px;color:var(--tx2);margin-top:4px}
+.adm-card{background:var(--s1);border:1px solid var(--border);border-radius:14px;padding:26px;margin-bottom:16px}
+.adm-card > summary.adm-section-title{cursor:pointer;user-select:none;list-style:none}
+.adm-card > summary.adm-section-title::-webkit-details-marker{display:none}
+.adm-card > summary.adm-section-title::after{content:'▸';margin-left:auto;color:var(--txm);font-size:11px;transition:transform .15s}
+.adm-card[open] > summary.adm-section-title::after{transform:rotate(90deg)}
+.adm-card > summary.adm-section-title ~ *{margin-top:14px}
+
+.adm-topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;gap:12px;flex-wrap:wrap}
+.adm-topbar-links{display:flex;gap:8px}
+.adm-logout,.adm-back{background:transparent;border:1px solid var(--border);color:var(--tx2);border-radius:8px;padding:7px 14px;font-size:12px;cursor:pointer;transition:all .15s;text-decoration:none;display:inline-flex;align-items:center}
+.adm-logout:hover{border-color:var(--red);color:var(--red)}
+.adm-back:hover{border-color:var(--primary);color:var(--primary)}
+.adm-section-title{font-size:14px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+
+.adm-field{margin-bottom:18px}
+.adm-field:last-child{margin-bottom:0}
+.adm-label-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.adm-label{font-size:13px;font-weight:600;color:var(--tx)}
+.adm-source{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px}
+.adm-source.db{background:rgba(0,200,150,.15);color:var(--primary)}
+.adm-source.none{background:rgba(255,83,112,.15);color:var(--red)}
+
+.adm-input-row{display:flex;gap:8px}
+.adm-input-row input{flex:1;font-size:13px;padding:9px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;color:var(--tx);font-family:'JetBrains Mono',monospace;outline:none;transition:border-color .15s}
+.adm-input-row input:focus{border-color:var(--border-a)}
+.adm-save-btn{background:var(--s2);border:1px solid var(--border);color:var(--tx2);border-radius:8px;padding:9px 14px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap}
+.adm-save-btn:hover:not(:disabled){border-color:var(--primary);color:var(--primary)}
+.adm-save-btn:disabled{opacity:.4;cursor:not-allowed}
+
+.adm-field-status{margin-top:6px;font-size:12px;display:none}
+.adm-field-status.ok{color:var(--primary);display:block}
+.adm-field-status.err{color:var(--red);display:block}
+.adm-field-hint{font-size:12px;color:var(--txm);margin-top:4px;line-height:1.5}
+
+.adm-row{display:flex;gap:12px;flex-wrap:wrap}
+.adm-col{flex:1;min-width:140px}
+.adm-mini-label{display:block;font-size:11px;font-weight:600;color:var(--tx2);margin-bottom:5px}
+#settingsView select,#settingsView textarea,#settingsView input[type="text"],#settingsView input[type="number"]{
+  width:100%;font-size:13px;padding:9px 12px;background:var(--s2);border:1px solid var(--border);
+  border-radius:8px;color:var(--tx);font-family:'Sora',sans-serif;outline:none;transition:border-color .15s;
+}
+#settingsView select:focus,#settingsView textarea:focus,#settingsView input:focus{border-color:var(--border-a)}
+#settingsView .form-group{margin-bottom:12px}
+#settingsView .form-group:last-of-type{margin-bottom:0}
+.adm-warn{font-size:12px;color:var(--red);margin-bottom:10px;display:none}
+.adm-warn.show{display:block}
+
+.adm-tabs{display:flex;gap:6px;margin-bottom:20px;border-bottom:1px solid var(--border);overflow-x:auto}
+.adm-tab{padding:10px 16px;background:none;border:none;border-bottom:2px solid transparent;color:var(--tx2);font-family:'Sora',sans-serif;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;transition:all .15s;display:flex;align-items:center;gap:6px}
+.adm-tab:hover{color:var(--tx)}
+.adm-tab.active{color:var(--primary);border-bottom-color:var(--primary)}
+.adm-tab-panel{display:none}
+.adm-tab-panel.active{display:block}
+
+/* admin.html — create-user form + users table */
+.adm-form-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;align-items:flex-end}
+.adm-form-field{display:flex;flex-direction:column;gap:5px;flex:1;min-width:150px}
+.adm-form-row input{font-size:13px;padding:9px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;color:var(--tx);font-family:'Sora',sans-serif;outline:none;width:100%}
+.adm-form-row input:focus{border-color:var(--border-a)}
+.adm-btn{background:var(--primary);color:#000;border:none;border-radius:8px;padding:9px 18px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;transition:opacity .15s}
+.adm-btn:hover:not(:disabled){opacity:.85}
+.adm-btn:disabled{opacity:.4;cursor:not-allowed}
+.adm-form-err{font-size:12px;color:var(--red);display:none;margin-bottom:10px}
+.adm-form-err.show{display:block}
+.adm-form-ok{font-size:12px;color:var(--primary);display:none;margin-bottom:10px}
+.adm-form-ok.show{display:block}
+.adm-form-hint{font-size:12px;color:var(--txm);line-height:1.5}
+
+table.adm-table{width:100%;border-collapse:collapse;font-size:13px}
+table.adm-table th{text-align:left;font-size:11px;color:var(--txm);text-transform:uppercase;letter-spacing:.4px;padding:0 10px 8px;font-weight:600}
+table.adm-table td{padding:10px;border-top:1px solid var(--border);vertical-align:middle}
+.adm-role-tag{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:700;text-transform:uppercase}
+.adm-role-tag.admin{background:rgba(0,200,150,.15);color:var(--primary)}
+.adm-role-tag.agent{background:rgba(74,158,255,.15);color:var(--blue)}
+.adm-status-tag{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:700}
+.adm-status-tag.active{background:rgba(0,200,150,.15);color:var(--primary)}
+.adm-status-tag.inactive{background:rgba(255,83,112,.15);color:var(--red)}
+.adm-row-actions{display:flex;gap:6px;flex-wrap:wrap}
+.adm-mini-btn{background:transparent;border:1px solid var(--border);color:var(--tx2);border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;transition:all .15s}
+.adm-mini-btn:hover{border-color:var(--border-a);color:var(--tx)}
+.adm-mini-btn.danger:hover{border-color:var(--red);color:var(--red)}
+.adm-table-empty{padding:24px;text-align:center;color:var(--txm);font-size:13px}
+.adm-balance{font-family:'JetBrains Mono',monospace}
+
+/* login page — reuses .adm-header/.adm-logo/.adm-title/.adm-sub/.adm-card */
+.adm-form input[type="email"],.adm-form input[type="password"],.adm-form input[type="text"]{
+  width:100%;font-size:14px;padding:11px 14px;background:var(--s2);border:1px solid var(--border);
+  border-radius:8px;color:var(--tx);font-family:'Sora',sans-serif;outline:none;transition:border-color .15s;margin-bottom:12px;
+}
+.adm-form input:focus{border-color:var(--border-a)}
+.adm-btn-block{width:100%;background:var(--primary);color:#000;border:none;border-radius:8px;padding:11px 20px;font-size:14px;font-weight:700;cursor:pointer;transition:opacity .15s;font-family:'Sora',sans-serif}
+.adm-btn-block:hover:not(:disabled){opacity:.85}
+.adm-btn-block:disabled{opacity:.4;cursor:not-allowed}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   SLIDER FIELD — <input type="range" data-slider> + live value readout
+   ══════════════════════════════════════════════════════════════════════════ */
+.field-slider-row{display:flex;align-items:center;gap:12px}
+.field-slider-row input[type="range"]{
+  flex:1;-webkit-appearance:none;appearance:none;height:4px;border-radius:2px;
+  background:var(--s3);outline:none;cursor:pointer;margin:8px 0;
+}
+.field-slider-row input[type="range"]::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;width:16px;height:16px;border-radius:50%;
+  background:var(--primary);cursor:pointer;border:2px solid var(--s1);box-shadow:0 1px 4px rgba(0,0,0,.25);
+  transition:transform .15s;
+}
+.field-slider-row input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.15)}
+.field-slider-row input[type="range"]::-moz-range-thumb{
+  width:16px;height:16px;border-radius:50%;background:var(--primary);cursor:pointer;
+  border:2px solid var(--s1);box-shadow:0 1px 4px rgba(0,0,0,.25);
+}
+.field-slider-row input[type="range"]::-moz-range-track{height:4px;border-radius:2px;background:var(--s3)}
+.field-slider-value{
+  min-width:56px;text-align:center;font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;
+  color:var(--primary);background:var(--primary-dim);border-radius:6px;padding:5px 8px;flex-shrink:0;
+}
+.field-slider-scale{display:flex;justify-content:space-between;font-size:10px;color:var(--txm);margin-top:2px}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MINI MODAL — themed confirm()/prompt() replacement (see ui-kit.js)
+   ══════════════════════════════════════════════════════════════════════════ */
+.modal.modal-sm{width:420px}
+.modal-message{font-size:13px;color:var(--tx2);line-height:1.6;white-space:pre-line}
+.mini-form-group input{width:100%;font-size:13px;padding:9px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;color:var(--tx);font-family:'Sora',sans-serif;outline:none}
+.mini-form-group input:focus{border-color:var(--border-a)}
+.modal-actions{display:flex;justify-content:flex-end;gap:8px;padding-top:4px}
+.btn-modal-cancel{background:transparent;border:1px solid var(--border);color:var(--tx2);border-radius:8px;padding:9px 16px;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
+.btn-modal-cancel:hover{border-color:var(--tx2);color:var(--tx)}
+.btn-modal-confirm{background:var(--primary);color:#000;border:none;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer;transition:opacity .15s}
+.btn-modal-confirm:hover{opacity:.85}
+.btn-modal-confirm.danger{background:var(--red);color:#fff}
 #pgRawText{font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.6}
