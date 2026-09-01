@@ -727,7 +727,7 @@
 var APP_TOUR_STEPS = [
   {
     title: '👋 PropCall AI\'a Hoş Geldiniz',
-    body: 'Size uygulamayı hızlıca tanıtalım — 8 kısa adım, istediğiniz an "Turu Atla" diyebilirsiniz. Sağ üstteki <b>?</b> ikonuyla bu turu istediğiniz zaman tekrar açabilirsiniz.',
+    body: 'Size uygulamayı hızlıca tanıtalım — kısa bir tur, istediğiniz an "Turu Atla" diyebilirsiniz. Sağ üstteki <b>?</b> ikonuyla bu turu istediğiniz zaman tekrar açabilirsiniz.',
   },
   {
     target: '#tourCustomerForm',
@@ -740,37 +740,65 @@ var APP_TOUR_STEPS = [
     title: '2. Senaryo Seçimi',
     body: 'Konuşma senaryosu (script) seçebilirsiniz — boş bırakırsanız varsayılan senaryo kullanılır. Senaryoları ⚙ ikonundan yönetebilirsiniz.',
     placement: 'right',
+    onBefore: function () { if (typeof closeScenarioModal === 'function') closeScenarioModal(); },
+  },
+  {
+    target: '[data-promptgen-target="scenarioPrompt"]',
+    title: '3. AI ile Senaryo Oluşturma',
+    body: 'Kendi konuşma scriptinizi yazmak zorunda değilsiniz — <b>✨ AI ile Oluştur</b> butonuna basıp şirket adı, aramanın amacı ve tonu gibi birkaç soruyu cevaplayın, Claude sizin için hazır bir prompt yazsın. Elinizde hazır bir metin varsa onu da yapıştırıp AI\'a düzenli bir yapıya oturtabilirsiniz.',
+    placement: 'left',
+    onBefore: function () {
+      if (typeof openScenarioModal === 'function') openScenarioModal();
+      if (typeof showNewScenarioForm === 'function') showNewScenarioForm();
+    },
   },
   {
     target: '#btnStartCall',
-    title: '3. Aramayı Başlatın',
+    title: '4. Aramayı Başlatın',
     body: 'Bilgileri girip bu butona bastığınızda sistem otomatik olarak arar. Konuşma buradaki ekranda canlı olarak akar, siz bir şey yapmanıza gerek kalmaz.',
     placement: 'right',
-    onBefore: function () { if (typeof switchTab === 'function') switchTab('live'); },
+    onBefore: function () {
+      if (typeof closeScenarioModal === 'function') closeScenarioModal();
+      if (typeof switchTab === 'function') switchTab('live');
+    },
   },
   {
     target: '.tab-bar',
-    title: '4. Üst Sekmeler',
-    body: '<b>Takip</b>: randevu almanız gereken kişiler · <b>Geçmiş Aramalar</b>: tüm arama kayıtlarınız · <b>İstatistikler</b>: performans grafikleri · <b>Toplu Arama</b>: Excel/CSV ile yüzlerce kişiyi otomatik arama · <b>Kampanya Geçmişi</b>: geçmiş toplu aramalarınız.',
+    title: '5. Üst Sekmeler',
+    body: 'Aramalarınızı burada farklı görünümlerde takip edersiniz — şimdi <b>Takip</b> ve <b>İstatistikler</b> sekmelerine birlikte bakalım.',
     placement: 'bottom',
   },
   {
+    target: '.followup-toolbar',
+    title: '6. Takip',
+    body: 'Henüz randevu alamadığınız ama tekrar aranması gereken kişiler burada listelenir — kimi ne zaman tekrar arayacağınızı buradan takip edersiniz.',
+    placement: 'bottom',
+    onBefore: function () { if (typeof switchTab === 'function') switchTab('followup'); },
+  },
+  {
+    target: '.stat-cards',
+    title: '7. İstatistikler',
+    body: 'Toplam arama, cevap oranı, randevu sayısı ve maliyet gibi performans özetiniz burada. Aşağıda tarih aralığına göre grafikler ve senaryo/kaynak bazında karşılaştırmalar da var.',
+    placement: 'bottom',
+    onBefore: function () { if (typeof switchTab === 'function') switchTab('stats'); },
+  },
+  {
     target: '#campaignUploadArea',
-    title: '5. Toplu Arama',
+    title: '8. Toplu Arama',
     body: 'Excel veya CSV dosyası yükleyip bir listedeki herkesi otomatik olarak sırayla aratabilirsiniz — siz başka işlerinizle ilgilenirken sistem arka planda çalışmaya devam eder.',
     placement: 'bottom',
     onBefore: function () { if (typeof switchTab === 'function') switchTab('campaign'); },
   },
   {
     target: '#creditsWidget',
-    title: '6. Jeton Bakiyeniz',
+    title: '9. Jeton Bakiyeniz',
     body: 'Her tamamlanan arama buradan jeton (TL) düşer. Bakiyeniz azaldığında "+ Yükle" butonuyla kredi kartınızla anında yükleyebilirsiniz.',
     placement: 'bottom',
     onBefore: function () { if (typeof switchTab === 'function') switchTab('live'); },
   },
   {
     target: '#linkSettings',
-    title: '7. Ayarlarım',
+    title: '10. Ayarlarım',
     body: 'Ses, model ve arama kurallarınızı buradan özelleştirebilirsiniz. İlk kullanımda telefon numaranızı buradan seçmeniz gerekir.',
     placement: 'bottom',
   },
@@ -780,15 +808,19 @@ var APP_TOUR_STEPS = [
   },
 ];
 
+// Tur ortada atlanır/bitirilirse, AI-senaryo adımı için açılmış olabilecek
+// senaryo modal'ı açık kalmasın diye kapatılır.
+function tourCleanup() { if (typeof closeScenarioModal === 'function') closeScenarioModal(); }
+
 document.addEventListener('DOMContentLoaded', function () {
   var helpBtn = document.getElementById('btnHelpTour');
-  if (helpBtn) helpBtn.addEventListener('click', function () { startTour(APP_TOUR_STEPS, { force: true }); });
+  if (helpBtn) helpBtn.addEventListener('click', function () { startTour(APP_TOUR_STEPS, { force: true, onEnd: tourCleanup }); });
 
   // İlk giriş — oturum doğrulandıktan sonra kısa bir gecikmeyle otomatik başlat
   // (checkSession/loadInitialData'nın DOM'u doldurmasına zaman tanımak için).
   fetch('/api/auth/session').then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
     if (j && j.success) {
-      setTimeout(function () { startTour(APP_TOUR_STEPS, { storageKey: 'propcall_tour_app_v1' }); }, 900);
+      setTimeout(function () { startTour(APP_TOUR_STEPS, { storageKey: 'propcall_tour_app_v1', onEnd: tourCleanup }); }, 900);
     }
   }).catch(function () {});
 });

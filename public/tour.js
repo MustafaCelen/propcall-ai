@@ -102,11 +102,15 @@
   function end() {
     if (!state) return;
     if (state.storageKey) localStorage.setItem(state.storageKey, '1');
+    var onEnd = state.onEnd;
     state.overlay.remove();
     state.popup.remove();
     document.removeEventListener('keydown', onKey);
     window.removeEventListener('resize', onResize);
     state = null;
+    // Bir adım (örn. AI ile senaryo oluşturma) gösterim için bir modal açtıysa,
+    // tur ORTADA atlanırsa/bitirilirse bile o modal açık kalmasın diye çağrılır.
+    if (typeof onEnd === 'function') { try { onEnd(); } catch (e) {} }
   }
   function onKey(e) {
     if (!state) return;
@@ -123,7 +127,7 @@
     if (state) end();
     const overlay = buildOverlay();
     const popup = buildPopup();
-    state = { steps: steps, idx: 0, overlay: overlay, popup: popup, storageKey: opts.storageKey };
+    state = { steps: steps, idx: 0, overlay: overlay, popup: popup, storageKey: opts.storageKey, onEnd: opts.onEnd };
     document.addEventListener('keydown', onKey);
     window.addEventListener('resize', onResize);
     render();
