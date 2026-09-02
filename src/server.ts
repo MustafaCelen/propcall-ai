@@ -353,13 +353,15 @@ async function provisionNewUserDefaults(userId: string, name?: string, companyNa
     const companyName = companyNameInput?.trim() || process.env.DEFAULT_COMPANY_NAME?.trim() || '';
     if (companyName) await setUserCompanyName(userId, companyName);
 
-    const defVapiKey      = process.env.DEFAULT_VAPI_API_KEY?.trim();
-    const defElevenKey    = process.env.DEFAULT_ELEVENLABS_API_KEY?.trim();
-    const defAnthropicKey = process.env.DEFAULT_ANTHROPIC_API_KEY?.trim();
+    const defVapiKey       = process.env.DEFAULT_VAPI_API_KEY?.trim();
+    const defVapiPublicKey = process.env.DEFAULT_VAPI_PUBLIC_KEY?.trim();
+    const defElevenKey     = process.env.DEFAULT_ELEVENLABS_API_KEY?.trim();
+    const defAnthropicKey  = process.env.DEFAULT_ANTHROPIC_API_KEY?.trim();
 
-    if (defVapiKey)      await setUserVapiCredentials(userId, { apiKey: defVapiKey });
-    if (defElevenKey)    await setUserElevenLabsKey(userId, defElevenKey);
-    if (defAnthropicKey) await setUserAnthropicKey(userId, defAnthropicKey);
+    if (defVapiKey)       await setUserVapiCredentials(userId, { apiKey: defVapiKey });
+    if (defVapiPublicKey) await setUserVapiCredentials(userId, { publicKey: defVapiPublicKey });
+    if (defElevenKey)     await setUserElevenLabsKey(userId, defElevenKey);
+    if (defAnthropicKey)  await setUserAnthropicKey(userId, defAnthropicKey);
 
     if (defVapiKey) {
       try {
