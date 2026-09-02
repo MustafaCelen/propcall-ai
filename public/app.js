@@ -32,6 +32,25 @@ const FILTER_STORAGE_KEY = 'propcall.historyFilters.v1';
 const FOLLOWUP_STORAGE_KEY = 'propcall.followupSearch.v1';
 const FOCUSED_CAMPAIGN_KEY = 'propcall.focusedCampaignId.v1';
 const PENDING_CAMPAIGN_KEY = 'propcall.pendingCampaignDraft.v1';
+const FOLLOWUP_TAB_STORAGE_KEY = 'propcall.followupActiveTab.v1';
+// Aynı tarayıcıda A çıkış yapıp B girdiğinde localStorage TEMİZLENMEDEN kalırsa
+// B, A'nın kaydettiği (örn. henüz "Başlat"a basılmamış toplu arama listesi —
+// isim/telefon içerir) verisini görebiliyordu — gerçek bir çapraz-hesap veri
+// sızıntısıydı. Çıkışta hepsi temizlenir (bkz. btnLogout); bu liste, gelecekte
+// yeni bir localStorage key eklenirse unutulmaması için TEK yerden yönetiliyor.
+const ALL_APP_STORAGE_KEYS = [
+  FILTER_STORAGE_KEY, FOLLOWUP_STORAGE_KEY, FOCUSED_CAMPAIGN_KEY,
+  PENDING_CAMPAIGN_KEY, FOLLOWUP_TAB_STORAGE_KEY,
+];
+function clearAllAppStorage() {
+  try { ALL_APP_STORAGE_KEYS.forEach(k => localStorage.removeItem(k)); } catch (_) {}
+}
+
+// Çıkışın "temiz" olmadığı durumlara (tarayıcı çökmesi, oturumun elle silinmesi,
+// başka bir sekmede farklı hesapla giriş vb.) karşı ikinci bir savunma hattı:
+// bekleyen kampanya taslağı KİM tarafından kaydedildiyse onunla etiketlenir,
+// geri yüklenirken şu anki oturumun kullanıcı ID'siyle eşleşmiyorsa atılır.
+let CURRENT_USER_ID = null;
 
 // localStorage'dan SENKRON okunuyor — sayfa yüklenir yüklenmez, herhangi bir SSE
 // olayı veya loadCampaignState() fetch'i tamamlanmadan ÖNCE campaign.id doludur.
@@ -126,6 +145,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const r = await fetch('/api/auth/session');
     if (!r.ok) { location.href = '/login?next=' + encodeURIComponent(location.pathname); return; }
     const session = await r.json();
+    CURRENT_USER_ID = session.data?.id || null;
     if (session.data?.role === 'admin' && $('linkUsers')) $('linkUsers').style.display = '';
   } catch (_) {
     location.href = '/login';
@@ -135,6 +155,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if ($('btnLogout')) {
     $('btnLogout').addEventListener('click', async () => {
       await fetch('/api/auth/logout', { method: 'POST' });
+      clearAllAppStorage();
       location.href = '/login';
     });
   }
@@ -1804,7 +1825,6 @@ function followupMatchesSearch(c, q) {
          (c.customerPhone || '').toLowerCase().includes(q);
 }
 
-const FOLLOWUP_TAB_STORAGE_KEY = 'propcall.followupActiveTab.v1';
 function readFollowupActiveTab() {
   try { return localStorage.getItem(FOLLOWUP_TAB_STORAGE_KEY) || 'oncelikliListe'; } catch(_) { return 'oncelikliListe'; }
 }
@@ -2202,6 +2222,7 @@ function savePendingCampaignDraft() {
     const nameInput    = $('campaignName');
     const scenarioSel  = $('campaignScenario');
     localStorage.setItem(PENDING_CAMPAIGN_KEY, JSON.stringify({
+      userId:        CURRENT_USER_ID,
       contacts:      campaign.contacts,
       name:          nameInput   ? nameInput.value   : '',
       maxConcurrent: campaign.maxConcurrent,
@@ -2211,10 +2232,18 @@ function savePendingCampaignDraft() {
   } catch(_) {}
 }
 
+// Taslak başka bir kullanıcı tarafından kaydedilmişse (örn. temiz çıkış yapılmadan
+// hesap değiştirildi) ASLA döndürme — çapraz-hesap veri sızıntısına karşı 2. savunma hattı.
 function loadPendingCampaignDraft() {
   try {
     const raw = localStorage.getItem(PENDING_CAMPAIGN_KEY);
-    return raw ? JSON.parse(raw) : null;
+    if (!raw) return null;
+    const draft = JSON.parse(raw);
+    if (draft && draft.userId !== CURRENT_USER_ID) {
+      localStorage.removeItem(PENDING_CAMPAIGN_KEY);
+      return null;
+    }
+    return draft;
   } catch(_) { return null; }
 }
 
