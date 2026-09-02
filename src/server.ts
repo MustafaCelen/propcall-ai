@@ -56,7 +56,14 @@ let httpServer: ReturnType<typeof app.listen> | undefined;
 app.use(cors());
 app.use(cookieParser());
 app.use(express.json({ limit: '10mb' }));
-app.use(express.static(path.join(__dirname, '..', 'public')));
+// setHeaders yoksa Express sadece ETag/Last-Modified gönderir, Cache-Control göndermez —
+// tarayıcılar bu durumda "heuristic freshness" ile dosyayı sunucuya HİÇ SORMADAN önbellekten
+// kullanabilir (RFC 7234 §4.2.2). Sonuç: bir deploy'dan sonra danışman sert yenileme
+// (Ctrl+Shift+R) yapmadan eski index.html/app.js/tour.js'i görmeye devam edebiliyordu.
+// no-cache her istekte sunucuya sorup (304 ile hızlı) her zaman güncel içeriği garantiler.
+app.use(express.static(path.join(__dirname, '..', 'public'), {
+  setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache'),
+}));
 
 // ─── DANIŞMAN AUTH (e-posta + şifre) ─────────────────────────────────────────
 
