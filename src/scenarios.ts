@@ -7,7 +7,7 @@ import { Scenario } from './types';
 // {{companyName}} Vapi'nin variableValues mekanizmasıyla ({{customerName}} ile aynı
 // yöntem, bkz. vapi.ts createVapiCall) her arama anında doldurulur, script metnini
 // elle düzenlemeye gerek kalmaz.
-export const DEFAULT_SCENARIO_NAME = 'Genel Tanıtım (Varsayılan)';
+export const DEFAULT_SCENARIO_NAME = 'Standart Satılık Kiralık Var mı Sorgusu';
 export const DEFAULT_SCENARIO_TEMPLATE = `[Identity]
 Adın {{agentName}}. {{companyName}}'dan {{consultantName}}'ın asistanısın,
 güven veren, sakin, açık ve bilgi odaklı bir asistansın.
