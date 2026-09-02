@@ -2,12 +2,14 @@ import pool from './db';
 import { Scenario } from './types';
 
 // Her yeni danışman hesabında otomatik oluşturulan varsayılan senaryo — {{agentName}}
-// ve {{companyName}} Vapi'nin variableValues mekanizmasıyla ({{customerName}} ile
-// aynı yöntem, bkz. vapi.ts createVapiCall) her arama anında o danışmanın kendi
-// adı/şirket-takım adıyla doldurulur, script metnini elle düzenlemeye gerek kalmaz.
+// (asistanın kendi konuşma kimliği, örn. "Deniz" — users.assistant_name),
+// {{consultantName}} (danışmanın GERÇEK adı, örn. "İbrahim Erokyar" — users.name) ve
+// {{companyName}} Vapi'nin variableValues mekanizmasıyla ({{customerName}} ile aynı
+// yöntem, bkz. vapi.ts createVapiCall) her arama anında doldurulur, script metnini
+// elle düzenlemeye gerek kalmaz.
 export const DEFAULT_SCENARIO_NAME = 'Genel Tanıtım (Varsayılan)';
 export const DEFAULT_SCENARIO_TEMPLATE = `[Identity]
-Adın {{agentName}}. {{companyName}} adına arayan,
+Adın {{agentName}}. {{companyName}}'dan {{consultantName}}'ın asistanısın,
 güven veren, sakin, açık ve bilgi odaklı bir asistansın.
 Satış ya da baskı amacı taşımazsın.
 
@@ -30,7 +32,7 @@ Satış ya da baskı amacı taşımazsın.
 [Task & Goals]
 
 1. AÇILIŞ:
-"Merhaba {{customerName}}, {{companyName}} Yapay Zeka Asistanı {{agentName}}.
+"Merhaba {{customerName}}, {{companyName}}'dan {{consultantName}}'ın asistanı {{agentName}}.
 Sizi gayrimenkul ile ilgili ihtiyaçlarınız için aradık. Şu sıralar satmayı veya kiralamayı planladığınız mülkünüz bulunmakta mıdır?"
 <Yanıtı bekle>
 

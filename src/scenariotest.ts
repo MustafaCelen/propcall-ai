@@ -20,12 +20,14 @@ export async function simulateScenario(
   customerName?: string,
   agentName?: string,
   companyName?: string,
+  consultantName?: string,
 ): Promise<SimulatedScenario[]> {
   if (!apiKey) throw new Error('Anthropic API key tanımlanmamış (Ayarlarım sayfasından ekleyin)');
   const client = new Anthropic({ apiKey });
   const name = customerName?.trim() || 'Ayşe Yılmaz';
   const agent = agentName?.trim() || 'Asistan';
   const company = companyName?.trim() || 'Şirketimiz';
+  const consultant = consultantName?.trim() || '';
 
   const response = await client.messages.create({
     model: 'claude-sonnet-4-5',
@@ -38,7 +40,7 @@ müşteri tepkisi için ayrı ayrı örnek diyalog üreteceksin: "Olumlu" (müş
 KURALLAR:
 - Asistan repliklerini TAM OLARAK promptun talimat ettiği ton, uzunluk ve akışla yaz
   (açılış cümlesi promptta varsa birebir kullan, kısa cümle kuralına uy)
-- {{customerName}}, {{agentName}}, {{companyName}} gibi değişkenler varsa verilen değerlerle değiştir
+- {{customerName}}, {{agentName}}, {{companyName}}, {{consultantName}} gibi değişkenler varsa verilen değerlerle değiştir
 - Müşteri repliklerini gerçekçi, doğal Türkçe günlük konuşma diliyle yaz — kısa, samimi
 - Her diyalog 4-8 replik (2 dakikalık gerçek bir aramayı temsil etsin)
 - Promptta kapanış kuralı varsa (örn. "kapanış cümlesinden sonra konuşma bitsin") ona uy
@@ -50,7 +52,7 @@ KURALLAR:
 ]}`,
     messages: [{
       role: 'user',
-      content: `Müşteri adı: ${name}\nAsistan adı: ${agent}\nŞirket/Takım adı: ${company}\n\nAsistan sistem promptu:\n${systemPrompt}`,
+      content: `Müşteri adı: ${name}\nAsistan adı: ${agent}\nŞirket/Takım adı: ${company}\nDanışman adı: ${consultant || '(belirtilmemiş)'}\n\nAsistan sistem promptu:\n${systemPrompt}`,
     }],
   });
 

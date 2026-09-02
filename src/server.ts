@@ -480,6 +480,7 @@ app.post('/api/call', requireUserAuth, async (req: Request, res: Response) => {
     const user     = await getUserById(req.userId!);
     const vapiCall = await createVapiCall(creds, customer, scenario?.systemPrompt, {
       agentName: user?.assistantName || undefined,
+      consultantName: user?.name || undefined,
       companyName: user?.companyName || undefined,
     });
     const record   = await createCall(req.userId!, vapiCall.id, customer, scenario?.id, scenario?.name);
@@ -1346,7 +1347,7 @@ app.post('/api/prompt/simulate', requireUserAuth, async (req: Request, res: Resp
     }
     const anthropicKey = await getUserAnthropicKey(req.userId!);
     const user = await getUserById(req.userId!);
-    const scenarios = await simulateScenario(anthropicKey, systemPrompt, customerName, user?.assistantName || undefined, user?.companyName || undefined);
+    const scenarios = await simulateScenario(anthropicKey, systemPrompt, customerName, user?.assistantName || undefined, user?.companyName || undefined, user?.name || undefined);
     return res.json({ success: true, data: { scenarios } });
   } catch (err) {
     return res.status(500).json({ success: false, error: String(err) });

@@ -55,7 +55,7 @@ export async function createVapiCall(
   creds: ResolvedVapiCredentials,
   customer: CustomerInfo,
   systemPrompt?: string,
-  personalization?: { agentName?: string; companyName?: string },
+  personalization?: { agentName?: string; consultantName?: string; companyName?: string },
 ): Promise<VapiCallResponse> {
   const { apiKey, phoneNumberId, assistantId } = creds;
 
@@ -65,10 +65,13 @@ export async function createVapiCall(
       customerRegion: customer.region || 'belirtilmemiş',
       customerNotes: customer.notes || 'yok',
       customerReference: customer.reference || 'yok',
-      // Senaryo metinlerinde {{agentName}}/{{companyName}} olarak kullanılır —
-      // her danışmanın kendi adı/şirket-takım adıyla script'i elle düzenlemesine
-      // gerek kalmadan kişiselleştirilmiş bir arama deneyimi sağlar.
+      // Senaryo metinlerinde {{agentName}}/{{consultantName}}/{{companyName}} olarak
+      // kullanılır — script'i elle düzenlemeye gerek kalmadan kişiselleştirilmiş bir
+      // arama deneyimi sağlar. agentName = asistanın kendi kimliği (örn. "Deniz"),
+      // consultantName = danışmanın GERÇEK adı (örn. "İbrahim Erokyar") — ikisi kasıtlı
+      // olarak ayrı (bkz. users.assistant_name vs users.name).
       agentName: personalization?.agentName?.trim() || 'Asistan',
+      consultantName: personalization?.consultantName?.trim() || '',
       companyName: personalization?.companyName?.trim() || 'Şirketimiz',
     },
   };

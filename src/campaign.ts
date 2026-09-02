@@ -678,6 +678,7 @@ async function callContact(entry: CampaignEngineEntry, idx: number): Promise<voi
     };
     const vapiCall = await createVapiCall(creds, customer, scenario?.systemPrompt, {
       agentName: user?.assistantName || undefined,
+      consultantName: user?.name || undefined,
       companyName: user?.companyName || undefined,
     });
     c.vapiCallId   = vapiCall.id;

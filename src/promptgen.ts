@@ -71,11 +71,13 @@ KURALLAR:
   konularda söz vermemeyi (varsa yönlendirilecek kişiye yönlendirmeyi), kapanış cümlesinden sonra
   DERHAL konuşmayı bitirmeyi ve ikinci bir kapanış cümlesi asla üretmemeyi, toplam görüşme süresi ve
   sessizlik zaman aşımı kurallarını yaz
-- [Identity] bölümünde asistanın kendi adını sabit yazma — "Adın {{agentName}}." şeklinde değişken kullan;
-  şirket/marka adı geçen her yerde de literal isim yerine {{companyName}} değişkenini kullan (bu ikisi
-  arama anında o danışmanın kendi adı/şirket-takım adıyla otomatik doldurulur)
+- [Identity] bölümünde asistanın kendi adını sabit yazma — "Adın {{agentName}}." şeklinde değişken kullan
+  (bu, asistanın kendi konuşma kimliği, örn. "Deniz" — danışmanın GERÇEK adı DEĞİL); danışmanın gerçek
+  adı gerekiyorsa {{consultantName}} değişkenini kullan (örn. "{{companyName}}'dan {{consultantName}}'ın
+  asistanı {{agentName}}"); şirket/marka adı geçen her yerde de literal isim yerine {{companyName}}
+  değişkenini kullan (üçü de arama anında otomatik doldurulur)
 - [Task & Goals] bölümünde NUMARALI adımlar yaz:
-  1) Açılış mesajı (tam metin, {{customerName}}, {{agentName}}, {{companyName}} değişkenlerini kullan) + "< Kullanıcı yanıtını bekle >"
+  1) Açılış mesajı (tam metin, {{customerName}}, {{agentName}}, {{consultantName}}, {{companyName}} değişkenlerini kullan) + "< Kullanıcı yanıtını bekle >"
   2) Kullanıcı yanıtına göre EN AZ 3 dallanan akış: olumlu / olumsuz / kararsız-bilgi isteyen
      Her dal: söylenecek tam cümle + "< Anında konuşmayı sonlandır >" veya "< Yanıtı bekle >" gibi
      yönerge + "Sonuç: \\"kısa durum kodu\\"" (örn. "İlgileniyor", "Şu anda ilgilenmiyor")
