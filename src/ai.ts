@@ -19,14 +19,19 @@ export interface CallSummaryResult {
 // raporlarda gördüğü "randevu yok ama ilgi yüksek" tarzı çelişkilerin kaynağı. LLM'e güvenmek
 // yerine burada deterministik olarak düzeltiyoruz (bkz. src/scriptRules.ts lintGeneratedPrompt
 // ile aynı desen — üretim + deterministik son kontrol).
+//
+// ASİMETRİK RİSK — KASITLI: düzeltmeler SADECE "lehe" yönde olur (bir lead'i daha takip
+// edilebilir/iyi göstermek), ASLA "aleyhe" yönde (bir lead'i "Uğraşma"ya düşürmek/yaz-bozmak)
+// bir düzeltme yapılmaz. Yanlış yönde düzeltmemenin bedeli en fazla boşa bir tekrar arama —
+// yanlış yönde düzeltmenin bedeli gerçek bir lead'in kaybı. Bu yüzden örn. ilgi_seviyesi='yok'
+// olduğunda tavsiye_edilen_aksiyon'u zorla 'Uğraşma'ya ÇEKMİYORUZ — Claude'un kendi ayrıca
+// verdiği tavsiye (varsa) daha fazla bilgi taşıyabilir, onu ezmek riskli.
 function enforceSummaryConsistency(summary: CallSummary): CallSummary {
   const fixed = { ...summary };
   if (fixed.randevu_alindi) {
     fixed.ilgi_seviyesi = 'yüksek';
     fixed.ret_nedeni = null;
     if (fixed.tavsiye_edilen_aksiyon === 'Uğraşma') fixed.tavsiye_edilen_aksiyon = 'Ara';
-  } else if (fixed.ilgi_seviyesi === 'yok') {
-    fixed.tavsiye_edilen_aksiyon = 'Uğraşma';
   }
   if (fixed.ret_nedeni) {
     fixed.randevu_alindi = false;
@@ -118,8 +123,11 @@ ret_nedeni:
 
 TUTARLILIK KURALLARI (ihlal etme, alanlar birbiriyle çelişemez):
 - randevu_alindi=true ⇒ ilgi_seviyesi="yüksek" VE ret_nedeni=null VE tavsiye_edilen_aksiyon≠"Uğraşma"
-- ilgi_seviyesi="yok" ⇒ randevu_alindi=false VE tavsiye_edilen_aksiyon="Uğraşma"
+- ilgi_seviyesi="yok" ⇒ randevu_alindi=false
 - ret_nedeni dolu (null değil) ⇒ randevu_alindi=false
+- ŞÜPHEDE KALDIĞINDA tavsiye_edilen_aksiyon'u "Uğraşma" seçme — "Uğraşma" bir lead'i tamamen
+  kapatır, geri dönüşü olmaz. Emin değilsen "Bekleme listesine al" seç; en kötü ihtimalle boşa
+  bir arama denemesi olur, ama gerçek bir potansiyel kaybedilmez.
 
 mulk_tipi:
 - Görüşmede yan bilgi olarak somut bir detay geçtiyse yaz (BAĞLAM'a göre: mülk tipi,
