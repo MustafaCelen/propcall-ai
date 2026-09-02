@@ -61,6 +61,11 @@ export async function initDb(): Promise<void> {
     -- için 90'a kadar çıkarılabilir (bkz. src/campaign.ts fillQueue).
     ALTER TABLE users ADD COLUMN IF NOT EXISTS duplicate_call_protection_days INT NOT NULL DEFAULT 1;
 
+    -- AI'ın kendini tanıttığı isim ({{agentName}}) — danışmanın KENDİ adından (users.name)
+    -- kasıtlı olarak ayrı: asistanın konuşma kimliği, hesap sahibinin gerçek adı değil.
+    -- Varsayılan 'Deniz', danışman Ayarlarım'dan değiştirebilir.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS assistant_name TEXT NOT NULL DEFAULT 'Deniz';
+
     -- Jeton (TL) hareketleri — her yükleme/ücretlendirme kalıcı bir satır. balance_try
     -- hızlı okunabilir güncel bakiye, buradaki kayıtlar denetim/geçmiş içindir.
     CREATE TABLE IF NOT EXISTS credit_transactions (

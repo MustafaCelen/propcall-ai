@@ -19,6 +19,7 @@ export interface UserRow {
   callingHoursStart: number | null;
   callingHoursEnd: number | null;
   duplicateCallProtectionDays: number;
+  assistantName: string;
   elevenLabsCostPer1k: number | null;
   balanceTry: number;
   companyName: string | null;
@@ -40,8 +41,8 @@ function newUserId(): string {
 
 const USER_COLUMNS =
   `id, email, name, role, is_active, vapi_phone_number_id, vapi_assistant_id, vapi_public_key, max_concurrent_calls,
-   calling_hours_start, calling_hours_end, duplicate_call_protection_days, elevenlabs_cost_per_1k, balance_try,
-   company_name, fonzip_user_id, last_login_at, created_at`;
+   calling_hours_start, calling_hours_end, duplicate_call_protection_days, assistant_name, elevenlabs_cost_per_1k,
+   balance_try, company_name, fonzip_user_id, last_login_at, created_at`;
 
 function rowToUser(r: any): UserRow {
   return {
@@ -57,6 +58,7 @@ function rowToUser(r: any): UserRow {
     callingHoursStart: r.calling_hours_start,
     callingHoursEnd: r.calling_hours_end,
     duplicateCallProtectionDays: r.duplicate_call_protection_days ?? 1,
+    assistantName: r.assistant_name || 'Deniz',
     elevenLabsCostPer1k: r.elevenlabs_cost_per_1k != null ? Number(r.elevenlabs_cost_per_1k) : null,
     balanceTry: Number(r.balance_try ?? 0),
     companyName: r.company_name,
@@ -103,6 +105,10 @@ export async function createUser(params: {
 
 export async function setUserCompanyName(id: string, companyName: string | null): Promise<void> {
   await pool.query(`UPDATE users SET company_name = $2 WHERE id = $1`, [id, companyName?.trim() || null]);
+}
+
+export async function setUserAssistantName(id: string, assistantName: string): Promise<void> {
+  await pool.query(`UPDATE users SET assistant_name = $2 WHERE id = $1`, [id, assistantName.trim() || 'Deniz']);
 }
 
 export async function listUsers(): Promise<UserRow[]> {
@@ -369,12 +375,13 @@ export interface UserSettingsView {
   elevenlabsApiKey: UserSettingField;
   anthropicApiKey: UserSettingField;
   companyName: UserSettingField;
+  assistantName: UserSettingField;
 }
 
 export async function getSettingsForUser(userId: string): Promise<UserSettingsView> {
   const { rows } = await pool.query(
     `SELECT vapi_api_key_enc, vapi_public_key, vapi_phone_number_id, vapi_assistant_id,
-            elevenlabs_api_key_enc, anthropic_api_key_enc, company_name
+            elevenlabs_api_key_enc, anthropic_api_key_enc, company_name, assistant_name
      FROM users WHERE id = $1`,
     [userId],
   );
@@ -394,6 +401,7 @@ export async function getSettingsForUser(userId: string): Promise<UserSettingsVi
     elevenlabsApiKey: secretField(r.elevenlabs_api_key_enc),
     anthropicApiKey: secretField(r.anthropic_api_key_enc),
     companyName: plainField(r.company_name),
+    assistantName: plainField(r.assistant_name || 'Deniz'),
   };
 }
 

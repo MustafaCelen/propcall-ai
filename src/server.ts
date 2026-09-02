@@ -36,7 +36,7 @@ import {
   setUserElevenLabsRate, setUserVapiCredentials, setUserElevenLabsKey, setUserAnthropicKey,
   getUserVapiCredentials, getUserElevenLabsKey, getUserAnthropicKey, resolveVapiCreds, getUserById,
   getUserBalance, adjustUserBalance, chargeForCall, listCreditTransactions, CALL_MINUTE_RATE_TRY,
-  setUserCompanyName, createPendingFonzipTopup, creditFonzipTopup,
+  setUserCompanyName, setUserAssistantName, createPendingFonzipTopup, creditFonzipTopup,
 } from './users';
 import {
   isFonzipConfigured, resolveFonzipUserId, createTopupDebt, generateTopupLink,
@@ -120,6 +120,7 @@ app.put('/api/settings', requireUserAuth, async (req: Request, res: Response) =>
       case 'elevenlabsApiKey':    await setUserElevenLabsKey(req.userId!, v); break;
       case 'anthropicApiKey':     await setUserAnthropicKey(req.userId!, v); break;
       case 'companyName':         await setUserCompanyName(req.userId!, v); break;
+      case 'assistantName':       await setUserAssistantName(req.userId!, v); break;
       default: return res.status(400).json({ success: false, error: 'Geçersiz anahtar' });
     }
     if (key === 'vapiApiKey' || key === 'vapiPhoneNumberId' || key === 'vapiAssistantId') {
@@ -474,7 +475,7 @@ app.post('/api/call', requireUserAuth, async (req: Request, res: Response) => {
     const scenario = scenarioId ? await getScenario(req.userId!, scenarioId) : null;
     const user     = await getUserById(req.userId!);
     const vapiCall = await createVapiCall(creds, customer, scenario?.systemPrompt, {
-      agentName: user?.name || undefined,
+      agentName: user?.assistantName || undefined,
       companyName: user?.companyName || undefined,
     });
     const record   = await createCall(req.userId!, vapiCall.id, customer, scenario?.id, scenario?.name);
@@ -1341,7 +1342,7 @@ app.post('/api/prompt/simulate', requireUserAuth, async (req: Request, res: Resp
     }
     const anthropicKey = await getUserAnthropicKey(req.userId!);
     const user = await getUserById(req.userId!);
-    const scenarios = await simulateScenario(anthropicKey, systemPrompt, customerName, user?.name || undefined, user?.companyName || undefined);
+    const scenarios = await simulateScenario(anthropicKey, systemPrompt, customerName, user?.assistantName || undefined, user?.companyName || undefined);
     return res.json({ success: true, data: { scenarios } });
   } catch (err) {
     return res.status(500).json({ success: false, error: String(err) });

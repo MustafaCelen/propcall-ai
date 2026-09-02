@@ -295,6 +295,7 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 
 const FIELD_META = {
+  assistantName:       { label: '🎙️ Asistan Adı',              hint: 'AI\'ın telefonda kendini tanıttığı isim — danışmanın kendi adı DEĞİL, asistanın konuşma kimliği (örn. "Deniz"). Senaryolarda {{agentName}} değişkeni olarak kullanılır.' },
   companyName:         { label: '🏢 Şirket / Takım Adı',       hint: 'Senaryolarda {{companyName}} değişkeni olarak kullanılır (örn. "Keller Williams Platin Karma")' },
   vapiApiKey:          { label: '📞 Vapi API Key',            hint: 'Kendi Vapi hesabınızın Private Key\'i',           verifiable: true },
   vapiPublicKey:       { label: '🌐 Vapi Public Key',          hint: 'Vapi Dashboard → API Keys → "Public Key" (Private Key\'den farklı) — tarayıcıdan sesli test için gerekli, opsiyonel' },
