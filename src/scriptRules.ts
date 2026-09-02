@@ -3,6 +3,7 @@
 // (bkz. src/promptgen.ts). Tek satır, id sabit 'global'.
 
 import pool from './db';
+import { findUnsupportedVariables } from './templateVariables';
 
 export interface CompanyScriptRules {
   bannedPhrases: string[];
@@ -39,20 +40,24 @@ export async function setScriptRules(rules: CompanyScriptRules): Promise<void> {
 }
 
 export interface ScriptLintResult {
-  text: string;             // required_disclosure eksikse otomatik eklenmiş hali
-  violations: string[];     // metinde bulunan yasaklı ifadeler (LLM'e güvenilmeden deterministik tarama)
+  text: string;                    // required_disclosure eksikse otomatik eklenmiş hali
+  violations: string[];            // metinde bulunan yasaklı ifadeler (LLM'e güvenilmeden deterministik tarama)
+  unsupportedVariables: string[];  // Claude'un uydurmuş olabileceği, Vapi'nin doldurmayacağı {{xxx}} token'ları
   disclosureAdded: boolean;
 }
 
 // Üretilen prompt metnini deterministik olarak denetler — LLM kuralı unutmuş/görmezden
-// gelmiş olsa bile burası son söz sahibi. Yasaklı ifadeler kaldırılmaz (prompt yapısını
-// bozabilir), sadece raporlanır — required_disclosure ise otomatik eklenir (AI'a bırakılmaz).
+// gelmiş olsa bile burası son söz sahibi. Yasaklı ifadeler/tanınmayan değişkenler
+// kaldırılmaz (prompt yapısını bozabilir), sadece raporlanır — required_disclosure
+// ise otomatik eklenir (AI'a bırakılmaz).
 export function lintGeneratedPrompt(text: string, rules: CompanyScriptRules): ScriptLintResult {
   const violations: string[] = [];
   for (const phrase of rules.bannedPhrases) {
     if (!phrase.trim()) continue;
     if (text.toLowerCase().includes(phrase.trim().toLowerCase())) violations.push(phrase.trim());
   }
+
+  const unsupportedVariables = findUnsupportedVariables(text);
 
   let outText = text;
   let disclosureAdded = false;
@@ -64,7 +69,7 @@ export function lintGeneratedPrompt(text: string, rules: CompanyScriptRules): Sc
     }
   }
 
-  return { text: outText, violations, disclosureAdded };
+  return { text: outText, violations, unsupportedVariables, disclosureAdded };
 }
 
 // promptgen.ts'in sistem promptuna eklenecek metin — Claude'a kuralları ÖNCEDEN bildirir

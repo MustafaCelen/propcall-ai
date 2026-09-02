@@ -3187,7 +3187,9 @@ async function runPromptGenerate() {
     if (!j.success) throw new Error(j.error);
 
     if (promptGenTargetId) $(promptGenTargetId).value = j.data.systemPrompt;
-    if (j.data.scriptWarnings && j.data.scriptWarnings.length) {
+    if (j.data.unsupportedVariables && j.data.unsupportedVariables.length) {
+      toast('⚠️ Tanınmayan değişken(ler) tespit edildi: ' + j.data.unsupportedVariables.map(v => '{{' + v + '}}').join(', ') + ' — Vapi bunları olduğu gibi okur, doldurmaz. Kaydetmeden önce düzeltin', 'error');
+    } else if (j.data.scriptWarnings && j.data.scriptWarnings.length) {
       toast('⚠️ Şirket kurallarına aykırı olabilecek ifade tespit edildi: ' + j.data.scriptWarnings.join(', ') + ' — kaydetmeden önce inceleyin', 'error');
     } else if (j.data.disclosureAdded) {
       toast('Prompt oluşturuldu — zorunlu açıklama otomatik eklendi, inceleyip kaydedin', 'success');

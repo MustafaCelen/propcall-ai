@@ -71,7 +71,11 @@ export async function createVapiCall(
       // consultantName = danışmanın GERÇEK adı (örn. "İbrahim Erokyar") — ikisi kasıtlı
       // olarak ayrı (bkz. users.assistant_name vs users.name).
       agentName: personalization?.agentName?.trim() || 'Asistan',
-      consultantName: personalization?.consultantName?.trim() || '',
+      // Boş bırakılırsa "{{companyName}}'dan 'ın asistanı" gibi kırık bir cümle çıkardı
+      // (bkz. "AgentName/TeamName" olayı) — her zaman dolgulu, cümleyi bozmayan bir
+      // varsayılan (users.name artık zorunlu alan — setUserName/createUser boş adı
+      // reddediyor — bu satır sadece eski/elle müdahale edilmiş kayıtlara karşı savunma).
+      consultantName: personalization?.consultantName?.trim() || 'ekibimiz',
       companyName: personalization?.companyName?.trim() || 'Şirketimiz',
     },
   };

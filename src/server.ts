@@ -18,6 +18,7 @@ import {
 import { getElevenLabsCredit, listElevenLabsVoices, estimateTtsCost, generateVoicePreview } from './elevenlabs';
 import { getAllAppointments, saveAppointment, deleteAppointment, setAppointmentOutcome } from './appointments';
 import { getAllScenarios, getScenario, createScenario, updateScenario, deleteScenario, seedDefaultScenario } from './scenarios';
+import { findUnsupportedVariables } from './templateVariables';
 import {
   getAllCalls, readCall, readCallForUser, createCall, updateCall, updateCallForUser,
   appendTranscript, updateCosts, saveCallSummary, getCallOwnerUserId,
@@ -1256,6 +1257,13 @@ app.post('/api/scenarios', requireUserAuth, async (req: Request, res) => {
     const { name, systemPrompt } = req.body as { name: string; systemPrompt: string };
     if (!name || !systemPrompt)
       return res.status(400).json({ success: false, error: 'Ad ve prompt zorunlu' });
+    const unknown = findUnsupportedVariables(systemPrompt);
+    if (unknown.length) {
+      return res.status(400).json({
+        success: false,
+        error: `Tanınmayan değişken(ler): ${unknown.map(v => '{{' + v + '}}').join(', ')} — Vapi bunları olduğu gibi (literal metin olarak) okur, doldurmaz. Kullanılabilir değişkenler: {{customerName}}, {{customerRegion}}, {{customerNotes}}, {{customerReference}}, {{agentName}}, {{consultantName}}, {{companyName}}`,
+      });
+    }
     return res.status(201).json({ success: true, data: await createScenario(req.userId!, name, systemPrompt) });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
@@ -1263,6 +1271,13 @@ app.post('/api/scenarios', requireUserAuth, async (req: Request, res) => {
 app.put('/api/scenarios/:id', requireUserAuth, async (req: Request, res) => {
   try {
     const { name, systemPrompt } = req.body as { name: string; systemPrompt: string };
+    const unknown = findUnsupportedVariables(systemPrompt || '');
+    if (unknown.length) {
+      return res.status(400).json({
+        success: false,
+        error: `Tanınmayan değişken(ler): ${unknown.map(v => '{{' + v + '}}').join(', ')} — Vapi bunları olduğu gibi (literal metin olarak) okur, doldurmaz. Kullanılabilir değişkenler: {{customerName}}, {{customerRegion}}, {{customerNotes}}, {{customerReference}}, {{agentName}}, {{consultantName}}, {{companyName}}`,
+      });
+    }
     const updated = await updateScenario(req.userId!, req.params.id, name, systemPrompt);
     if (!updated) return res.status(404).json({ success: false, error: 'Senaryo bulunamadı' });
     return res.json({ success: true, data: updated });
@@ -1291,6 +1306,13 @@ app.put('/api/vapi/assistant-prompt', requireUserAuth, async (req: Request, res)
     const { systemPrompt } = req.body as { systemPrompt: string };
     if (!systemPrompt?.trim())
       return res.status(400).json({ success: false, error: 'Prompt zorunlu' });
+    const unknown = findUnsupportedVariables(systemPrompt);
+    if (unknown.length) {
+      return res.status(400).json({
+        success: false,
+        error: `Tanınmayan değişken(ler): ${unknown.map(v => '{{' + v + '}}').join(', ')} — Vapi bunları olduğu gibi (literal metin olarak) okur, doldurmaz. Kullanılabilir değişkenler: {{customerName}}, {{customerRegion}}, {{customerNotes}}, {{customerReference}}, {{agentName}}, {{consultantName}}, {{companyName}}`,
+      });
+    }
     const creds = await resolveVapiCreds(req.userId!);
     await updateAssistantSystemPrompt(creds.apiKey, creds.assistantId, systemPrompt.trim());
     return res.json({ success: true });
@@ -1315,7 +1337,12 @@ app.post('/api/prompt/generate', requireUserAuth, async (req: Request, res: Resp
     const lint = lintGeneratedPrompt(raw, rules);
     return res.json({
       success: true,
-      data: { systemPrompt: lint.text, scriptWarnings: lint.violations, disclosureAdded: lint.disclosureAdded },
+      data: {
+        systemPrompt: lint.text,
+        scriptWarnings: lint.violations,
+        unsupportedVariables: lint.unsupportedVariables,
+        disclosureAdded: lint.disclosureAdded,
+      },
     });
   } catch (err) {
     return res.status(500).json({ success: false, error: String(err) });
