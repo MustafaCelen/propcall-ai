@@ -14,6 +14,27 @@ export interface CallSummaryResult {
   usage: { inputTokens: number; outputTokens: number; costUsd: number };
 }
 
+// Claude, prompttaki TUTARLILIK KURALLARI'nı gözden kaçırıp mantıksal olarak imkânsız bir
+// kombinasyon üretebilir (örn. randevu_alindi=true AMA ilgi_seviyesi='yok') — bu, danışmanların
+// raporlarda gördüğü "randevu yok ama ilgi yüksek" tarzı çelişkilerin kaynağı. LLM'e güvenmek
+// yerine burada deterministik olarak düzeltiyoruz (bkz. src/scriptRules.ts lintGeneratedPrompt
+// ile aynı desen — üretim + deterministik son kontrol).
+function enforceSummaryConsistency(summary: CallSummary): CallSummary {
+  const fixed = { ...summary };
+  if (fixed.randevu_alindi) {
+    fixed.ilgi_seviyesi = 'yüksek';
+    fixed.ret_nedeni = null;
+    if (fixed.tavsiye_edilen_aksiyon === 'Uğraşma') fixed.tavsiye_edilen_aksiyon = 'Ara';
+  } else if (fixed.ilgi_seviyesi === 'yok') {
+    fixed.tavsiye_edilen_aksiyon = 'Uğraşma';
+  }
+  if (fixed.ret_nedeni) {
+    fixed.randevu_alindi = false;
+    if (fixed.ilgi_seviyesi === 'yüksek') fixed.ilgi_seviyesi = 'orta';
+  }
+  return fixed;
+}
+
 export async function generateCallSummary(
   apiKey: string,
   customer: CustomerInfo,
@@ -79,17 +100,26 @@ randevu_alindi:
 - false: Reddetti, yanıt vermedi veya belirsiz kaldı
 
 ilgi_seviyesi:
-- "yüksek": Teklifi kabul etti VEYA aktif soru sordu, detay istedi
-- "orta": İlgiliydi ama şu an müsait değil / daha sonra diyebilir
+- "yüksek": randevu_alindi=true İSE HER ZAMAN "yüksek" — YA DA müşteri aktif soru sordu/detay
+  istedi VE görüşme olumsuz bir "hayır, ilgilenmiyorum" ile bitmedi (sadece zaman/uygunluk
+  nedeniyle erteledi)
+- "orta": İlgiliydi, soru sordu ama sonunda "düşüneyim" dedi veya şu an müsait değil dedi —
+  net bir hayır değil ama net bir evet de değil
 - "düşük": Kibarca reddetti, yoğun/ilgisiz ama baskı yapmadı
 - "yok": Hiç yanıt vermedi, hemen kapattı, agresif reddetti
 
 ret_nedeni:
+- randevu_alindi=true İSE HER ZAMAN null (kabul eden birinin "ret nedeni" olamaz)
 - Reddetmediyse null
 - Reddetmişse, MÜŞTERİNİN GERÇEKTEN SÖYLEDİĞİ nedeni kısa ve somut yaz. Sabit bir kategori
   listesine bağlı kalma — transkriptten ve BAĞLAM'daki arama amacından çıkar
   (örn. "şu an meşgul", "ilgilenmiyor", "başkasıyla çalışıyor", "zamanı yok",
   "rahatsız oldu", "uygun pozisyon değil" vb. — konuya göre değişir)
+
+TUTARLILIK KURALLARI (ihlal etme, alanlar birbiriyle çelişemez):
+- randevu_alindi=true ⇒ ilgi_seviyesi="yüksek" VE ret_nedeni=null VE tavsiye_edilen_aksiyon≠"Uğraşma"
+- ilgi_seviyesi="yok" ⇒ randevu_alindi=false VE tavsiye_edilen_aksiyon="Uğraşma"
+- ret_nedeni dolu (null değil) ⇒ randevu_alindi=false
 
 mulk_tipi:
 - Görüşmede yan bilgi olarak somut bir detay geçtiyse yaz (BAĞLAM'a göre: mülk tipi,
@@ -117,7 +147,7 @@ geri_donus_notu:
   if (content.type !== 'text') throw new Error('Beklenmeyen yanıt tipi');
 
   const jsonText = content.text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-  const summary = JSON.parse(jsonText) as CallSummary;
+  const summary = enforceSummaryConsistency(JSON.parse(jsonText) as CallSummary);
 
   const inputTokens  = response.usage?.input_tokens  ?? 0;
   const outputTokens = response.usage?.output_tokens ?? 0;
