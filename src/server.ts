@@ -13,7 +13,7 @@ import { generateCallSummary } from './ai';
 import {
   createVapiCall, endVapiCall, getVapiCredit, getAssistantSystemPrompt, updateAssistantSystemPrompt,
   getSignedRecordingUrl, verifyVapiApiKey, getAssistantConfig, updateAssistantConfig, updateAssistantServer,
-  listAssistants, listPhoneNumbers, importAssistant, AssistantConfigPatch,
+  listAssistants, listPhoneNumbers, importAssistant, createDefaultAssistant, AssistantConfigPatch,
 } from './vapi';
 import { getElevenLabsCredit, listElevenLabsVoices, estimateTtsCost, generateVoicePreview } from './elevenlabs';
 import { getAllAppointments, saveAppointment, deleteAppointment, setAppointmentOutcome } from './appointments';
@@ -354,7 +354,6 @@ async function provisionNewUserDefaults(userId: string, name?: string, companyNa
     if (companyName) await setUserCompanyName(userId, companyName);
 
     const defVapiKey      = process.env.DEFAULT_VAPI_API_KEY?.trim();
-    const defAssistantId  = process.env.DEFAULT_VAPI_ASSISTANT_ID?.trim();
     const defElevenKey    = process.env.DEFAULT_ELEVENLABS_API_KEY?.trim();
     const defAnthropicKey = process.env.DEFAULT_ANTHROPIC_API_KEY?.trim();
 
@@ -362,9 +361,12 @@ async function provisionNewUserDefaults(userId: string, name?: string, companyNa
     if (defElevenKey)    await setUserElevenLabsKey(userId, defElevenKey);
     if (defAnthropicKey) await setUserAnthropicKey(userId, defAnthropicKey);
 
-    if (defVapiKey && defAssistantId) {
+    if (defVapiKey) {
       try {
-        const created = await importAssistant(defVapiKey, defAssistantId, defVapiKey, name);
+        // Var olan bir template asistanı klonlamak yerine sıfırdan oluşturuyoruz (bkz.
+        // vapi.ts createDefaultAssistant) — DEFAULT_VAPI_ASSISTANT_ID'ye bağımlılık yok.
+        const assistantName = (name?.trim() || 'Danışman') + ' Asistanı';
+        const created = await createDefaultAssistant(defVapiKey, assistantName);
         await setUserVapiCredentials(userId, { assistantId: created.id });
         // Normal akışta phoneNumberId henüz yok (danışman Ayarlarım'dan kendisi seçer,
         // o an zaten tetiklenir — bkz. PUT /api/settings) — bu no-op olur. Ama phoneNumberId
@@ -372,7 +374,7 @@ async function provisionNewUserDefaults(userId: string, name?: string, companyNa
         // webhook kurulumunun sunucu restart'ına kadar unutulmaması için savunma amaçlı.
         provisionWebhookIfReady(userId).catch(err => console.warn(`[Onboarding] Webhook ön-kurulumu atlandı (userId=${userId}):`, err));
       } catch (err) {
-        console.warn(`[Onboarding] Varsayılan asistan klonlanamadı (userId=${userId}):`, err);
+        console.warn(`[Onboarding] Varsayılan asistan oluşturulamadı (userId=${userId}):`, err);
       }
     }
   } catch (err) {

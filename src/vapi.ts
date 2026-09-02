@@ -3,6 +3,7 @@
 
 import { CustomerInfo } from './types';
 import { ResolvedVapiCredentials } from './users';
+import { DEFAULT_SCENARIO_TEMPLATE } from './scenarios';
 
 const VAPI_BASE_URL = 'https://api.vapi.ai';
 
@@ -249,6 +250,71 @@ export async function importAssistant(
     throw new Error(`Yeni asistan oluşturulamadı: ${createResp.status} - ${errText}`);
   }
   const created = await createResp.json() as { id: string; name: string };
+  return { id: created.id, name: created.name };
+}
+
+// Yeni danışman onboarding'i için — var olan bir template asistanı klonlamak yerine,
+// ses/model/transkripsiyon config'i burada SABİT tanımlanıp sıfırdan yeni bir Vapi
+// assistant oluşturulur (merkezi hesap üzerinde). Sistem promptu DEFAULT_SCENARIO_TEMPLATE
+// (scenarios.ts, {{agentName}}/{{companyName}} değişkenli) — böylece senaryo seçilmeden
+// yapılan aramalarda da (Vapi'nin kendi baz promptu) tutarlı bir kimlik/davranış olur.
+export async function createDefaultAssistant(apiKey: string, name: string): Promise<{ id: string; name: string }> {
+  const body = {
+    name,
+    voice: {
+      provider: '11labs',
+      voiceId: 'FDs1ZX5J4e4f2c2erxtW',
+      model: 'eleven_v3',
+      speed: 1.15,
+      stability: 0.6,
+    },
+    model: {
+      provider: 'openai',
+      model: 'gpt-5.6-luna',
+      messages: [{ role: 'system', content: DEFAULT_SCENARIO_TEMPLATE }],
+    },
+    transcriber: {
+      provider: 'deepgram',
+      model: 'nova-3',
+      language: 'tr',
+      endpointing: 150,
+    },
+    firstMessageMode: 'assistant-speaks-first-with-model-generated-message',
+    firstMessage: '',
+    silenceTimeoutSeconds: 10,
+    maxDurationSeconds: 119,
+    backgroundSound: 'off',
+    backgroundDenoisingEnabled: false,
+    endCallFunctionEnabled: true,
+    endCallPhrases: [
+      'güle güle', 'hoşça kal', 'hoşça kalın', 'hoşçakal', 'iyi günler', 'iyi akşamlar',
+      'iyi çalışmalar', 'kapatıyorum', 'görüşmek üzere', 'teşekkürler iyi günler',
+      'iyi geceler', 'bay bay', 'kapatın lütfen', 'tamam kapatalım', 'tamam görüşürüz',
+    ],
+    stopSpeakingPlan: { numWords: 4, voiceSeconds: 0.5 },
+    startSpeakingPlan: {
+      waitSeconds: 0.2,
+      smartEndpointingEnabled: 'livekit',
+      transcriptionEndpointingPlan: { onNoPunctuationSeconds: 1, onNumberSeconds: 0.3 },
+    },
+    artifactPlan: { recordingEnabled: true },
+    voicemailDetection: {
+      provider: 'vapi',
+      backoffPlan: { maxRetries: 6, startAtSeconds: 5, frequencySeconds: 5 },
+      beepMaxAwaitSeconds: 0,
+    },
+  };
+
+  const resp = await fetch(`${VAPI_BASE_URL}/assistant`, {
+    method: 'POST',
+    headers: getHeaders(apiKey),
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`Varsayılan asistan oluşturulamadı: ${resp.status} - ${errText}`);
+  }
+  const created = await resp.json() as { id: string; name: string };
   return { id: created.id, name: created.name };
 }
 
