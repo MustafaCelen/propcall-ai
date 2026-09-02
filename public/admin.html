@@ -216,6 +216,7 @@ function renderUsers(users) {
       <td>${fmtDate(u.lastLoginAt)}</td>
       <td>
         <div class="adm-row-actions">
+          <button class="adm-mini-btn" data-action="edit-name">Adı Düzenle</button>
           <button class="adm-mini-btn" data-action="topup">Jeton Yükle</button>
           <button class="adm-mini-btn" data-action="toggle">${u.isActive ? 'Devre Dışı Bırak' : 'Aktifleştir'}</button>
           <button class="adm-mini-btn" data-action="reset-pw">Şifre Sıfırla</button>
@@ -224,6 +225,9 @@ function renderUsers(users) {
     </tr>
   `).join('');
 
+  tbody.querySelectorAll('[data-action="edit-name"]').forEach(btn => {
+    btn.addEventListener('click', () => editUserName(btn.closest('tr').dataset.id, btn));
+  });
   tbody.querySelectorAll('[data-action="toggle"]').forEach(btn => {
     btn.addEventListener('click', () => toggleActive(btn.closest('tr').dataset.id, btn));
   });
@@ -233,6 +237,33 @@ function renderUsers(users) {
   tbody.querySelectorAll('[data-action="topup"]').forEach(btn => {
     btn.addEventListener('click', () => topUpBalance(btn.closest('tr').dataset.id, btn));
   });
+}
+
+// Danışmanın Ad Soyad'ını sonradan düzeltmek için — bu alan {{consultantName}}
+// olarak canlı aramalarda kullanıldığından yanlış/eksik girilmişse etkisi büyük.
+async function editUserName(id, btn) {
+  const row = btn.closest('tr');
+  const currentName = row.children[1].textContent.trim();
+  const newName = await uiPrompt('Danışmanın Ad Soyad\'ını girin — canlı aramalarda {{consultantName}} olarak kullanılır:', {
+    title: 'Adı Düzenle', placeholder: 'Ahmet Yılmaz', value: currentName === '—' ? '' : currentName,
+  });
+  if (!newName || !newName.trim()) return;
+
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/admin/users/' + id, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName.trim() }),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error || 'Güncellenemedi');
+    row.children[1].textContent = newName.trim();
+    toast('Ad güncellendi', 'success');
+  } catch (err) {
+    toast('Hata: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // Pozitif tutar yükleme, negatif tutar (örn. -50) hatalı yüklemeyi geri almak için.

@@ -295,6 +295,7 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 
 const FIELD_META = {
+  name:                { label: '👤 Adınız (Danışman)',         hint: 'Gerçek adınız — senaryolarda {{consultantName}} değişkeni olarak müşteriye söylenir (örn. "Keller Williams Platin Karma\'dan İbrahim Erokyar\'ın asistanı Deniz"). Asistan Adı\'ndan (aşağıda) farklı bir alan.' },
   assistantName:       { label: '🎙️ Asistan Adı',              hint: 'AI\'ın telefonda kendini tanıttığı isim — danışmanın kendi adı DEĞİL, asistanın konuşma kimliği (örn. "Deniz"). Senaryolarda {{agentName}} değişkeni olarak kullanılır.' },
   companyName:         { label: '🏢 Şirket / Takım Adı',       hint: 'Senaryolarda {{companyName}} değişkeni olarak kullanılır (örn. "Keller Williams Platin Karma")' },
   vapiApiKey:          { label: '📞 Vapi API Key',            hint: 'Kendi Vapi hesabınızın Private Key\'i',           verifiable: true },

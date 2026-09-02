@@ -36,7 +36,7 @@ import {
   setUserElevenLabsRate, setUserVapiCredentials, setUserElevenLabsKey, setUserAnthropicKey,
   getUserVapiCredentials, getUserElevenLabsKey, getUserAnthropicKey, resolveVapiCreds, getUserById,
   getUserBalance, adjustUserBalance, chargeForCall, listCreditTransactions, CALL_MINUTE_RATE_TRY,
-  setUserCompanyName, setUserAssistantName, createPendingFonzipTopup, creditFonzipTopup,
+  setUserCompanyName, setUserAssistantName, setUserName, createPendingFonzipTopup, creditFonzipTopup,
 } from './users';
 import {
   isFonzipConfigured, resolveFonzipUserId, createTopupDebt, generateTopupLink,
@@ -121,6 +121,7 @@ app.put('/api/settings', requireUserAuth, async (req: Request, res: Response) =>
       case 'anthropicApiKey':     await setUserAnthropicKey(req.userId!, v); break;
       case 'companyName':         await setUserCompanyName(req.userId!, v); break;
       case 'assistantName':       await setUserAssistantName(req.userId!, v); break;
+      case 'name':                await setUserName(req.userId!, v); break;
       default: return res.status(400).json({ success: false, error: 'Geçersiz anahtar' });
     }
     if (key === 'vapiApiKey' || key === 'vapiPhoneNumberId' || key === 'vapiAssistantId') {
@@ -406,12 +407,16 @@ app.post('/api/admin/users', requireAdmin, async (req: Request, res: Response) =
 
 app.patch('/api/admin/users/:id', requireAdmin, async (req: Request, res: Response) => {
   try {
-    const { isActive, password, maxConcurrentCalls } = req.body as {
-      isActive?: boolean; password?: string; maxConcurrentCalls?: number;
+    const { isActive, password, maxConcurrentCalls, name } = req.body as {
+      isActive?: boolean; password?: string; maxConcurrentCalls?: number; name?: string;
     };
     if (isActive !== undefined) await setUserActive(req.params.id, isActive);
     if (password?.trim())      await setUserPassword(req.params.id, hashPassword(password));
     if (maxConcurrentCalls !== undefined) await setUserMaxConcurrent(req.params.id, maxConcurrentCalls);
+    if (name !== undefined) {
+      if (!name.trim()) return res.status(400).json({ success: false, error: 'Ad Soyad boş olamaz' });
+      await setUserName(req.params.id, name);
+    }
     return res.json({ success: true });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });

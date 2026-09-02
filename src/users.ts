@@ -107,6 +107,15 @@ export async function setUserCompanyName(id: string, companyName: string | null)
   await pool.query(`UPDATE users SET company_name = $2 WHERE id = $1`, [id, companyName?.trim() || null]);
 }
 
+// Danışmanın gerçek adı — {{consultantName}} olarak scriptlerde kullanılır (bkz.
+// vapi.ts createVapiCall). Boş bırakılamaz: arama sırasında "{{consultantName}}'ın
+// asistanı" gibi bir cümlede boşluk bırakırdı.
+export async function setUserName(id: string, name: string): Promise<void> {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error('Ad Soyad boş olamaz');
+  await pool.query(`UPDATE users SET name = $2 WHERE id = $1`, [id, trimmed]);
+}
+
 export async function setUserAssistantName(id: string, assistantName: string): Promise<void> {
   await pool.query(`UPDATE users SET assistant_name = $2 WHERE id = $1`, [id, assistantName.trim() || 'Deniz']);
 }
@@ -376,12 +385,13 @@ export interface UserSettingsView {
   anthropicApiKey: UserSettingField;
   companyName: UserSettingField;
   assistantName: UserSettingField;
+  name: UserSettingField;
 }
 
 export async function getSettingsForUser(userId: string): Promise<UserSettingsView> {
   const { rows } = await pool.query(
     `SELECT vapi_api_key_enc, vapi_public_key, vapi_phone_number_id, vapi_assistant_id,
-            elevenlabs_api_key_enc, anthropic_api_key_enc, company_name, assistant_name
+            elevenlabs_api_key_enc, anthropic_api_key_enc, company_name, assistant_name, name
      FROM users WHERE id = $1`,
     [userId],
   );
@@ -402,6 +412,7 @@ export async function getSettingsForUser(userId: string): Promise<UserSettingsVi
     anthropicApiKey: secretField(r.anthropic_api_key_enc),
     companyName: plainField(r.company_name),
     assistantName: plainField(r.assistant_name || 'Deniz'),
+    name: plainField(r.name),
   };
 }
 
