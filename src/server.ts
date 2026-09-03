@@ -756,7 +756,7 @@ async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
       // yazım kaybolup kişi "bekliyor" görünmeye devam eder ve TEKRAR aranır (gerçek
       // olay: birkaç kişi arka arkaya deploy'lar sırasında iki kez arandı). handleWebhook
       // zaten trackWebhook() ile korunuyor — bunu await etmek onu da o korumanın içine alır.
-      await onCampaignCallEnded(vapiCallId, status, duration).catch(console.error);
+      await onCampaignCallEnded(vapiCallId, status, duration, endReason).catch(console.error);
       generateSummaryForCall(vapiCallId).catch(console.error);
 
       // Jeton ücretlendirmesi — sadece gerçekten bağlanıp konuşulan aramalar için
@@ -787,7 +787,7 @@ async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
         // end-of-call-report henüz gelmedi — fallback olarak güncelle
         await updateCall(vapiCallId, { status: s2, endTime: new Date().toISOString() } as any);
         emit('call-ended', { vapiCallId, endedReason: newReason, status: s2 });
-        onCampaignCallEnded(vapiCallId, s2).catch(console.error);
+        onCampaignCallEnded(vapiCallId, s2, undefined, newReason).catch(console.error);
       } else {
         // end-of-call-report zaten işledi — sadece SSE gönder (broadcast zaten yapıldı)
         console.log(`[Webhook] call-ended: ${vapiCallId} zaten işlendi (${existing!.status}), atlanıyor`);

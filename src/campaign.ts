@@ -380,8 +380,15 @@ export async function campaignClear(userId: string, campaignId?: string): Promis
 
 // ─── Webhook kancaları ────────────────────────────────────────────────────────
 
+// "Hata" (başarısız) durumunun ALTINDA yatan gerçek sebep bazen geçici (telefon hattı/
+// operatör/Vapi altyapı katmanında bir bağlantı sorunu) bazen kalıcıdır (örn. ElevenLabs
+// ses üretimi çöktü — muhtemelen aynı sebeple tekrar çöker). Sadece geçici olduğu bilinen
+// SIP bağlantı/timeout hatalarını retry'a dahil ediyoruz — körlemesine HER "başarısız"ı
+// tekrar denemek, kalıcı olarak bozuk numaraları sonsuza dek yeniden arayıp durur.
+const TRANSIENT_FAILURE_PATTERN = /sip.*(failed-to-connect|timeout)|providerfault|outbound-sip-\d{3}/i;
+
 export async function onCampaignCallEnded(
-  vapiCallId: string, status: string, duration?: number,
+  vapiCallId: string, status: string, duration?: number, endedReason?: string,
 ): Promise<void> {
   const found = findEntryByVapiCallId(vapiCallId);
   if (!found) return;
@@ -400,15 +407,17 @@ export async function onCampaignCallEnded(
 
   if (duration && (!c.duration || duration > c.duration)) c.duration = duration;
 
-  // Otomatik yeniden arama: cevapsız/meşgul VE hâlâ deneme hakkı varsa, terminal
+  // Otomatik yeniden arama: cevapsız/meşgul (her zaman) VEYA "başarısız" ama sebebi
+  // geçici bir SIP/altyapı hatasıysa (yukarı bkz.) VE hâlâ deneme hakkı varsa, terminal
   // durumda bırakmak yerine bir süre sonra tekrar aranmak üzere kuyruğa geri koy.
+  const isTransientFailure = c.status === 'başarısız' && !!endedReason && TRANSIENT_FAILURE_PATTERN.test(endedReason);
   if (
-    (c.status === 'cevapsız' || c.status === 'meşgul') &&
+    (c.status === 'cevapsız' || c.status === 'meşgul' || isTransientFailure) &&
     entry.retryMaxAttempts > 1 &&
     (c.attemptCount ?? 1) < entry.retryMaxAttempts
   ) {
     const retryAt = new Date(Date.now() + entry.retryDelayMinutes * 60_000).toISOString();
-    console.log(`[Campaign] "${c.name}" ${c.status} — ${entry.retryDelayMinutes} dk sonra tekrar denenecek (deneme ${c.attemptCount ?? 1}/${entry.retryMaxAttempts})`);
+    console.log(`[Campaign] "${c.name}" ${c.status}${isTransientFailure ? ' (geçici hata: ' + endedReason + ')' : ''} — ${entry.retryDelayMinutes} dk sonra tekrar denenecek (deneme ${c.attemptCount ?? 1}/${entry.retryMaxAttempts})`);
     c.status = 'tekrar-planlandı';
     c.nextRetryAt = retryAt;
   }
