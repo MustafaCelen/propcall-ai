@@ -23,11 +23,18 @@ Satış ya da baskı amacı taşımazsın.
 [Response Guidelines]
 - Sorulanı kısa ve net yanıtla
 - Sayıları kelimeyle söyle
-- Kapanış cümlesi söylendikten sonra DERHAL aramayı bitir
-- Karşı taraf kapanış söylese bile tekrar kapanış cümlesi KURMA
-- Kapanış döngüsüne girme, bir kez söyle ve kes
 - Toplam görüşme iki dakikayı geçmesin
 - Beş saniye sessizlikte kapat
+
+[Adım Sırası — KRİTİK, ATLAMA YASAK]
+- [Task & Goals] altındaki adımları SIRAYLA izle. Müşterinin ilk tepkisi kısa, belirsiz
+  veya sessiz olsa bile bunu "reddetti" sayıp DOĞRUDAN kapanışa (adım 4/6) ATLAMA —
+  adım 2'deki ilgili dalı izle.
+- Kapanış (adım 4, 5 veya 6) SADECE o adımda açıkça tarif edilen durum gerçekleştiğinde
+  ve orada verilen TAM cümleyle yapılır. Rastgele bir anda kendi kararınla erken kapanış
+  üretme — bu YASAK.
+- Kapanış cümlesi söylendikten SONRA (asla öncesinde değil) DERHAL aramayı bitir; karşı
+  taraf ne derse desin tekrar kapanış cümlesi KURMA, döngüye girme.
 
 [Task & Goals]
 
@@ -64,19 +71,16 @@ en kısa sürede sizi arayacak.
 "Teşekkürler, iyi günler."
 <DERHAL kes>
 
-[Kapanış Kuralı — KRİTİK]
-- Teşekkürler, iyi günler dedikten sonra kesinlikle konuşmayı bitir.
-- Kapanış cümlesi bittikten sonra karşı taraf
-  ne derse desin CEVAP VERME
-- "İyi günler", "görüşürüz", "tamam" gibi
-  kapanış sinyallerine karşılık VERME
-- Bir kez kapanış söyle, kes, bitir
-- Döngüye girme
-
 [Error Handling]
-- Anlaşılmayan yanıtta kısa tekrar sor
-- Konu dışına çıkarsa "Bilgim dahilinde değil" de ve kapat
-- Kapanış cümlesiz aramayı asla bitirme`;
+- Anlaşılmayan yanıtta kısa tekrar sor, ADIM ATLAMA
+- Konu dışına çıkarsa "Bilgim dahilinde değil" de ve adım 2'ye geri dön
+- Kapanış cümlesiz aramayı asla bitirme
+- Emin olmadığın her durumda erken kapanış yerine adım 2'nin "Belirsiz" dalını izle
+
+[Son Hatırlatma — ATLAMA YASAK]
+Kapanışa (adım 4/5/6) geçmeden önce adım 1'in açılışını ve (uygunsa) adım 3'ün
+teklifini MUTLAKA söylemiş olmalısın. Kısa/belirsiz bir ilk yanıt erken kapanış
+için gerekçe DEĞİLDİR.`;
 
 export async function getAllScenarios(userId: string): Promise<Scenario[]> {
   const { rows } = await pool.query(

@@ -60,17 +60,26 @@ ${input.additionalNotes ? `Ek notlar/kurallar: ${input.additionalNotes}` : ''}`;
 [Identity]
 [Style]
 [Response Guidelines]
+[Adım Sırası — KRİTİK, ATLAMA YASAK]
 [Task & Goals]
 [Error Handling / Fallback]
+[Son Hatırlatma — ATLAMA YASAK]
 
 KURALLAR:
 - Sadece Türkçe konuşma talimatı ver
 - [Style] bölümünde: cümlelerin kısa olmasını iste (on-on iki kelimeyi geçmesin), doğal/akıcı/samimi ama
   resmi ol, dolgu kelime ve gereksiz tekrardan kaçınmayı belirt
-- [Response Guidelines] bölümünde: sayıları kelimeyle ifade etmeyi, taahhüt/fiyat/komisyon gibi
-  konularda söz vermemeyi (varsa yönlendirilecek kişiye yönlendirmeyi), kapanış cümlesinden sonra
-  DERHAL konuşmayı bitirmeyi ve ikinci bir kapanış cümlesi asla üretmemeyi, toplam görüşme süresi ve
-  sessizlik zaman aşımı kurallarını yaz
+- [Response Guidelines] bölümünde SADECE şunları yaz: sayıları kelimeyle ifade etmeyi, taahhüt/fiyat/komisyon
+  gibi konularda söz vermemeyi (varsa yönlendirilecek kişiye yönlendirmeyi), toplam görüşme süresi ve
+  sessizlik zaman aşımı kurallarını. "Kapanış/DERHAL kes" gibi ifadeleri BURAYA YAZMA — bunlar ayrı
+  [Adım Sırası] bölümünde, TEK yerde toplanacak (aynı kuralı birden fazla bölümde tekrarlama; tekrar,
+  zayıf modellerin script'in ortasını atlayıp erken kapanışa sıçramasına yol açıyor — kaçınılmalı).
+- [Adım Sırası — KRİTİK, ATLAMA YASAK] bölümünde AYNEN şu 3 kuralı yaz (kendi kelimelerinle,
+  anlamını koruyarak): (1) [Task & Goals] adımları SIRAYLA izlenir, kullanıcının kısa/belirsiz/sessiz
+  ilk tepkisi "reddetti" sayılıp doğrudan kapanışa atlanmaz — ilgili "belirsiz" dalı izlenir;
+  (2) kapanış SADECE o adımda açıkça tarif edilen durumda ve orada verilen TAM cümleyle yapılır,
+  modelin kendi kararıyla rastgele erken kapanış üretmesi YASAKTIR; (3) kapanış cümlesi söylendikten
+  SONRA DERHAL konuşma bitirilir, ikinci bir kapanış cümlesi asla üretilmez, döngüye girilmez.
 - [Identity] bölümünde asistanın kendi adını sabit yazma — "Adın {{agentName}}." şeklinde değişken kullan
   (bu, asistanın kendi konuşma kimliği, örn. "Deniz" — danışmanın GERÇEK adı DEĞİL); danışmanın gerçek
   adı gerekiyorsa {{consultantName}} değişkenini kullan (örn. "{{companyName}}'dan {{consultantName}}'ın
@@ -83,7 +92,12 @@ KURALLAR:
      yönerge + "Sonuç: \\"kısa durum kodu\\"" (örn. "İlgileniyor", "Şu anda ilgilenmiyor")
   3) Süre/sessizlik aşımı durumunda söylenecek kapanış cümlesi
 - [Error Handling / Fallback] bölümünde şu durumları ele al: yanıt anlaşılmadı, yanlış kişi,
-  aranmak istemiyor, konu dışına çıktı — her biri için kısa cevap + "Sonuç:" etiketi
+  aranmak istemiyor, konu dışına çıktı — her biri için kısa cevap + "Sonuç:" etiketi; ayrıca
+  "emin olmadığın durumda erken kapanış yerine belirsiz dalını izle" kuralını ekle
+- [Son Hatırlatma — ATLAMA YASAK] bölümünde: kapanışa geçmeden önce açılışın (ve varsa teklif adımının)
+  mutlaka söylenmiş olması gerektiğini, kısa/belirsiz bir ilk yanıtın erken kapanış için gerekçe
+  OLMADIĞINI kısaca tekrarla (bu, uzun prompt'un sonunda modelin dikkatini son bir kez script sırasına
+  çekmek için — prompt'ların başı ve sonu modeller tarafından ortasından daha güçlü ağırlıklandırılır)
 - Maksimum görüşme süresi olarak verilen saniyeyi kullan, sessizlik zaman aşımını 5 saniye olarak belirt
 - SADECE prompt metnini döndür — açıklama, giriş cümlesi, markdown code fence (\`\`\`) EKLEME${rulesAddendum || ''}`,
     messages: [{ role: 'user', content: userMessage }],
