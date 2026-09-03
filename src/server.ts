@@ -36,6 +36,7 @@ import {
   listUsers, createUser, setUserActive, setUserPassword, setUserMaxConcurrent, setUserCallingHours, setUserDuplicateCallProtection,
   setUserElevenLabsRate, setUserVapiCredentials, setUserElevenLabsKey, setUserAnthropicKey,
   getUserVapiCredentials, getUserElevenLabsKey, getUserAnthropicKey, resolveVapiCreds, getUserById,
+  getUserVapiApiKey, resolveVapiCredsForAssistant,
   getUserBalance, adjustUserBalance, chargeForCall, listCreditTransactions, CALL_MINUTE_RATE_TRY,
   setUserCompanyName, setUserAssistantName, setUserName, createPendingFonzipTopup, creditFonzipTopup,
 } from './users';
@@ -152,9 +153,9 @@ app.post('/api/settings/verify-vapi', requireUserAuth, async (req: Request, res:
 async function resolveApiKeyForListing(req: Request): Promise<string> {
   const bodyKey = (req.body as { apiKey?: string })?.apiKey?.trim();
   if (bodyKey) return bodyKey;
-  const creds = await getUserVapiCredentials(req.userId!);
-  if (!creds) throw new Error('Vapi API Key girilmemiş');
-  return creds.apiKey;
+  const apiKey = await getUserVapiApiKey(req.userId!);
+  if (!apiKey) throw new Error('Vapi API Key girilmemiş');
+  return apiKey;
 }
 
 app.post('/api/settings/vapi-assistants', requireUserAuth, async (req: Request, res: Response) => {
@@ -270,7 +271,7 @@ app.put('/api/settings/cost-config', requireUserAuth, async (req: Request, res: 
 
 app.get('/api/settings/assistant-config', requireUserAuth, async (req: Request, res: Response) => {
   try {
-    const creds = await resolveVapiCreds(req.userId!);
+    const creds = await resolveVapiCredsForAssistant(req.userId!);
     const data = await getAssistantConfig(creds.apiKey, creds.assistantId);
     return res.json({ success: true, data });
   } catch (err) {
@@ -280,7 +281,7 @@ app.get('/api/settings/assistant-config', requireUserAuth, async (req: Request, 
 
 app.put('/api/settings/assistant-config', requireUserAuth, async (req: Request, res: Response) => {
   try {
-    const creds = await resolveVapiCreds(req.userId!);
+    const creds = await resolveVapiCredsForAssistant(req.userId!);
     const patch = req.body as AssistantConfigPatch;
     await updateAssistantConfig(creds.apiKey, creds.assistantId, patch);
     return res.json({ success: true });
@@ -1295,7 +1296,7 @@ app.delete('/api/scenarios/:id', requireUserAuth, async (req: Request, res) => {
 // Vapi'deki canlı (base) asistan promptu — tüm senaryosuz aramalarda kullanılan varsayılan prompt
 app.get('/api/vapi/assistant-prompt', requireUserAuth, async (req: Request, res) => {
   try {
-    const creds = await resolveVapiCreds(req.userId!);
+    const creds = await resolveVapiCredsForAssistant(req.userId!);
     return res.json({ success: true, data: await getAssistantSystemPrompt(creds.apiKey, creds.assistantId) });
   }
   catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
@@ -1313,7 +1314,7 @@ app.put('/api/vapi/assistant-prompt', requireUserAuth, async (req: Request, res)
         error: `Tanınmayan değişken(ler): ${unknown.map(v => '{{' + v + '}}').join(', ')} — Vapi bunları olduğu gibi (literal metin olarak) okur, doldurmaz. Kullanılabilir değişkenler: {{customerName}}, {{customerRegion}}, {{customerNotes}}, {{customerReference}}, {{agentName}}, {{consultantName}}, {{companyName}}`,
       });
     }
-    const creds = await resolveVapiCreds(req.userId!);
+    const creds = await resolveVapiCredsForAssistant(req.userId!);
     await updateAssistantSystemPrompt(creds.apiKey, creds.assistantId, systemPrompt.trim());
     return res.json({ success: true });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }

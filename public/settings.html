@@ -36,9 +36,19 @@
     </div>
 
     <div class="adm-tab-panel active" data-panel="baglanti">
+    <div class="adm-card">
+      <div class="adm-section-title">👤 Profil</div>
+      <div id="fieldsContainer-profil"></div>
+    </div>
+
+    <div class="adm-card" id="tourConnectionCard">
+      <div class="adm-section-title">📞 Telefon Numarası & Asistan</div>
+      <div id="fieldsContainer-baglanti"></div>
+    </div>
+
     <div class="adm-card" id="tourApiKeysCard">
       <div class="adm-section-title">🔑 API Anahtarları</div>
-      <div id="fieldsContainer"></div>
+      <div id="fieldsContainer-keys"></div>
     </div>
 
     <details class="adm-card">
@@ -265,9 +275,9 @@ var SETTINGS_TOUR_STEPS = [
     body: 'Burada kendi Vapi/ElevenLabs/Anthropic hesap bilgilerinizi, ses/model tercihlerinizi ve arama kurallarınızı yönetiyorsunuz. Kısa bir tur atalım.',
   },
   {
-    target: '#tourApiKeysCard',
-    title: '1. API Anahtarları',
-    body: 'İlk kurulumda buraya Vapi API Key\'inizi girmeniz yeterli — kaydettiğinizde <b>☎️ Telefon Numarası</b> ve <b>🧠 Assistant ID</b> alanları otomatik listeden seçilebilir hale gelir, elle ID aramanıza gerek yok.',
+    target: '#tourConnectionCard',
+    title: '1. Telefon Numarası & Asistan',
+    body: 'Vapi hesabınızdaki numaralar ve asistanlar burada otomatik olarak dropdown\'a yüklenir — elle ID aramanıza gerek yok, sadece listeden seçip Kaydet\'e basın.',
     placement: 'bottom',
     onBefore: function () { var t = document.querySelector('[data-tab="baglanti"]'); if (t) t.click(); },
   },
@@ -295,16 +305,22 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 
 const FIELD_META = {
-  name:                { label: '👤 Adınız (Danışman)',         hint: 'Gerçek adınız — senaryolarda {{consultantName}} değişkeni olarak müşteriye söylenir (örn. "Keller Williams Platin Karma\'dan İbrahim Erokyar\'ın asistanı Deniz"). Asistan Adı\'ndan (aşağıda) farklı bir alan.' },
-  assistantName:       { label: '🎙️ Asistan Adı',              hint: 'AI\'ın telefonda kendini tanıttığı isim — danışmanın kendi adı DEĞİL, asistanın konuşma kimliği (örn. "Deniz"). Senaryolarda {{agentName}} değişkeni olarak kullanılır.' },
-  companyName:         { label: '🏢 Şirket / Takım Adı',       hint: 'Senaryolarda {{companyName}} değişkeni olarak kullanılır (örn. "Keller Williams Platin Karma")' },
-  vapiApiKey:          { label: '📞 Vapi API Key',            hint: 'Kendi Vapi hesabınızın Private Key\'i',           verifiable: true },
-  vapiPublicKey:       { label: '🌐 Vapi Public Key',          hint: 'Vapi Dashboard → API Keys → "Public Key" (Private Key\'den farklı) — tarayıcıdan sesli test için gerekli, opsiyonel' },
-  vapiPhoneNumberId:   { label: '☎️ Vapi Telefon Numarası ID', hint: 'Vapi hesabınızdaki numaralardan seçin — ID\'yi elle bulmanıza gerek yok', listType: 'phone-numbers' },
-  vapiAssistantId:     { label: '🧠 Vapi Assistant ID',        hint: 'Vapi hesabınızdaki asistanlardan seçin — ID\'yi elle bulmanıza gerek yok', listType: 'assistants' },
-  elevenlabsApiKey:    { label: '🔊 ElevenLabs API Key',       hint: 'Ses kotası görüntüleme için (opsiyonel)' },
-  anthropicApiKey:     { label: '🤖 Anthropic API Key',        hint: 'Görüşme özeti + AI senaryo üretimi için (Claude)' },
+  name:                { label: '👤 Adınız (Danışman)',         hint: 'Gerçek adınız — senaryolarda {{consultantName}} değişkeni olarak müşteriye söylenir (örn. "Keller Williams Platin Karma\'dan İbrahim Erokyar\'ın asistanı Deniz"). Asistan Adı\'ndan (aşağıda) farklı bir alan.', section: 'profil' },
+  assistantName:       { label: '🎙️ Asistan Adı',              hint: 'AI\'ın telefonda kendini tanıttığı isim — danışmanın kendi adı DEĞİL, asistanın konuşma kimliği (örn. "Deniz"). Senaryolarda {{agentName}} değişkeni olarak kullanılır.', section: 'profil' },
+  companyName:         { label: '🏢 Şirket / Takım Adı',       hint: 'Senaryolarda {{companyName}} değişkeni olarak kullanılır (örn. "Keller Williams Platin Karma")', section: 'profil' },
+  vapiPhoneNumberId:   { label: '☎️ Vapi Telefon Numarası',    hint: 'Vapi hesabınızdaki numaralardan seçin', listType: 'phone-numbers', section: 'baglanti' },
+  vapiAssistantId:     { label: '🧠 Vapi Asistanı',            hint: 'Vapi hesabınızdaki asistanlardan seçin', listType: 'assistants', section: 'baglanti' },
+  vapiApiKey:          { label: '📞 Vapi API Key',            hint: 'Kendi Vapi hesabınızın Private Key\'i',           verifiable: true, section: 'keys' },
+  vapiPublicKey:       { label: '🌐 Vapi Public Key',          hint: 'Vapi Dashboard → API Keys → "Public Key" (Private Key\'den farklı) — tarayıcıdan sesli test için gerekli, opsiyonel', section: 'keys' },
+  elevenlabsApiKey:    { label: '🔊 ElevenLabs API Key',       hint: 'Ses kotası görüntüleme için (opsiyonel)', section: 'keys' },
+  anthropicApiKey:     { label: '🤖 Anthropic API Key',        hint: 'Görüşme özeti + AI senaryo üretimi için (Claude)', section: 'keys' },
 };
+
+const FIELD_SECTIONS = [
+  { key: 'profil',   title: '👤 Profil' },
+  { key: 'baglanti', title: '📞 Telefon Numarası & Asistan' },
+  { key: 'keys',     title: '🔑 API Anahtarları' },
+];
 
 function $(id) { return document.getElementById(id); }
 
@@ -451,39 +467,53 @@ function sourceLabel(hasValue) {
 }
 
 function renderFields(data) {
-  const container = $('fieldsContainer');
-  container.innerHTML = Object.keys(FIELD_META).map(key => {
-    const meta = FIELD_META[key];
-    const info = data[key] || { value: '', masked: false, hasValue: false };
-    const placeholder = info.hasValue ? info.value : 'Henüz girilmedi...';
-    const listButton = meta.listType
-      ? `<button class="adm-save-btn" data-list="${meta.listType}" data-target="${key}" type="button">🔍 Listele</button>`
-      : '';
-    return `
-      <div class="adm-field" data-key="${key}">
-        <div class="adm-label-row">
-          <span class="adm-label">${meta.label}</span>
-          ${sourceLabel(info.hasValue)}
+  for (const section of FIELD_SECTIONS) {
+    const container = $('fieldsContainer-' + section.key);
+    if (!container) continue;
+    const keys = Object.keys(FIELD_META).filter(k => FIELD_META[k].section === section.key);
+    container.innerHTML = keys.map(key => {
+      const meta = FIELD_META[key];
+      const info = data[key] || { value: '', masked: false, hasValue: false };
+      const placeholder = info.hasValue ? info.value : 'Henüz girilmedi...';
+      const listButton = meta.listType
+        ? `<button class="adm-save-btn" data-list="${meta.listType}" data-target="${key}" type="button">🔄 Yenile</button>`
+        : '';
+      return `
+        <div class="adm-field" data-key="${key}">
+          <div class="adm-label-row">
+            <span class="adm-label">${meta.label}</span>
+            ${sourceLabel(info.hasValue)}
+          </div>
+          ${meta.listType ? `<select class="adm-list-select" data-select="${key}" style="display:none;margin-bottom:8px"></select>` : ''}
+          <div class="adm-input-row">
+            <input type="${info.masked ? 'password' : 'text'}" data-input="${key}"
+                   placeholder="${placeholder}" autocomplete="off" />
+            ${listButton}
+            <button class="adm-save-btn" data-save="${key}">Kaydet</button>
+          </div>
+          <div class="adm-field-hint">${meta.hint}</div>
+          <div class="adm-field-status" data-status="${key}"></div>
         </div>
-        ${meta.listType ? `<select class="adm-list-select" data-select="${key}" style="display:none;margin-bottom:8px"></select>` : ''}
-        <div class="adm-input-row">
-          <input type="${info.masked ? 'password' : 'text'}" data-input="${key}"
-                 placeholder="${placeholder}" autocomplete="off" />
-          ${listButton}
-          <button class="adm-save-btn" data-save="${key}">Kaydet</button>
-        </div>
-        <div class="adm-field-hint">${meta.hint}</div>
-        <div class="adm-field-status" data-status="${key}"></div>
-      </div>
-    `;
-  }).join('');
+      `;
+    }).join('');
 
-  container.querySelectorAll('[data-save]').forEach(btn => {
-    btn.addEventListener('click', () => saveField(btn.dataset.save));
-  });
-  container.querySelectorAll('[data-list]').forEach(btn => {
-    btn.addEventListener('click', () => loadVapiList(btn.dataset.list, btn.dataset.target, btn));
-  });
+    container.querySelectorAll('[data-save]').forEach(btn => {
+      btn.addEventListener('click', () => saveField(btn.dataset.save));
+    });
+    container.querySelectorAll('[data-list]').forEach(btn => {
+      btn.addEventListener('click', () => loadVapiList(btn.dataset.list, btn.dataset.target, btn));
+    });
+  }
+
+  // Telefon numarası / asistan dropdown'ları artık "Listele"ye basmayı beklemeden
+  // sayfa açılır açılmaz otomatik yüklenir (preload) — danışman manuel tıklamak
+  // zorunda kalmasın diye. "🔄 Yenile" butonu sadece elle tekrar çekmek içindir.
+  for (const key of Object.keys(FIELD_META)) {
+    const meta = FIELD_META[key];
+    if (!meta.listType) continue;
+    const btn = document.querySelector(`[data-list="${meta.listType}"][data-target="${key}"]`);
+    if (btn) loadVapiList(meta.listType, key, btn);
+  }
 }
 
 // Vapi API Key zaten kayıtlıysa (input boş) onu kullanır, kullanıcı yeni bir key
@@ -510,20 +540,23 @@ async function loadVapiList(listType, targetKey, btn) {
     if (!j.success) throw new Error(j.error || 'Liste alınamadı');
     if (!j.data.length) throw new Error('Hesabınızda hiç kayıt bulunamadı');
 
+    const input = document.querySelector(`[data-input="${targetKey}"]`);
+    const currentValue = input ? input.placeholder : '';
     select.innerHTML = '<option value="">— Seçin —</option>' + j.data.map(item => {
       const label = listType === 'assistants' ? item.name : `${item.number}${item.name ? ' — ' + item.name : ''}`;
-      return `<option value="${item.id}">${esc(label)}</option>`;
+      const selected = item.id === currentValue ? ' selected' : '';
+      return `<option value="${item.id}"${selected}>${esc(label)}</option>`;
     }).join('');
     select.style.display = 'block';
     select.onchange = () => {
-      document.querySelector(`[data-input="${targetKey}"]`).value = select.value;
+      if (input) input.value = select.value;
     };
   } catch (err) {
     status.textContent = '✗ ' + err.message;
     status.className = 'adm-field-status err';
   } finally {
     btn.disabled = false;
-    btn.textContent = '🔍 Listele';
+    btn.textContent = '🔄 Yenile';
   }
 }
 

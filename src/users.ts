@@ -340,6 +340,33 @@ export async function resolveVapiCreds(userId: string): Promise<ResolvedVapiCred
   return creds;
 }
 
+// Sadece API Key gerektiren işlemler için (asistan/telefon numarası LİSTELEME) —
+// getUserVapiCredentials üçlüsünün (apiKey+phoneNumberId+assistantId) tamamını ister,
+// ama yeni bir kullanıcı telefon numarasını SEÇMEK için önce listeyi çekebilmeli
+// (aksi halde tavuk-yumurta: numara seçilemeden liste gelmiyor, liste gelmeden numara
+// seçilemiyor). Merkezi hesap üzerinden otomatik provizyon edilen kullanıcılarda
+// apiKey zaten kayıtlı ama phoneNumberId henüz kullanıcı tarafından seçilmemiş olur.
+export async function getUserVapiApiKey(userId: string): Promise<string | null> {
+  const { rows } = await pool.query(`SELECT vapi_api_key_enc FROM users WHERE id = $1`, [userId]);
+  const enc = rows[0]?.vapi_api_key_enc;
+  return enc ? decryptSecret(enc) : null;
+}
+
+// Asistan konfigürasyonu okuma/yazma (model/ses/prompt) için — phoneNumberId gerekmez,
+// sadece apiKey + assistantId. Aynı tavuk-yumurta sorununun ikinci yüzü: numara henüz
+// seçilmemişken bile danışman Model/Ses sekmesini düzenleyebilmeli.
+export async function resolveVapiCredsForAssistant(userId: string): Promise<{ apiKey: string; assistantId: string }> {
+  const { rows } = await pool.query(
+    `SELECT vapi_api_key_enc, vapi_assistant_id FROM users WHERE id = $1`,
+    [userId],
+  );
+  const r = rows[0];
+  if (!r?.vapi_api_key_enc || !r?.vapi_assistant_id) {
+    throw new Error('Vapi hesap bilgileriniz tanımlı değil — Ayarlarım sayfasından ekleyin.');
+  }
+  return { apiKey: decryptSecret(r.vapi_api_key_enc), assistantId: r.vapi_assistant_id };
+}
+
 // ─── ElevenLabs / Anthropic ─────────────────────────────────────────────────
 
 export async function setUserElevenLabsKey(userId: string, apiKey: string): Promise<void> {
