@@ -258,33 +258,35 @@
     <div class="tab-content" id="tabStats">
       <div class="stats-scroll">
 
-        <div class="quick-chips stats-chips" id="statsChips">
-          <button class="chip" data-period="1">Bugün</button>
-          <button class="chip" data-period="7">Son 7 gün</button>
-          <button class="chip active" data-period="30">Son 30 gün</button>
-          <button class="chip" data-period="0">Hepsi</button>
-          <div class="chip-spacer"></div>
-          <button class="chip-refresh" id="statsRefresh" title="Yenile">↻</button>
-        </div>
+        <div class="stats-filter-panel">
+          <div class="quick-chips stats-chips" id="statsChips">
+            <button class="chip" data-period="1">Bugün</button>
+            <button class="chip" data-period="7">Son 7 gün</button>
+            <button class="chip active" data-period="30">Son 30 gün</button>
+            <button class="chip" data-period="0">Hepsi</button>
+            <div class="chip-spacer"></div>
+            <button class="chip-refresh" id="statsRefresh" title="Yenile">↻</button>
+          </div>
 
-        <div class="filter-bar">
-          <div class="filter-group">
-            <label>Başlangıç</label>
-            <input type="date" id="statsDateFrom" />
-          </div>
-          <div class="filter-group">
-            <label>Bitiş</label>
-            <input type="date" id="statsDateTo" />
-          </div>
-          <div class="filter-group">
-            <label>Senaryo</label>
-            <select id="statsScenarioFilter">
-              <option value="">Tümü</option>
-              <option value="__none__">— Varsayılan (Senaryosuz) —</option>
-            </select>
-          </div>
-          <div class="filter-actions">
-            <button class="btn-filter-clear" id="btnStatsClearFilter">✕ Temizle</button>
+          <div class="filter-bar">
+            <div class="filter-group">
+              <label>Başlangıç</label>
+              <input type="date" id="statsDateFrom" />
+            </div>
+            <div class="filter-group">
+              <label>Bitiş</label>
+              <input type="date" id="statsDateTo" />
+            </div>
+            <div class="filter-group">
+              <label>Senaryo</label>
+              <select id="statsScenarioFilter">
+                <option value="">Tümü</option>
+                <option value="__none__">— Varsayılan (Senaryosuz) —</option>
+              </select>
+            </div>
+            <div class="filter-actions">
+              <button class="btn-filter-clear" id="btnStatsClearFilter">✕ Temizle</button>
+            </div>
           </div>
         </div>
 
@@ -414,7 +416,7 @@
               <label>Kampanya Adı</label>
               <input type="text" id="campaignName" class="camp-name-input" placeholder="Örn: Ağustos KW Büyüme — Batch 2" />
             </div>
-            <div class="concurrency-group" title="Kampanyadaki tüm aramalarda kullanılacak senaryo">
+            <div class="concurrency-group camp-scenario-group" title="Kampanyadaki tüm aramalarda kullanılacak senaryo">
               <label>Senaryo</label>
               <select id="campaignScenario">
                 <option value="">— Varsayılan prompt —</option>
