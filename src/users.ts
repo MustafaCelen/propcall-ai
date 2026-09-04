@@ -389,6 +389,105 @@ export async function getUserAnthropicKey(userId: string): Promise<string> {
   return enc ? decryptSecret(enc) : '';
 }
 
+// ─── Meta Lead Ads ──────────────────────────────────────────────────────────
+
+export interface MetaConfig {
+  pageId: string;
+  pageName: string;
+  pageAccessToken: string;
+  lastSyncAt: string | null;
+}
+
+export async function setUserMetaConfig(userId: string, pageId: string, pageName: string, pageAccessToken: string): Promise<void> {
+  await pool.query(
+    `UPDATE users SET meta_page_id = $2, meta_page_name = $3, meta_page_access_token_enc = $4 WHERE id = $1`,
+    [userId, pageId, pageName, encryptSecret(pageAccessToken)],
+  );
+}
+
+export async function clearUserMetaConfig(userId: string): Promise<void> {
+  await pool.query(
+    `UPDATE users SET meta_page_id = NULL, meta_page_name = NULL, meta_page_access_token_enc = NULL, meta_last_sync_at = NULL WHERE id = $1`,
+    [userId],
+  );
+}
+
+export async function getUserMetaConfig(userId: string): Promise<MetaConfig | null> {
+  const { rows } = await pool.query(
+    `SELECT meta_page_id, meta_page_name, meta_page_access_token_enc, meta_last_sync_at FROM users WHERE id = $1`,
+    [userId],
+  );
+  const r = rows[0];
+  if (!r?.meta_page_id || !r?.meta_page_access_token_enc) return null;
+  return {
+    pageId: r.meta_page_id,
+    pageName: r.meta_page_name || '',
+    pageAccessToken: decryptSecret(r.meta_page_access_token_enc),
+    lastSyncAt: r.meta_last_sync_at ? new Date(r.meta_last_sync_at).toISOString() : null,
+  };
+}
+
+export async function getAllUsersWithMetaConfig(): Promise<Array<{ userId: string } & MetaConfig>> {
+  const { rows } = await pool.query(
+    `SELECT id, meta_page_id, meta_page_name, meta_page_access_token_enc, meta_last_sync_at
+     FROM users WHERE meta_page_id IS NOT NULL AND meta_page_access_token_enc IS NOT NULL`,
+  );
+  return rows.map(r => ({
+    userId: r.id,
+    pageId: r.meta_page_id,
+    pageName: r.meta_page_name || '',
+    pageAccessToken: decryptSecret(r.meta_page_access_token_enc),
+    lastSyncAt: r.meta_last_sync_at ? new Date(r.meta_last_sync_at).toISOString() : null,
+  }));
+}
+
+export async function setUserMetaLastSync(userId: string): Promise<void> {
+  await pool.query(`UPDATE users SET meta_last_sync_at = NOW() WHERE id = $1`, [userId]);
+}
+
+// Meta webhook'unun gönderdiği pageId'den sahip danışmanı bulur — /webhook/meta
+// (tek global endpoint) gelen bildirimi doğru kullanıcının senkronuna yönlendirmek için.
+export async function getUserIdByMetaPageId(pageId: string): Promise<string | null> {
+  const { rows } = await pool.query(`SELECT id FROM users WHERE meta_page_id = $1`, [pageId]);
+  return rows[0]?.id ?? null;
+}
+
+// ─── WhatsApp (Twilio) ──────────────────────────────────────────────────────
+
+export interface WhatsappConfig {
+  accountSid: string;
+  authToken: string;
+  whatsappNumber: string;
+}
+
+export async function setUserWhatsappConfig(userId: string, accountSid: string, authToken: string, whatsappNumber: string): Promise<void> {
+  await pool.query(
+    `UPDATE users SET whatsapp_account_sid = $2, whatsapp_auth_token_enc = $3, whatsapp_number = $4 WHERE id = $1`,
+    [userId, accountSid, encryptSecret(authToken), whatsappNumber],
+  );
+}
+
+export async function clearUserWhatsappConfig(userId: string): Promise<void> {
+  await pool.query(
+    `UPDATE users SET whatsapp_account_sid = NULL, whatsapp_auth_token_enc = NULL, whatsapp_number = NULL WHERE id = $1`,
+    [userId],
+  );
+}
+
+export async function getUserWhatsappConfig(userId: string): Promise<WhatsappConfig | null> {
+  const { rows } = await pool.query(
+    `SELECT whatsapp_account_sid, whatsapp_auth_token_enc, whatsapp_number FROM users WHERE id = $1`,
+    [userId],
+  );
+  const r = rows[0];
+  if (!r?.whatsapp_account_sid || !r?.whatsapp_auth_token_enc || !r?.whatsapp_number) return null;
+  return {
+    accountSid: r.whatsapp_account_sid,
+    authToken: decryptSecret(r.whatsapp_auth_token_enc),
+    whatsappNumber: r.whatsapp_number,
+  };
+}
+
 // ─── "Ayarlarım" sayfası için maskeli görünüm ───────────────────────────────
 
 function maskValue(v: string): string {

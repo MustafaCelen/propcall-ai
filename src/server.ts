@@ -19,8 +19,17 @@ import { getElevenLabsCredit, listElevenLabsVoices, estimateTtsCost, generateVoi
 import { getAllAppointments, saveAppointment, deleteAppointment, setAppointmentOutcome } from './appointments';
 import {
   getAllLeads, getLead, createLead, updateLead, setLeadStage, deleteLead,
-  getLeadActivities, addLeadActivity,
+  getLeadActivities, addLeadActivity, upsertLeadFromCallOutcome,
 } from './leads';
+import { startMetaSyncJob, syncUserMetaLeadsNow } from './metaLeads';
+import {
+  getAllTemplates, getTemplate, createTemplate, updateTemplate, deleteTemplate,
+  submitTemplate, startTemplateSyncJob,
+} from './whatsappTemplates';
+import {
+  getMessagesForLead, sendSingleMessage, recordInboundMessage,
+  getAllCampaigns, previewCampaignRecipients, createCampaign, sendCampaign,
+} from './whatsappCampaigns';
 import { getAllScenarios, getScenario, createScenario, updateScenario, deleteScenario, seedDefaultScenario } from './scenarios';
 import { findUnsupportedVariables } from './templateVariables';
 import {
@@ -43,6 +52,8 @@ import {
   getUserVapiApiKey, resolveVapiCredsForAssistant,
   getUserBalance, adjustUserBalance, chargeForCall, listCreditTransactions, CALL_MINUTE_RATE_TRY,
   setUserCompanyName, setUserAssistantName, setUserName, createPendingFonzipTopup, creditFonzipTopup,
+  setUserMetaConfig, clearUserMetaConfig, getUserMetaConfig, getUserIdByMetaPageId,
+  setUserWhatsappConfig, clearUserWhatsappConfig, getUserWhatsappConfig,
 } from './users';
 import {
   isFonzipConfigured, resolveFonzipUserId, createTopupDebt, generateTopupLink,
@@ -62,6 +73,9 @@ let httpServer: ReturnType<typeof app.listen> | undefined;
 app.use(cors());
 app.use(cookieParser());
 app.use(express.json({ limit: '10mb' }));
+// Twilio webhook'ları (WhatsApp inbound) application/x-www-form-urlencoded gönderir —
+// express.json() bunu parse etmez, req.body boş kalır webhook.ts sessizce hiçbir şey yapmaz.
+app.use(express.urlencoded({ extended: false }));
 // setHeaders yoksa Express sadece ETag/Last-Modified gönderir, Cache-Control göndermez —
 // tarayıcılar bu durumda "heuristic freshness" ile dosyayı sunucuya HİÇ SORMADAN önbellekten
 // kullanabilir (RFC 7234 §4.2.2). Sonuç: bir deploy'dan sonra danışman sert yenileme
@@ -952,6 +966,12 @@ async function generateSummaryForCall(vapiCallId: string, attempt = 1): Promise<
     await applyDerivedCosts(vapiCallId, ownerId, record, usage);
     broadcast(ownerId, 'summary-ready', { vapiCallId, summary });
     onCampaignSummaryReady(vapiCallId, summary).catch(console.error);
+    // RLM birleşimi Faz 5: arama sonucu → Aday (Lead) — bkz. leads.ts
+    // upsertLeadFromCallOutcome'daki asimetrik-risk yorumu (sadece ileri taşır).
+    upsertLeadFromCallOutcome(
+      ownerId, record.customerPhone, record.customerName, vapiCallId,
+      summary.randevu_alindi, summary.ilgi_seviyesi, summary.ozet,
+    ).catch(err => console.error('[Leads] Arama sonucu → aday birleşimi hatası:', err));
     console.log(`[AI] Özet hazır: ${vapiCallId} (Anthropic: $${usage.costUsd.toFixed(4)})`);
   } catch (err) {
     console.error('[AI] Özet hatası:', err);
@@ -1325,6 +1345,191 @@ app.post('/api/leads/:id/notes', requireUserAuth, async (req: Request, res: Resp
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
 
+// ─── META LEAD ADS ───────────────────────────────────────────────────────────
+// RLM birleşimi Faz 2: danışman Meta Business'tan aldığı Page Access Token'ı elle
+// bağlar (Vapi/ElevenLabs key deseniyle aynı) — tam OAuth akışı kapsam dışı.
+
+app.get('/api/settings/meta', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const config = await getUserMetaConfig(req.userId!);
+    return res.json({ success: true, data: config ? { pageId: config.pageId, pageName: config.pageName, lastSyncAt: config.lastSyncAt, connected: true } : { connected: false } });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.post('/api/settings/meta', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const { pageId, pageAccessToken } = req.body as { pageId?: string; pageAccessToken?: string };
+    if (!pageId?.trim() || !pageAccessToken?.trim())
+      return res.status(400).json({ success: false, error: 'Page ID ve Page Access Token zorunlu' });
+
+    // Token'ı doğrula ve sayfa adını çek — geçersiz token'lar kaydedilmeden önce yakalanır.
+    const verifyResp = await fetch(`https://graph.facebook.com/v19.0/${pageId.trim()}?fields=name&access_token=${pageAccessToken.trim()}`);
+    const verifyData: any = await verifyResp.json().catch(() => ({}));
+    if (!verifyResp.ok) {
+      return res.status(400).json({ success: false, error: verifyData?.error?.message || 'Meta token doğrulanamadı' });
+    }
+
+    await setUserMetaConfig(req.userId!, pageId.trim(), verifyData.name || '', pageAccessToken.trim());
+    return res.json({ success: true, data: { pageId: pageId.trim(), pageName: verifyData.name || '' } });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.delete('/api/settings/meta', requireUserAuth, async (req: Request, res: Response) => {
+  try { await clearUserMetaConfig(req.userId!); return res.json({ success: true }); }
+  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.post('/api/meta/sync', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const config = await getUserMetaConfig(req.userId!);
+    if (!config) return res.status(400).json({ success: false, error: 'Meta hesabınız bağlı değil' });
+    await syncUserMetaLeadsNow(req.userId!, config);
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+// ─── WHATSAPP (TWILIO) ───────────────────────────────────────────────────────
+// RLM birleşimi Faz 3-4: hesap bağlantısı, şablon yönetimi, tekil/toplu mesaj gönderimi.
+
+app.get('/api/settings/whatsapp', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const config = await getUserWhatsappConfig(req.userId!);
+    return res.json({ success: true, data: config ? { accountSid: config.accountSid, whatsappNumber: config.whatsappNumber, connected: true } : { connected: false } });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.post('/api/settings/whatsapp', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const { accountSid, authToken, whatsappNumber } = req.body as { accountSid?: string; authToken?: string; whatsappNumber?: string };
+    if (!accountSid?.trim() || !authToken?.trim() || !whatsappNumber?.trim())
+      return res.status(400).json({ success: false, error: 'Account SID, Auth Token ve WhatsApp numarası zorunlu' });
+    await setUserWhatsappConfig(req.userId!, accountSid.trim(), authToken.trim(), whatsappNumber.trim());
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.delete('/api/settings/whatsapp', requireUserAuth, async (req: Request, res: Response) => {
+  try { await clearUserWhatsappConfig(req.userId!); return res.json({ success: true }); }
+  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.get('/api/whatsapp/templates', requireUserAuth, async (req: Request, res: Response) => {
+  try { return res.json({ success: true, data: await getAllTemplates(req.userId!) }); }
+  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.post('/api/whatsapp/templates', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const { name, category, body, variables } = req.body as { name?: string; category?: string; body?: string; variables?: string[] };
+    if (!name?.trim() || !body?.trim()) return res.status(400).json({ success: false, error: 'Ad ve metin zorunlu' });
+    const template = await createTemplate(req.userId!, name, (category as any) || 'MARKETING', body, variables || []);
+    return res.status(201).json({ success: true, data: template });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.patch('/api/whatsapp/templates/:id', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const { name, body, variables } = req.body as { name?: string; body?: string; variables?: string[] };
+    const template = await updateTemplate(req.userId!, req.params.id, { name, body, variables });
+    if (!template) return res.status(404).json({ success: false, error: 'Şablon bulunamadı' });
+    return res.json({ success: true, data: template });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.delete('/api/whatsapp/templates/:id', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    if (!await deleteTemplate(req.userId!, req.params.id)) return res.status(404).json({ success: false, error: 'Şablon bulunamadı' });
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.post('/api/whatsapp/templates/:id/submit', requireUserAuth, async (req: Request, res: Response) => {
+  try { return res.json({ success: true, data: await submitTemplate(req.userId!, req.params.id) }); }
+  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.get('/api/leads/:id/messages', requireUserAuth, async (req: Request, res: Response) => {
+  try { return res.json({ success: true, data: await getMessagesForLead(req.userId!, req.params.id) }); }
+  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.post('/api/leads/:id/messages', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const { body } = req.body as { body?: string };
+    if (!body?.trim()) return res.status(400).json({ success: false, error: 'Mesaj boş olamaz' });
+    const message = await sendSingleMessage(req.userId!, req.params.id, body.trim());
+    return res.status(201).json({ success: true, data: message });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.get('/api/whatsapp/campaigns', requireUserAuth, async (req: Request, res: Response) => {
+  try { return res.json({ success: true, data: await getAllCampaigns(req.userId!) }); }
+  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.post('/api/whatsapp/campaigns/preview', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const { filter } = req.body as { filter?: { stages?: string[]; sources?: string[] } };
+    return res.json({ success: true, data: { count: await previewCampaignRecipients(req.userId!, filter || {}) } });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.post('/api/whatsapp/campaigns', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const { name, templateId, filter, variableMap } = req.body as {
+      name?: string; templateId?: string; filter?: any; variableMap?: Record<string, string>;
+    };
+    if (!name?.trim() || !templateId) return res.status(400).json({ success: false, error: 'Ad ve şablon zorunlu' });
+    const campaign = await createCampaign(req.userId!, name, templateId, filter || {}, variableMap || {});
+    return res.status(201).json({ success: true, data: campaign });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.post('/api/whatsapp/campaigns/:id/send', requireUserAuth, async (req: Request, res: Response) => {
+  try { return res.json({ success: true, data: await sendCampaign(req.userId!, req.params.id) }); }
+  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+// Twilio inbound webhook — Twilio WhatsApp Sender ayarında bu URL kayıtlı olmalı.
+// Vapi webhook'undaki gibi userId URL'de — Twilio'nun tek bir global callback'i
+// desteklememesi (her numara kendi webhook URL'ini alabilir) buna izin veriyor.
+app.post('/webhook/whatsapp/:userId', async (req: Request, res: Response) => {
+  res.sendStatus(200);
+  try {
+    const { From, Body, MessageSid } = req.body as { From?: string; Body?: string; MessageSid?: string };
+    if (!From || !MessageSid) return;
+    await recordInboundMessage(req.params.userId, From, Body || '', MessageSid);
+  } catch (err) { console.error('[Webhook] WhatsApp inbound hatası:', err); }
+});
+
+// Meta webhook — tek global endpoint (Fonzip'teki gibi, Meta uygulama başına tek
+// callback URL destekler). Gerçek zamanlı bildirim geldiğinde payload'ı ayrıştırmak
+// yerine (senkron algoritması zaten metaLeads.ts'te tek bir yerde), sadece hangi
+// danışmanın sayfası olduğunu bulup onun için ANINDA bir senkron tetikler.
+app.get('/webhook/meta', (req: Request, res: Response) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+  if (mode === 'subscribe' && token === process.env.META_WEBHOOK_VERIFY_TOKEN && process.env.META_WEBHOOK_VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
+  }
+  return res.sendStatus(403);
+});
+
+app.post('/webhook/meta', async (req: Request, res: Response) => {
+  res.sendStatus(200);
+  try {
+    const entries = (req.body as any)?.entry as Array<{ id: string }> | undefined;
+    for (const entry of entries || []) {
+      const userId = await getUserIdByMetaPageId(entry.id);
+      if (!userId) continue;
+      const config = await getUserMetaConfig(userId);
+      if (!config) continue;
+      syncUserMetaLeadsNow(userId, config).catch(err => console.error('[Webhook] Meta anında senkron hatası:', err));
+    }
+  } catch (err) { console.error('[Webhook] Meta webhook hatası:', err); }
+});
+
 // ─── SENARYOLAR ──────────────────────────────────────────────────────────────
 
 app.get('/api/scenarios', requireUserAuth, async (req: Request, res) => {
@@ -1598,6 +1803,8 @@ initDb()
     }
     initCampaignRunner(broadcast);
     await loadAllActiveCampaigns();
+    startMetaSyncJob();
+    startTemplateSyncJob();
     const staleCount = await reconcileStaleCalls();
     if (staleCount > 0) {
       console.log(`[Reconcile] ${staleCount} eski "in-progress" arama "failed" olarak kapatıldı (webhook gelmemişti)`);

@@ -322,7 +322,8 @@ function switchTab(name) {
                   (name === 'campaign'        && c.id === 'tabCampaign')        ||
                   (name === 'campaignHistory' && c.id === 'tabCampaignHistory') ||
                   (name === 'followup'        && c.id === 'tabFollowup')        ||
-                  (name === 'leads'           && c.id === 'tabLeads');
+                  (name === 'leads'           && c.id === 'tabLeads')           ||
+                  (name === 'whatsapp'        && c.id === 'tabWhatsapp');
     c.classList.toggle('active', match);
   });
   if (name === 'campaignHistory') loadCampaignHistory();
@@ -330,6 +331,7 @@ function switchTab(name) {
   if (name === 'stats')   loadStats();
   if (name === 'followup') loadFollowup();
   if (name === 'leads')   loadLeads();
+  if (name === 'whatsapp') loadWhatsappTab();
 }
 
 // ─── SSE ─────────────────────────────────────────────────────────────────────

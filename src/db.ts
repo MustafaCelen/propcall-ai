@@ -231,6 +231,75 @@ export async function initDb(): Promise<void> {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_lead_activities_lead_id ON lead_activities (lead_id);
+
+    -- Meta Lead Ads bağlantısı — danışman Meta Business'tan aldığı Page Access Token'ı
+    -- elle yapıştırır (Vapi/ElevenLabs key deseniyle aynı — tam OAuth akışı ayrı bir
+    -- Meta App kaydı/redirect URI onayı gerektirir, kapsam dışı bırakıldı). Sayfa
+    -- üzerindeki TÜM lead formları otomatik senkronize edilir (bkz. src/metaLeads.ts).
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS meta_page_id TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS meta_page_name TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS meta_page_access_token_enc TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS meta_last_sync_at TIMESTAMPTZ;
+
+    -- WhatsApp (Twilio) bağlantısı — RLM birleşimi Faz 3.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS whatsapp_account_sid TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS whatsapp_auth_token_enc TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS whatsapp_number TEXT;
+
+    CREATE TABLE IF NOT EXISTS whatsapp_templates (
+      id                 TEXT PRIMARY KEY,
+      user_id            TEXT NOT NULL REFERENCES users(id),
+      name               TEXT NOT NULL,
+      category           TEXT NOT NULL DEFAULT 'MARKETING',
+      body               TEXT NOT NULL,
+      variables          JSONB NOT NULL DEFAULT '[]',
+      twilio_content_sid TEXT,
+      rejection_reason   TEXT,
+      status             TEXT NOT NULL DEFAULT 'DRAFT',
+      created_at         TIMESTAMPTZ DEFAULT NOW(),
+      updated_at         TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_whatsapp_templates_user_id ON whatsapp_templates (user_id);
+
+    CREATE TABLE IF NOT EXISTS whatsapp_messages (
+      id           TEXT PRIMARY KEY,
+      user_id      TEXT NOT NULL REFERENCES users(id),
+      lead_id      TEXT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+      twilio_sid   TEXT UNIQUE,
+      direction    TEXT NOT NULL, -- 'IN' | 'OUT'
+      status       TEXT NOT NULL DEFAULT 'QUEUED',
+      body         TEXT NOT NULL,
+      template_id  TEXT,
+      campaign_id  TEXT,
+      error_message TEXT,
+      created_at   TIMESTAMPTZ DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_whatsapp_messages_lead_id ON whatsapp_messages (lead_id);
+    CREATE INDEX IF NOT EXISTS idx_whatsapp_messages_user_id ON whatsapp_messages (user_id);
+
+    CREATE TABLE IF NOT EXISTS whatsapp_campaigns (
+      id            TEXT PRIMARY KEY,
+      user_id       TEXT NOT NULL REFERENCES users(id),
+      name          TEXT NOT NULL,
+      template_id   TEXT NOT NULL REFERENCES whatsapp_templates(id),
+      status        TEXT NOT NULL DEFAULT 'DRAFT',
+      filter        JSONB NOT NULL DEFAULT '{}',
+      variable_map  JSONB NOT NULL DEFAULT '{}',
+      created_at    TIMESTAMPTZ DEFAULT NOW(),
+      completed_at  TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_whatsapp_campaigns_user_id ON whatsapp_campaigns (user_id);
+
+    CREATE TABLE IF NOT EXISTS whatsapp_campaign_recipients (
+      id           TEXT PRIMARY KEY,
+      campaign_id  TEXT NOT NULL REFERENCES whatsapp_campaigns(id) ON DELETE CASCADE,
+      lead_id      TEXT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+      status       TEXT NOT NULL DEFAULT 'PENDING',
+      error_msg    TEXT,
+      sent_at      TIMESTAMPTZ,
+      UNIQUE (campaign_id, lead_id)
+    );
   `;
 
   for (let attempt = 1; attempt <= INIT_RETRIES; attempt++) {

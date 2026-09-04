@@ -137,6 +137,15 @@ async function openLeadDrawer(id) {
         <button class="btn-save-notes" id="leadNoteSave">Notu Kaydet</button>
       </div>
     </div>
+    ${lead.phone ? `
+    <div class="drawer-section">
+      <div class="drawer-section-title">WhatsApp</div>
+      <div class="lead-msg-thread" id="leadMsgThread"><div class="drawer-loading">⏳ Yükleniyor...</div></div>
+      <div class="drawer-actions" style="margin-top:8px">
+        <input type="text" id="leadMsgInput" placeholder="Mesaj yazın..." style="flex:1" />
+        <button class="btn-save-notes" id="leadMsgSend">Gönder</button>
+      </div>
+    </div>` : ''}
     <div class="drawer-section">
       <div class="drawer-section-title">Aktivite Geçmişi</div>
       <div id="leadActivityList"><div class="drawer-loading">⏳ Yükleniyor...</div></div>
@@ -147,11 +156,52 @@ async function openLeadDrawer(id) {
     btn.addEventListener('click', () => moveLeadStage(id, btn.dataset.stage));
   });
   $('leadNoteSave').addEventListener('click', () => saveLeadNote(id));
+  if (lead.phone) {
+    $('leadMsgSend').addEventListener('click', () => sendLeadMessage(id));
+    loadLeadMessages(id);
+  }
 
   $('leadDrawer').classList.add('open');
   $('leadDrawerOverlay').classList.add('visible');
 
   loadLeadActivities(id);
+}
+
+async function loadLeadMessages(id) {
+  const thread = $('leadMsgThread');
+  try {
+    const r = await fetch(`/api/leads/${id}/messages`);
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error || 'Mesajlar yüklenemedi');
+    if (!j.data.length) { thread.innerHTML = '<div class="lead-column-empty">Henüz mesaj yok</div>'; return; }
+    thread.innerHTML = j.data.map(m => `
+      <div class="lead-msg ${m.direction}">
+        <div>${esc(m.body)}</div>
+        <div class="lead-msg-time">${leadRelativeTime(m.createdAt)}${m.status === 'FAILED' ? ' · ✗ gönderilemedi' : ''}</div>
+      </div>
+    `).join('');
+    thread.scrollTop = thread.scrollHeight;
+  } catch (err) {
+    thread.innerHTML = `<div class="drawer-error">✗ ${err.message}</div>`;
+  }
+}
+
+async function sendLeadMessage(id) {
+  const input = $('leadMsgInput');
+  const body = input.value.trim();
+  if (!body) return;
+  try {
+    const r = await fetch(`/api/leads/${id}/messages`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body }),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error || 'Mesaj gönderilemedi');
+    input.value = '';
+    loadLeadMessages(id);
+  } catch (err) {
+    toast('✗ ' + err.message, 'error');
+  }
 }
 
 async function loadLeadActivities(id) {

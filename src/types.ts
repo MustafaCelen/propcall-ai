@@ -226,3 +226,59 @@ export interface LeadActivity {
   data: Record<string, unknown>;
   createdAt: string;
 }
+
+// ── WhatsApp (Twilio) ────────────────────────────────────────────────────────
+
+export const TEMPLATE_CATEGORIES = ['MARKETING', 'UTILITY', 'AUTHENTICATION'] as const;
+export type TemplateCategory = (typeof TEMPLATE_CATEGORIES)[number];
+
+export const TEMPLATE_STATUSES = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED'] as const;
+export type TemplateStatus = (typeof TEMPLATE_STATUSES)[number];
+
+export interface WhatsappTemplate {
+  id: string;
+  name: string;
+  category: TemplateCategory;
+  body: string;
+  variables: string[];
+  twilioContentSid: string | null;
+  rejectionReason: string | null;
+  status: TemplateStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const MESSAGE_DIRECTIONS = ['IN', 'OUT'] as const;
+export type MessageDirection = (typeof MESSAGE_DIRECTIONS)[number];
+
+export interface WhatsappMessage {
+  id: string;
+  leadId: string;
+  twilioSid: string | null;
+  direction: MessageDirection;
+  status: string;
+  body: string;
+  templateId: string | null;
+  campaignId: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+}
+
+export const CAMPAIGN_STATUSES = ['DRAFT', 'RUNNING', 'COMPLETED'] as const;
+export type WhatsappCampaignStatus = (typeof CAMPAIGN_STATUSES)[number];
+
+export interface WhatsappCampaignFilter {
+  stages?: string[];
+  sources?: string[];
+}
+
+export interface WhatsappCampaign {
+  id: string;
+  name: string;
+  templateId: string;
+  status: WhatsappCampaignStatus;
+  filter: WhatsappCampaignFilter;
+  variableMap: Record<string, string>;
+  createdAt: string;
+  completedAt: string | null;
+}

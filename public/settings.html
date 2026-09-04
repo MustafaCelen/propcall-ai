@@ -33,6 +33,7 @@
       <button class="adm-tab active" data-tab="baglanti">🔑 Hesap Bağlantıları</button>
       <button class="adm-tab" data-tab="asistan">🤖 Asistan Ayarları</button>
       <button class="adm-tab" data-tab="kurallar">⏰ Arama Kuralları</button>
+      <button class="adm-tab" data-tab="crm">🔗 CRM Entegrasyonları</button>
     </div>
 
     <div class="adm-tab-panel active" data-panel="baglanti">
@@ -263,6 +264,56 @@
       <div class="adm-field-status" id="statusDuplicateProtection"></div>
     </div>
     </div>
+
+    <div class="adm-tab-panel" data-panel="crm">
+    <div class="adm-card">
+      <div class="adm-section-title">📢 Meta Lead Ads</div>
+      <div class="adm-field-hint" style="margin-bottom:12px">Facebook/Instagram reklam formlarınızdan gelen adaylar otomatik olarak "Adaylar" sekmesine aktarılır (15 dakikada bir taranır). Page ID ve Page Access Token'ı Meta Business hesabınızdan alın.</div>
+      <div id="metaConnectedInfo" style="display:none;margin-bottom:12px">
+        <span class="adm-source db">Bağlı</span> <span id="metaPageNameLabel"></span>
+        <span id="metaLastSyncLabel" style="color:var(--txm);font-size:11px;margin-left:8px"></span>
+      </div>
+      <div class="form-group">
+        <label class="adm-mini-label">Page ID</label>
+        <input type="text" id="metaPageId" placeholder="Facebook sayfa ID'niz" autocomplete="off" />
+      </div>
+      <div class="form-group">
+        <label class="adm-mini-label">Page Access Token</label>
+        <input type="password" id="metaPageAccessToken" placeholder="Meta Business → Sistem Kullanıcısı token'ı" autocomplete="off" />
+      </div>
+      <div class="adm-input-row">
+        <button class="adm-save-btn" id="btnSaveMeta">Bağla</button>
+        <button class="adm-save-btn" id="btnSyncMetaNow" style="display:none">↻ Şimdi Senkronize Et</button>
+        <button class="adm-save-btn" id="btnDisconnectMeta" style="display:none">Bağlantıyı Kes</button>
+      </div>
+      <div class="adm-field-status" id="statusMeta"></div>
+    </div>
+
+    <div class="adm-card">
+      <div class="adm-section-title">💬 WhatsApp (Twilio)</div>
+      <div class="adm-field-hint" style="margin-bottom:12px">Adaylara WhatsApp üzerinden tekil veya toplu mesaj göndermek için Twilio hesap bilgilerinizi girin (Twilio Console → Account Info).</div>
+      <div id="whatsappConnectedInfo" style="display:none;margin-bottom:12px">
+        <span class="adm-source db">Bağlı</span> <span id="whatsappNumberLabel"></span>
+      </div>
+      <div class="form-group">
+        <label class="adm-mini-label">Account SID</label>
+        <input type="text" id="whatsappAccountSid" placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off" />
+      </div>
+      <div class="form-group">
+        <label class="adm-mini-label">Auth Token</label>
+        <input type="password" id="whatsappAuthToken" placeholder="Twilio Auth Token" autocomplete="off" />
+      </div>
+      <div class="form-group">
+        <label class="adm-mini-label">WhatsApp Numarası</label>
+        <input type="text" id="whatsappNumber" placeholder="+14155238886" autocomplete="off" />
+      </div>
+      <div class="adm-input-row">
+        <button class="adm-save-btn" id="btnSaveWhatsapp">Bağla</button>
+        <button class="adm-save-btn" id="btnDisconnectWhatsapp" style="display:none">Bağlantıyı Kes</button>
+      </div>
+      <div class="adm-field-status" id="statusWhatsapp"></div>
+    </div>
+    </div>
   </div>
 
 </div>
@@ -339,8 +390,130 @@ async function checkSession() {
   loadAssistantConfig();
   loadCallingHours();
   loadCostConfig();
+  loadCrmSettings();
   setTimeout(function () { startTour(SETTINGS_TOUR_STEPS, { storageKey: 'propcall_tour_settings_v1' }); }, 900);
 }
+
+// ─── CRM ENTEGRASYONLARI (Meta Lead Ads + WhatsApp) ────────────────────────
+
+async function loadCrmSettings() {
+  try {
+    const r = await fetch('/api/settings/meta');
+    const j = await r.json();
+    if (j.success) renderMetaStatus(j.data);
+  } catch (_) {}
+  try {
+    const r2 = await fetch('/api/settings/whatsapp');
+    const j2 = await r2.json();
+    if (j2.success) renderWhatsappStatus(j2.data);
+  } catch (_) {}
+}
+
+function renderMetaStatus(data) {
+  const info = $('metaConnectedInfo');
+  if (data.connected) {
+    info.style.display = 'block';
+    $('metaPageNameLabel').textContent = data.pageName || data.pageId;
+    $('metaLastSyncLabel').textContent = data.lastSyncAt ? ('Son senkron: ' + new Date(data.lastSyncAt).toLocaleString('tr-TR')) : 'Henüz senkron edilmedi';
+    $('btnSyncMetaNow').style.display = '';
+    $('btnDisconnectMeta').style.display = '';
+    $('btnSaveMeta').textContent = 'Güncelle';
+  } else {
+    info.style.display = 'none';
+    $('btnSyncMetaNow').style.display = 'none';
+    $('btnDisconnectMeta').style.display = 'none';
+    $('btnSaveMeta').textContent = 'Bağla';
+  }
+}
+
+function renderWhatsappStatus(data) {
+  const info = $('whatsappConnectedInfo');
+  if (data.connected) {
+    info.style.display = 'block';
+    $('whatsappNumberLabel').textContent = data.whatsappNumber;
+    $('btnDisconnectWhatsapp').style.display = '';
+    $('btnSaveWhatsapp').textContent = 'Güncelle';
+  } else {
+    info.style.display = 'none';
+    $('btnDisconnectWhatsapp').style.display = 'none';
+    $('btnSaveWhatsapp').textContent = 'Bağla';
+  }
+}
+
+$('btnSaveMeta').addEventListener('click', async () => {
+  const status = $('statusMeta');
+  status.className = 'adm-field-status'; status.textContent = '';
+  const pageId = $('metaPageId').value.trim();
+  const pageAccessToken = $('metaPageAccessToken').value.trim();
+  if (!pageId || !pageAccessToken) { status.textContent = '✗ Page ID ve token zorunlu'; status.className = 'adm-field-status err'; return; }
+  try {
+    const r = await fetch('/api/settings/meta', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pageId, pageAccessToken }),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    status.textContent = '✓ Bağlandı: ' + (j.data.pageName || j.data.pageId);
+    status.className = 'adm-field-status ok';
+    $('metaPageAccessToken').value = '';
+    loadCrmSettings();
+  } catch (err) {
+    status.textContent = '✗ ' + err.message;
+    status.className = 'adm-field-status err';
+  }
+});
+
+$('btnSyncMetaNow').addEventListener('click', async () => {
+  const status = $('statusMeta');
+  status.textContent = 'Senkronize ediliyor...'; status.className = 'adm-field-status';
+  try {
+    const r = await fetch('/api/meta/sync', { method: 'POST' });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    status.textContent = '✓ Senkron tamamlandı';
+    status.className = 'adm-field-status ok';
+    loadCrmSettings();
+  } catch (err) {
+    status.textContent = '✗ ' + err.message;
+    status.className = 'adm-field-status err';
+  }
+});
+
+$('btnDisconnectMeta').addEventListener('click', async () => {
+  if (!await uiConfirm('Meta bağlantısını kesmek istediğinize emin misiniz?')) return;
+  await fetch('/api/settings/meta', { method: 'DELETE' });
+  loadCrmSettings();
+});
+
+$('btnSaveWhatsapp').addEventListener('click', async () => {
+  const status = $('statusWhatsapp');
+  status.className = 'adm-field-status'; status.textContent = '';
+  const accountSid = $('whatsappAccountSid').value.trim();
+  const authToken = $('whatsappAuthToken').value.trim();
+  const whatsappNumber = $('whatsappNumber').value.trim();
+  if (!accountSid || !authToken || !whatsappNumber) { status.textContent = '✗ Tüm alanlar zorunlu'; status.className = 'adm-field-status err'; return; }
+  try {
+    const r = await fetch('/api/settings/whatsapp', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accountSid, authToken, whatsappNumber }),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    status.textContent = '✓ Bağlandı';
+    status.className = 'adm-field-status ok';
+    $('whatsappAuthToken').value = '';
+    loadCrmSettings();
+  } catch (err) {
+    status.textContent = '✗ ' + err.message;
+    status.className = 'adm-field-status err';
+  }
+});
+
+$('btnDisconnectWhatsapp').addEventListener('click', async () => {
+  if (!await uiConfirm('WhatsApp bağlantısını kesmek istediğinize emin misiniz?')) return;
+  await fetch('/api/settings/whatsapp', { method: 'DELETE' });
+  loadCrmSettings();
+});
 
 // ─── ARAMA KURALLARI (saat aralığı) ─────────────────────────────────────────
 

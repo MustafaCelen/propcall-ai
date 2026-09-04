@@ -139,6 +139,70 @@ export async function getLeadActivities(userId: string, leadId: string): Promise
   }));
 }
 
+// ─── Arama sonucu → Aday birleşimi (RLM Faz 5) ──────────────────────────────
+// ASİMETRİK RİSK — KASITLI (bkz. ai.ts enforceSummaryConsistency ile aynı prensip):
+// bir arama sonucu bir adayın aşamasını SADECE İLERİ taşıyabilir, asla geri almaz
+// veya LOST'a çekmez — o karar danışmana ait. "Kişiyle konuşuldu" gerçeği bile en
+// kötü ihtimalle CONTACTED'a taşır, hiçbir zaman NEW'in altına düşürmez.
+const STAGE_RANK: Record<string, number> = { NEW: 0, CONTACTED: 1, QUALIFIED: 2, VIEWING: 3, OFFER: 4, WON: 5, LOST: -1 };
+
+export async function upsertLeadFromCallOutcome(
+  userId: string,
+  phone: string,
+  customerName: string,
+  vapiCallId: string,
+  randevuAlindi: boolean,
+  ilgiSeviyesi: string,
+  ozet: string,
+): Promise<void> {
+  if (!phone?.trim()) return;
+  const candidateStage: LeadStage = randevuAlindi ? 'QUALIFIED' : 'CONTACTED';
+
+  const { rows } = await pool.query(
+    `SELECT id, stage FROM leads WHERE user_id = $1 AND data->>'phone' = $2 ORDER BY updated_at DESC LIMIT 1`,
+    [userId, phone.trim()],
+  );
+
+  let leadId: string;
+  if (rows[0]) {
+    leadId = rows[0].id;
+    const currentRank = STAGE_RANK[rows[0].stage] ?? 0;
+    const candidateRank = STAGE_RANK[candidateStage];
+    if (candidateRank > currentRank) {
+      await pool.query(
+        `UPDATE leads SET stage = $3, data = data || jsonb_build_object('linkedCallId', $4::text), updated_at = NOW()
+         WHERE id = $1 AND user_id = $2`,
+        [leadId, userId, candidateStage, vapiCallId],
+      );
+    } else {
+      await pool.query(
+        `UPDATE leads SET data = data || jsonb_build_object('linkedCallId', $3::text), updated_at = NOW()
+         WHERE id = $1 AND user_id = $2`,
+        [leadId, userId, vapiCallId],
+      );
+    }
+  } else {
+    const parts = customerName.trim().split(/\s+/);
+    const created = await createLead(userId, {
+      firstName: parts[0] || customerName || 'Bilinmiyor',
+      lastName: parts.slice(1).join(' ') || null,
+      phone: phone.trim(),
+      source: 'CALL_CAMPAIGN',
+    });
+    leadId = created.id;
+    await pool.query(`UPDATE leads SET stage = $2 WHERE id = $1`, [leadId, candidateStage]);
+    await pool.query(
+      `UPDATE leads SET data = data || jsonb_build_object('linkedCallId', $2::text) WHERE id = $1`,
+      [leadId, vapiCallId],
+    );
+  }
+
+  await pool.query(
+    `INSERT INTO lead_activities (id, lead_id, user_id, type, data) VALUES ($1, $2, $3, 'CALL_COMPLETED', $4)`,
+    [newActivityId(), leadId, userId, JSON.stringify({ vapiCallId, randevuAlindi, ilgiSeviyesi, ozet })],
+  );
+}
+
 export async function addLeadActivity(
   userId: string, leadId: string, type: LeadActivityType, data: Record<string, unknown>,
 ): Promise<LeadActivity | null> {
