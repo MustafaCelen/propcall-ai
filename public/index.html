@@ -113,6 +113,7 @@
       <button class="tab-btn" data-tab="stats">İstatistikler</button>
       <button class="tab-btn" data-tab="campaign">📋 Toplu Arama</button>
       <button class="tab-btn" data-tab="campaignHistory">📊 Kampanya Geçmişi</button>
+      <button class="tab-btn" data-tab="leads">👥 Adaylar</button>
     </div>
 
     <!-- ── TAB 1: CANLI ──────────────────────────────────── -->
@@ -550,6 +551,17 @@
       </div>
     </div>
 
+    <!-- ── TAB 6: ADAYLAR (LEADS KANBAN) ──────────────────── -->
+    <div class="tab-content" id="tabLeads">
+      <div class="ch-toolbar">
+        <span class="ch-hint">Aday takip panosu — aşama değiştirmek için kartı sürükleyin veya karta tıklayıp detaydan değiştirin.</span>
+        <button class="btn-upload" id="btnAddLead">+ Yeni Aday</button>
+      </div>
+      <div class="leads-board" id="leadsBoard">
+        <div class="drawer-loading">⏳ Yükleniyor...</div>
+      </div>
+    </div>
+
   </main>
 </div>
 
@@ -581,6 +593,54 @@
   <div class="modal-body" id="scenarioTestBody">
     <div class="drawer-loading">⏳ Oluşturuluyor...</div>
   </div>
+</div>
+
+<!-- ADAY DETAY MODAL -->
+<div class="modal-overlay" id="leadFormOverlay"></div>
+<div class="modal modal-sm" id="leadFormModal">
+  <div class="modal-header">
+    <div class="modal-title" id="leadFormTitle">Yeni Aday</div>
+    <button class="modal-close" id="leadFormClose">✕</button>
+  </div>
+  <div class="modal-body">
+    <div class="form-group">
+      <label>Ad *</label>
+      <input type="text" id="leadFormFirstName" placeholder="Ad" />
+    </div>
+    <div class="form-group">
+      <label>Soyad</label>
+      <input type="text" id="leadFormLastName" placeholder="Soyad" />
+    </div>
+    <div class="form-group">
+      <label>Telefon</label>
+      <input type="text" id="leadFormPhone" placeholder="+90 5xx xxx xx xx" />
+    </div>
+    <div class="form-group">
+      <label>E-posta</label>
+      <input type="email" id="leadFormEmail" placeholder="ornek@eposta.com" />
+    </div>
+    <div class="form-group">
+      <label>Not</label>
+      <textarea id="leadFormNotes" rows="3" placeholder="Serbest not..."></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-modal-cancel" id="leadFormCancel" type="button">Vazgeç</button>
+      <button class="btn-modal-confirm" id="leadFormSave" type="button">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADAY DETAY DRAWER -->
+<div class="drawer-overlay" id="leadDrawerOverlay"></div>
+<div class="drawer" id="leadDrawer">
+  <div class="drawer-header">
+    <div>
+      <div class="drawer-title" id="leadDrawerTitle">Aday Detayı</div>
+      <div class="drawer-sub" id="leadDrawerSub"></div>
+    </div>
+    <button class="drawer-close" id="leadDrawerClose">✕</button>
+  </div>
+  <div class="drawer-body" id="leadDrawerBody"></div>
 </div>
 
 <!-- DRAWER OVERLAY -->
@@ -724,6 +784,7 @@
 <script src="ui-kit.js"></script>
 <script src="tour.js"></script>
 <script src="app.js"></script>
+<script src="leads.js"></script>
 <script>
 // ─── KULLANIM KILAVUZU (onboarding tour) — non-technical danışmanlar için ────
 var APP_TOUR_STEPS = [

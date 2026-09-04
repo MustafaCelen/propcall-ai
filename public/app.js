@@ -321,13 +321,15 @@ function switchTab(name) {
                   (name === 'stats'           && c.id === 'tabStats')           ||
                   (name === 'campaign'        && c.id === 'tabCampaign')        ||
                   (name === 'campaignHistory' && c.id === 'tabCampaignHistory') ||
-                  (name === 'followup'        && c.id === 'tabFollowup');
+                  (name === 'followup'        && c.id === 'tabFollowup')        ||
+                  (name === 'leads'           && c.id === 'tabLeads');
     c.classList.toggle('active', match);
   });
   if (name === 'campaignHistory') loadCampaignHistory();
   if (name === 'history') loadHistory();
   if (name === 'stats')   loadStats();
   if (name === 'followup') loadFollowup();
+  if (name === 'leads')   loadLeads();
 }
 
 // ─── SSE ─────────────────────────────────────────────────────────────────────

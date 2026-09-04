@@ -155,3 +155,74 @@ export interface ApiResponse<T = unknown> {
   data?: T;
   error?: string;
 }
+
+// ── Adaylar (Leads) ──────────────────────────────────────────────────────────
+
+export const LEAD_STAGES = ['NEW', 'CONTACTED', 'QUALIFIED', 'VIEWING', 'OFFER', 'WON', 'LOST'] as const;
+export type LeadStage = (typeof LEAD_STAGES)[number];
+
+export const LEAD_STAGE_LABELS: Record<LeadStage, string> = {
+  NEW: 'Yeni',
+  CONTACTED: 'İletişime Geçildi',
+  QUALIFIED: 'Nitelikli',
+  VIEWING: 'Gezme',
+  OFFER: 'Teklif',
+  WON: 'Kazanıldı',
+  LOST: 'Kaybedildi',
+};
+
+// META_LEAD_AD ve CALL_CAMPAIGN otomatik (sırasıyla Meta senkron ve arama sonucu
+// tarafından) oluşturulur — danışman elle seçemez, sadece görüntüler.
+export const LEAD_SOURCES = ['MANUAL', 'META_LEAD_AD', 'CSV_IMPORT', 'CALL_CAMPAIGN', 'REFERRAL', 'OTHER'] as const;
+export type LeadSource = (typeof LEAD_SOURCES)[number];
+
+export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
+  MANUAL: 'Manuel',
+  META_LEAD_AD: 'Meta Lead Ad',
+  CSV_IMPORT: 'CSV İçe Aktarma',
+  CALL_CAMPAIGN: 'Arama Sonucu',
+  REFERRAL: 'Referans',
+  OTHER: 'Diğer',
+};
+
+export interface LeadAdData {
+  formId: string;
+  formName: string;
+  adId: string | null;
+  adName: string | null;
+  adsetId: string | null;
+  adsetName: string | null;
+  campaignId: string | null;
+  campaignName: string | null;
+}
+
+export interface Lead {
+  id: string;
+  stage: LeadStage;
+  source: LeadSource;
+  firstName: string;
+  lastName: string | null;
+  email: string | null;
+  phone: string | null;
+  notes: string | null;
+  metaLeadId: string | null;
+  tags: string[];
+  adData: LeadAdData | null;
+  linkedCallId: string | null; // arama sonucundan oluşturulduysa/güncellendiyse — bkz. onCallSummaryReady
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const LEAD_ACTIVITY_TYPES = [
+  'STAGE_CHANGE', 'NOTE', 'CALL_COMPLETED', 'ASSIGNED',
+  'MESSAGE_SENT', 'MESSAGE_RECEIVED',
+] as const;
+export type LeadActivityType = (typeof LEAD_ACTIVITY_TYPES)[number];
+
+export interface LeadActivity {
+  id: string;
+  leadId: string;
+  type: LeadActivityType;
+  data: Record<string, unknown>;
+  createdAt: string;
+}

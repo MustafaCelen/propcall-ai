@@ -205,6 +205,32 @@ export async function initDb(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_calls_scenario_id     ON calls ((data ->> 'scenarioId'));
     CREATE INDEX IF NOT EXISTS idx_calls_follow_up       ON calls (((data ->> 'followUp')::boolean))
       WHERE (data ->> 'followUp')::boolean = true;
+
+    -- ── Adaylar (Leads) — RLM birleşimi Faz 1 ────────────────────────────────
+    -- Aynı calls/appointments desenini izler: sık filtrelenen alanlar (stage, user_id,
+    -- meta_lead_id dedup için) gerçek sütun, geri kalanı JSONB 'data'.
+    CREATE TABLE IF NOT EXISTS leads (
+      id           TEXT PRIMARY KEY,
+      user_id      TEXT NOT NULL REFERENCES users(id),
+      stage        TEXT NOT NULL DEFAULT 'NEW',
+      meta_lead_id TEXT UNIQUE,  -- Meta senkronunda aynı lead'i iki kez içe aktarmamak için
+      data         JSONB NOT NULL,
+      created_at   TIMESTAMPTZ DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_leads_user_id ON leads (user_id);
+    CREATE INDEX IF NOT EXISTS idx_leads_stage   ON leads (stage);
+    CREATE INDEX IF NOT EXISTS idx_leads_phone   ON leads ((data ->> 'phone'));
+
+    CREATE TABLE IF NOT EXISTS lead_activities (
+      id         TEXT PRIMARY KEY,
+      lead_id    TEXT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+      user_id    TEXT REFERENCES users(id),
+      type       TEXT NOT NULL,
+      data       JSONB NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_lead_activities_lead_id ON lead_activities (lead_id);
   `;
 
   for (let attempt = 1; attempt <= INIT_RETRIES; attempt++) {

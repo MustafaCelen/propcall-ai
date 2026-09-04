@@ -17,6 +17,10 @@ import {
 } from './vapi';
 import { getElevenLabsCredit, listElevenLabsVoices, estimateTtsCost, generateVoicePreview } from './elevenlabs';
 import { getAllAppointments, saveAppointment, deleteAppointment, setAppointmentOutcome } from './appointments';
+import {
+  getAllLeads, getLead, createLead, updateLead, setLeadStage, deleteLead,
+  getLeadActivities, addLeadActivity,
+} from './leads';
 import { getAllScenarios, getScenario, createScenario, updateScenario, deleteScenario, seedDefaultScenario } from './scenarios';
 import { findUnsupportedVariables } from './templateVariables';
 import {
@@ -24,7 +28,7 @@ import {
   appendTranscript, updateCosts, saveCallSummary, getCallOwnerUserId,
   endedReasonToStatus, getStats, exportCSV, getCampaignStats, reconcileStaleCalls, getAdminUserComparison,
 } from './calls';
-import { VapiCallRequest, VapiWebhookPayload, VapiCostItem, CallFilters, CallRecord, CallCosts } from './types';
+import { VapiCallRequest, VapiWebhookPayload, VapiCostItem, CallFilters, CallRecord, CallCosts, LEAD_STAGES } from './types';
 import {
   initCampaignRunner, loadAllActiveCampaigns, getCampaignState,
   campaignLoad, campaignStart, campaignResume, campaignPause, campaignStop, campaignClear,
@@ -1243,6 +1247,81 @@ app.patch('/api/appointments/:id/outcome', requireUserAuth, async (req: Request,
     const updated = await setAppointmentOutcome(req.userId!, req.params.id, outcome, outcomeNote);
     if (!updated) return res.status(404).json({ success: false, error: 'Randevu bulunamadı' });
     return res.json({ success: true, data: updated });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+// ─── ADAYLAR (LEADS) ─────────────────────────────────────────────────────────
+// RLM birleşimi Faz 1: manuel CRUD + Kanban aşama geçişi + aktivite geçmişi.
+// Meta Lead Ads / WhatsApp / arama-sonucu entegrasyonları sonraki fazlarda eklenecek.
+
+app.get('/api/leads', requireUserAuth, async (req: Request, res: Response) => {
+  try { return res.json({ success: true, data: await getAllLeads(req.userId!) }); }
+  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.get('/api/leads/:id', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const lead = await getLead(req.userId!, req.params.id);
+    if (!lead) return res.status(404).json({ success: false, error: 'Aday bulunamadı' });
+    return res.json({ success: true, data: lead });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.post('/api/leads', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const { firstName, lastName, email, phone, notes } = req.body as {
+      firstName?: string; lastName?: string; email?: string; phone?: string; notes?: string;
+    };
+    if (!firstName?.trim()) return res.status(400).json({ success: false, error: 'Ad zorunlu' });
+    const lead = await createLead(req.userId!, { firstName, lastName, email, phone, notes, source: 'MANUAL' });
+    return res.status(201).json({ success: true, data: lead });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.patch('/api/leads/:id', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const { firstName, lastName, email, phone, notes, tags } = req.body as {
+      firstName?: string; lastName?: string | null; email?: string | null; phone?: string | null;
+      notes?: string | null; tags?: string[];
+    };
+    const lead = await updateLead(req.userId!, req.params.id, { firstName, lastName, email, phone, notes, tags });
+    if (!lead) return res.status(404).json({ success: false, error: 'Aday bulunamadı' });
+    return res.json({ success: true, data: lead });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.patch('/api/leads/:id/stage', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const { stage } = req.body as { stage?: string };
+    if (!stage || !LEAD_STAGES.includes(stage as any)) {
+      return res.status(400).json({ success: false, error: `stage şunlardan biri olmalı: ${LEAD_STAGES.join(', ')}` });
+    }
+    const lead = await setLeadStage(req.userId!, req.params.id, stage as any);
+    if (!lead) return res.status(404).json({ success: false, error: 'Aday bulunamadı' });
+    return res.json({ success: true, data: lead });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.delete('/api/leads/:id', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    if (!await deleteLead(req.userId!, req.params.id))
+      return res.status(404).json({ success: false, error: 'Aday bulunamadı' });
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.get('/api/leads/:id/activities', requireUserAuth, async (req: Request, res: Response) => {
+  try { return res.json({ success: true, data: await getLeadActivities(req.userId!, req.params.id) }); }
+  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.post('/api/leads/:id/notes', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const { note } = req.body as { note?: string };
+    if (!note?.trim()) return res.status(400).json({ success: false, error: 'Not boş olamaz' });
+    const activity = await addLeadActivity(req.userId!, req.params.id, 'NOTE', { note: note.trim() });
+    if (!activity) return res.status(404).json({ success: false, error: 'Aday bulunamadı' });
+    return res.status(201).json({ success: true, data: activity });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
 
