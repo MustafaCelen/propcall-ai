@@ -409,10 +409,13 @@
 
           <!-- Satır 1: kampanya kimliği -->
           <div class="campaign-toolbar-row campaign-toolbar-row-top">
-            <div class="campaign-upload-area" id="campaignUploadArea">
-              <input type="file" id="campaignFile" accept=".xlsx,.xls,.csv" style="display:none"/>
-              <button class="btn-upload" id="btnUpload">📂 Excel / CSV Yükle</button>
-              <span class="upload-hint">Ad, Telefon, Bölge, Referans, Kaynak, Notlar sütunları</span>
+            <div class="campaign-upload-group">
+              <label>&nbsp;</label>
+              <div class="campaign-upload-area" id="campaignUploadArea">
+                <input type="file" id="campaignFile" accept=".xlsx,.xls,.csv" style="display:none"/>
+                <button class="btn-upload" id="btnUpload">📂 Excel / CSV Yükle</button>
+                <span class="upload-hint">Ad, Telefon, Bölge, Referans, Kaynak, Notlar sütunları</span>
+              </div>
             </div>
             <div class="concurrency-group camp-name-group" title="Bu kampanyayı geçmişte tanıyacağınız isim — zorunlu">
               <label>Kampanya Adı</label>
@@ -466,6 +469,7 @@
                 <input type="number" id="campaignRetryDelay" class="camp-limit-input" min="5" max="240" placeholder="30" />
               </div>
             </div>
+            <div class="campaign-settings-divider"></div>
             <div class="campaign-actions-group">
               <button class="btn-campaign-start" id="btnCampaignStart" disabled>▶ Başlat</button>
               <button class="btn-campaign-pause" id="btnCampaignPause" disabled>⏸ Duraklat</button>

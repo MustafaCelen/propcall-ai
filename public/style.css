@@ -431,11 +431,13 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 .campaign-toolbar{background:var(--s1);border-bottom:1px solid var(--border);padding:14px 16px;display:flex;flex-direction:column;gap:12px;flex-shrink:0}
 .campaign-toolbar-row{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
 .campaign-toolbar-row:not(:last-child){padding-bottom:12px;border-bottom:1px solid var(--border)}
-/* Satır 1: grid ile SABİT oranlı 3 sütun (yükle / kampanya adı / senaryo) — flex:grow +
-   max-width kombinasyonu geniş ekranlarda büyüyen öğe üst sınırına çarpınca kalan boşluk
-   dağıtılmadan tek bir kör boşluk olarak kalıyordu (oransız görünüme sebep oluyordu).
-   Grid + fr birimleri her genişlikte öngörülebilir, orantılı bir yerleşim garanti eder. */
+/* Satır 1: grid ile SABİT oranlı 3 sütun (yükle / kampanya adı / senaryo). Üçü de AYNI
+   üst hizada başlamalı — yükleme alanının da (diğer ikisi gibi) bir etiket satırı olması
+   gerekiyor, görünmez de olsa, yoksa buton diğer alanlardan daha aşağıda/farklı hizada
+   duruyor (önceki "hizasız" görünümün sebeplerinden biri buydu).*/
 .campaign-toolbar-row-top{display:grid;grid-template-columns:minmax(240px,1.1fr) minmax(240px,1.3fr) minmax(200px,1fr);align-items:end;gap:16px;flex-wrap:nowrap}
+.campaign-upload-group{display:flex;flex-direction:column;gap:4px;min-width:0}
+.campaign-upload-group label{font-size:11px;visibility:hidden;line-height:1.2}
 .campaign-upload-area{display:flex;align-items:center;gap:10px;min-width:0}
 .upload-hint{font-size:11px;color:var(--txm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .btn-upload{padding:8px 16px;background:var(--s2);border:1px solid var(--border);border-radius:var(--rs);color:var(--tx2);font-family:'Sora',sans-serif;font-size:13px;cursor:pointer;transition:all .2s;white-space:nowrap;flex-shrink:0}
@@ -448,14 +450,17 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 @media (max-width: 900px) {
   .campaign-toolbar-row-top{grid-template-columns:1fr}
 }
-/* Önceden 6 alan flex+wrap ile serbestçe diziliyordu — genişliğe göre öngörülemeyen
-   satır kırılmaları ve tutarsız aralıklarla "dağınık" bir görünüme sebep oluyordu.
-   Grid, 6 alanı her zaman eşit genişlikte, tek bir kart içinde hizalar; aksiyon
-   butonlarından ayrı bir görsel grup olarak okunur (rastgele boşluk değil, kasıtlı ayrım). */
-.campaign-settings-group{display:grid;grid-template-columns:repeat(6,minmax(80px,120px));gap:12px;align-items:end;background:var(--s3);border:1px solid var(--border);border-radius:var(--rs);padding:10px 14px}
-.campaign-actions-group{display:flex;align-items:center;gap:8px;margin-left:auto;flex-shrink:0}
+
+/* Satır 2: TEK akan sıra — 6 ayar alanı, ince bir ayraç, sonra aksiyon butonları.
+   Önceki sürümlerde ya alanlar rastgele sarıyordu (flex-wrap, sabit px genişlik) ya da
+   butonlar margin-left:auto ile sağa yaslanıp aradaki boşluk kör/orantısız kalıyordu.
+   Artık hiçbiri stretch/auto-margin kullanmıyor — hepsi doğal akışta, sabit ve eşit
+   boşluklarla art arda diziliyor; satır dar geldiğinde tamamı birlikte alt satıra sarıyor. */
+.campaign-settings-group{display:flex;align-items:end;gap:14px;flex-wrap:wrap}
+.campaign-settings-divider{width:1px;align-self:stretch;background:var(--border);flex-shrink:0}
+.campaign-actions-group{display:flex;align-items:center;gap:8px;flex-shrink:0}
 .concurrency-group{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--txm);text-transform:uppercase;letter-spacing:.3px;font-weight:600;min-width:0}
-.concurrency-group select{width:100%;font-size:12px;padding:5px 8px;text-transform:none;letter-spacing:0}
+.concurrency-group select{width:82px;font-size:12px;padding:6px 8px;text-transform:none;letter-spacing:0}
 .btn-campaign-start{padding:8px 18px;background:var(--primary);color:#000;border:none;border-radius:var(--rs);font-family:'Sora',sans-serif;font-size:13px;font-weight:700;cursor:pointer;transition:all .2s;white-space:nowrap}
 .btn-campaign-start:disabled{opacity:.4;cursor:not-allowed}
 .btn-campaign-start:not(:disabled):hover{background:#00e6ad}
@@ -465,11 +470,11 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 .btn-campaign-stop:not(:disabled):hover{border-color:var(--red);color:var(--red)}
 
 @media (max-width: 900px) {
-  .campaign-actions-group{margin-left:0;width:100%}
-  .campaign-settings-group{grid-template-columns:repeat(3,minmax(80px,120px));width:100%}
-}
-@media (max-width: 520px) {
-  .campaign-settings-group{grid-template-columns:repeat(2,minmax(80px,120px))}
+  .campaign-settings-divider{display:none}
+  .campaign-actions-group{width:100%}
+  .campaign-actions-group .btn-campaign-start,
+  .campaign-actions-group .btn-campaign-pause,
+  .campaign-actions-group .btn-campaign-stop{flex:1}
 }
 
 /* Progress bar */
@@ -699,7 +704,7 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 .sp-rate.sp-low{background:rgba(255,83,112,.15);color:var(--red)}
 
 /* ── CAMPAIGN LIMIT INPUTS ── */
-.camp-limit-input{width:100%;background:var(--s2);border:1px solid var(--border);border-radius:var(--rs);color:var(--tx);font-size:13px;padding:4px 8px;outline:none;text-align:center;font-family:'JetBrains Mono',monospace;transition:border-color .15s}
+.camp-limit-input{width:82px;background:var(--s2);border:1px solid var(--border);border-radius:var(--rs);color:var(--tx);font-size:13px;padding:6px 8px;outline:none;text-align:center;font-family:'JetBrains Mono',monospace;transition:border-color .15s}
 .camp-limit-input:focus{border-color:var(--border-a)}
 .camp-limit-input::placeholder{color:var(--txm)}
 
