@@ -549,6 +549,7 @@ function renderPersonalWaStatus(data) {
     $('waPersonalQrImg').src = data.qrDataUrl;
   } else {
     disc.style.display = 'block';
+    $('btnConnectPersonalWa').disabled = false;
   }
 }
 
@@ -569,7 +570,13 @@ function stopPersonalWaPolling() {
 }
 
 $('btnConnectPersonalWa').addEventListener('click', async () => {
+  const btn = $('btnConnectPersonalWa');
   const status = $('statusPersonalWa');
+  // Art arda tıklamayı engelle — arka planda her tıklama YENİ bir Baileys soketi
+  // açardı, aynı numarayla eş zamanlı "cihaz" çakışmasına ve bağlantının sürekli
+  // kopmasına yol açıyordu (bkz. whatsappPersonal.ts'teki düzeltme notu).
+  if (btn.disabled) return;
+  btn.disabled = true;
   status.textContent = 'Bağlantı başlatılıyor, QR kod birkaç saniye içinde görünecek...';
   status.className = 'adm-field-status';
   try {
@@ -580,6 +587,7 @@ $('btnConnectPersonalWa').addEventListener('click', async () => {
   } catch (err) {
     status.textContent = '✗ ' + err.message;
     status.className = 'adm-field-status err';
+    btn.disabled = false;
   }
 });
 
