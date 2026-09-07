@@ -415,15 +415,15 @@
             </div>
           </div>
 
-          <!-- Satır 2: kampanya kimliği — Kampanya Adı ilk 5 kolonu, Senaryo 6. kolonu
-               kaplar; alttaki ayar satırıyla AYNI 6 kolonlu grid'i paylaşır, böylece
-               Senaryo tam olarak Tekrar Bekleme'nin üstüne hizalanır. -->
+          <!-- Satır 2: kampanya kimliği — Kampanya Adı ve Senaryo eşit genişlikte, ilk/son
+               3'er kolonu kaplar; alttaki ayar satırıyla AYNI 6 kolonlu grid'i paylaşır,
+               böylece Senaryo'nun sağ kenarı Tekrar Bekleme'nin üstüne hizalanır. -->
           <div class="campaign-toolbar-row campaign-fields-grid">
-            <div class="concurrency-group camp-name-group" style="grid-column:1 / 6" title="Bu kampanyayı geçmişte tanıyacağınız isim — zorunlu">
+            <div class="concurrency-group camp-name-group" style="grid-column:1 / 4" title="Bu kampanyayı geçmişte tanıyacağınız isim — zorunlu">
               <label>Kampanya Adı</label>
               <input type="text" id="campaignName" class="camp-name-input" placeholder="Örn: Ağustos KW Büyüme — Batch 2" />
             </div>
-            <div class="concurrency-group camp-scenario-group" style="grid-column:6 / 7" title="Kampanyadaki tüm aramalarda kullanılacak senaryo">
+            <div class="concurrency-group camp-scenario-group" style="grid-column:4 / 7" title="Kampanyadaki tüm aramalarda kullanılacak senaryo">
               <label>Senaryo</label>
               <select id="campaignScenario">
                 <option value="">— Varsayılan prompt —</option>
