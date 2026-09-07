@@ -415,13 +415,15 @@
             </div>
           </div>
 
-          <!-- Satır 2: kampanya kimliği -->
-          <div class="campaign-toolbar-row campaign-toolbar-row-top">
-            <div class="concurrency-group camp-name-group" title="Bu kampanyayı geçmişte tanıyacağınız isim — zorunlu">
+          <!-- Satır 2: kampanya kimliği — Kampanya Adı ilk 5 kolonu, Senaryo 6. kolonu
+               kaplar; alttaki ayar satırıyla AYNI 6 kolonlu grid'i paylaşır, böylece
+               Senaryo tam olarak Tekrar Bekleme'nin üstüne hizalanır. -->
+          <div class="campaign-toolbar-row campaign-fields-grid">
+            <div class="concurrency-group camp-name-group" style="grid-column:1 / 6" title="Bu kampanyayı geçmişte tanıyacağınız isim — zorunlu">
               <label>Kampanya Adı</label>
               <input type="text" id="campaignName" class="camp-name-input" placeholder="Örn: Ağustos KW Büyüme — Batch 2" />
             </div>
-            <div class="concurrency-group camp-scenario-group" title="Kampanyadaki tüm aramalarda kullanılacak senaryo">
+            <div class="concurrency-group camp-scenario-group" style="grid-column:6 / 7" title="Kampanyadaki tüm aramalarda kullanılacak senaryo">
               <label>Senaryo</label>
               <select id="campaignScenario">
                 <option value="">— Varsayılan prompt —</option>
@@ -429,47 +431,48 @@
             </div>
           </div>
 
-          <!-- Satır 3: kuyruk ayarları + aksiyon butonları -->
-          <div class="campaign-toolbar-row">
-            <div class="campaign-settings-group">
-              <div class="concurrency-group">
-                <label>Eş Zamanlı</label>
-                <select id="campaignConcurrency">
-                  <option value="1">1</option>
-                  <option value="2">2</option>
-                  <option value="3">3</option>
-                  <option value="4">4</option>
-                  <option value="5">5</option>
-                </select>
-              </div>
-              <div class="concurrency-group" title="Kaçıncı satırdan başlanacak (1'den sayılır)">
-                <label>Başlangıç Satırı</label>
-                <input type="number" id="campaignStartFrom" class="camp-limit-input" min="1" placeholder="1" />
-              </div>
-              <div class="concurrency-group" title="Toplam kaç arama yapılacak (0 = sınırsız)">
-                <label>Arama Limiti</label>
-                <input type="number" id="campaignCallLimit" class="camp-limit-input" min="0" placeholder="∞" />
-              </div>
-              <div class="concurrency-group" title="Kaç kişi konuşunca duracak (0 = sınırsız)">
-                <label>Cevaplayan Limiti</label>
-                <input type="number" id="campaignAnsweredLimit" class="camp-limit-input" min="0" placeholder="∞" />
-              </div>
-              <div class="concurrency-group" title="Cevapsız/meşgul aramalar otomatik kaç kez tekrar denensin (1 = tekrar arama yok)">
-                <label>Maks. Deneme</label>
-                <select id="campaignRetryAttempts">
-                  <option value="1">1 (tekrar yok)</option>
-                  <option value="2">2</option>
-                  <option value="3">3</option>
-                  <option value="4">4</option>
-                  <option value="5">5</option>
-                </select>
-              </div>
-              <div class="concurrency-group" title="Tekrar aramadan önce beklenecek süre (dakika)">
-                <label>Tekrar Bekleme (dk)</label>
-                <input type="number" id="campaignRetryDelay" class="camp-limit-input" min="5" max="240" placeholder="30" />
-              </div>
+          <!-- Satır 3: kuyruk ayarları — üstteki satırla aynı 6 kolonlu grid -->
+          <div class="campaign-toolbar-row campaign-fields-grid">
+            <div class="concurrency-group">
+              <label>Eş Zamanlı</label>
+              <select id="campaignConcurrency">
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+              </select>
             </div>
-            <div class="campaign-settings-divider"></div>
+            <div class="concurrency-group" title="Kaçıncı satırdan başlanacak (1'den sayılır)">
+              <label>Başlangıç Satırı</label>
+              <input type="number" id="campaignStartFrom" class="camp-limit-input" min="1" placeholder="1" />
+            </div>
+            <div class="concurrency-group" title="Toplam kaç arama yapılacak (0 = sınırsız)">
+              <label>Arama Limiti</label>
+              <input type="number" id="campaignCallLimit" class="camp-limit-input" min="0" placeholder="∞" />
+            </div>
+            <div class="concurrency-group" title="Kaç kişi konuşunca duracak (0 = sınırsız)">
+              <label>Cevaplayan Limiti</label>
+              <input type="number" id="campaignAnsweredLimit" class="camp-limit-input" min="0" placeholder="∞" />
+            </div>
+            <div class="concurrency-group" title="Cevapsız/meşgul aramalar otomatik kaç kez tekrar denensin (1 = tekrar arama yok)">
+              <label>Maks. Deneme</label>
+              <select id="campaignRetryAttempts">
+                <option value="1">1 (tekrar yok)</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+              </select>
+            </div>
+            <div class="concurrency-group" title="Tekrar aramadan önce beklenecek süre (dakika)">
+              <label>Tekrar Bekleme (dk)</label>
+              <input type="number" id="campaignRetryDelay" class="camp-limit-input" min="5" max="240" placeholder="30" />
+            </div>
+          </div>
+
+          <!-- Satır 4: aksiyon butonları -->
+          <div class="campaign-toolbar-row">
             <div class="campaign-actions-group">
               <button class="btn-campaign-start" id="btnCampaignStart" disabled>▶ Başlat</button>
               <button class="btn-campaign-pause" id="btnCampaignPause" disabled>⏸ Duraklat</button>

@@ -436,29 +436,29 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 .btn-upload{padding:8px 16px;background:var(--s2);border:1px solid var(--border);border-radius:var(--rs);color:var(--tx2);font-family:'Sora',sans-serif;font-size:13px;cursor:pointer;transition:all .2s;white-space:nowrap;flex-shrink:0}
 .btn-upload:hover{border-color:var(--primary);color:var(--primary)}
 
-/* Satır 2: grid ile SABİT oranlı 2 sütun (kampanya adı / senaryo). */
-.campaign-toolbar-row-top{display:grid;grid-template-columns:minmax(240px,1.3fr) minmax(240px,1.5fr);align-items:end;gap:16px;flex-wrap:nowrap}
+/* Satır 2 ve 3 AYNI 6 kolonlu grid'i paylaşır — Kampanya Adı 1-5. kolonları, Senaryo
+   6. kolonu kaplar; alttaki ayar satırında her alan tek bir kolon alır. Sonuç: Senaryo'nun
+   sol/sağ kenarları tam olarak Tekrar Bekleme'nin üstüne denk gelir. */
+.campaign-fields-grid{display:grid;grid-template-columns:repeat(6,minmax(84px,1fr));align-items:end;gap:14px}
 .camp-name-group{min-width:0}
 .camp-name-group .camp-name-input{width:100%}
 .camp-scenario-group{min-width:0}
 .concurrency-group.camp-scenario-group select{width:100%}
 
 @media (max-width: 900px) {
-  .campaign-toolbar-row-top{grid-template-columns:1fr}
+  .campaign-fields-grid{grid-template-columns:repeat(3,minmax(84px,1fr))}
+  .camp-name-group{grid-column:1 / 4 !important}
+  .camp-scenario-group{grid-column:1 / 4 !important}
+}
+@media (max-width: 520px) {
+  .campaign-fields-grid{grid-template-columns:repeat(2,minmax(84px,1fr))}
+  .camp-name-group{grid-column:1 / 3 !important}
+  .camp-scenario-group{grid-column:1 / 3 !important}
 }
 
-/* Satır 2: TEK akan sıra — 6 ayar alanı, ince bir ayraç, sonra aksiyon butonları.
-   Önceki sürümlerde ya alanlar rastgele sarıyordu (flex-wrap, sabit px genişlik) ya da
-   butonlar margin-left:auto ile sağa yaslanıp aradaki boşluk kör/orantısız kalıyordu.
-   Artık hiçbiri stretch/auto-margin kullanmıyor — hepsi doğal akışta, sabit ve eşit
-   boşluklarla art arda diziliyor; satır dar geldiğinde tamamı birlikte alt satıra sarıyor. */
-.campaign-settings-group{display:flex;align-items:end;gap:14px;flex-wrap:wrap}
-.campaign-settings-divider{width:1px;align-self:stretch;background:var(--border);flex-shrink:0}
-.campaign-actions-group{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.campaign-actions-group{display:flex;align-items:center;gap:8px}
 .concurrency-group{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--txm);text-transform:uppercase;letter-spacing:.3px;font-weight:600;min-width:0}
-.concurrency-group select{width:82px;font-size:12px;padding:6px 8px;text-transform:none;letter-spacing:0}
-/* "1 (tekrar yok)" seçili değerinin kesilmeden sığması için diğerlerinden geniş */
-#campaignRetryAttempts{width:118px}
+.concurrency-group select{width:100%;font-size:12px;padding:6px 8px;text-transform:none;letter-spacing:0}
 .btn-campaign-start{padding:8px 18px;background:var(--primary);color:#000;border:none;border-radius:var(--rs);font-family:'Sora',sans-serif;font-size:13px;font-weight:700;cursor:pointer;transition:all .2s;white-space:nowrap}
 .btn-campaign-start:disabled{opacity:.4;cursor:not-allowed}
 .btn-campaign-start:not(:disabled):hover{background:#00e6ad}
@@ -468,7 +468,6 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 .btn-campaign-stop:not(:disabled):hover{border-color:var(--red);color:var(--red)}
 
 @media (max-width: 900px) {
-  .campaign-settings-divider{display:none}
   .campaign-actions-group{width:100%}
   .campaign-actions-group .btn-campaign-start,
   .campaign-actions-group .btn-campaign-pause,
@@ -702,7 +701,7 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 .sp-rate.sp-low{background:rgba(255,83,112,.15);color:var(--red)}
 
 /* ── CAMPAIGN LIMIT INPUTS ── */
-.camp-limit-input{width:82px;background:var(--s2);border:1px solid var(--border);border-radius:var(--rs);color:var(--tx);font-size:13px;padding:6px 8px;outline:none;text-align:center;font-family:'JetBrains Mono',monospace;transition:border-color .15s}
+.camp-limit-input{width:100%;background:var(--s2);border:1px solid var(--border);border-radius:var(--rs);color:var(--tx);font-size:13px;padding:6px 8px;outline:none;text-align:center;font-family:'JetBrains Mono',monospace;transition:border-color .15s}
 .camp-limit-input:focus{border-color:var(--border-a)}
 .camp-limit-input::placeholder{color:var(--txm)}
 
