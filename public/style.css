@@ -458,7 +458,10 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 
 .campaign-actions-group{display:flex;align-items:center;gap:8px}
 .concurrency-group{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--txm);text-transform:uppercase;letter-spacing:.3px;font-weight:600;min-width:0}
-.concurrency-group select{width:100%;font-size:12px;padding:6px 8px;text-transform:none;letter-spacing:0}
+/* font-size 13px + line-height 1.4, camp-limit-input/camp-name-input ile birebir aynı —
+   select'ler 12px kullanıyordu, bu da input'lardan ~1-2px daha kısa görünmelerine sebep
+   oluyordu (satır dolduran alanlar aynı yükseklikte değildi). */
+.concurrency-group select{width:100%;font-size:13px;line-height:1.4;padding:6px 8px;text-transform:none;letter-spacing:0}
 .btn-campaign-start{padding:8px 18px;background:var(--primary);color:#000;border:none;border-radius:var(--rs);font-family:'Sora',sans-serif;font-size:13px;font-weight:700;cursor:pointer;transition:all .2s;white-space:nowrap}
 .btn-campaign-start:disabled{opacity:.4;cursor:not-allowed}
 .btn-campaign-start:not(:disabled):hover{background:#00e6ad}
@@ -701,7 +704,7 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 .sp-rate.sp-low{background:rgba(255,83,112,.15);color:var(--red)}
 
 /* ── CAMPAIGN LIMIT INPUTS ── */
-.camp-limit-input{width:100%;background:var(--s2);border:1px solid var(--border);border-radius:var(--rs);color:var(--tx);font-size:13px;padding:6px 8px;outline:none;text-align:center;font-family:'JetBrains Mono',monospace;transition:border-color .15s}
+.camp-limit-input{width:100%;background:var(--s2);border:1px solid var(--border);border-radius:var(--rs);color:var(--tx);font-size:13px;line-height:1.4;padding:6px 8px;outline:none;text-align:center;font-family:'JetBrains Mono',monospace;transition:border-color .15s}
 .camp-limit-input:focus{border-color:var(--border-a)}
 .camp-limit-input::placeholder{color:var(--txm)}
 
@@ -733,7 +736,7 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 mark.tr-highlight{background:rgba(0,200,150,.3);color:var(--tx);border-radius:2px;padding:0 1px}
 
 /* ── KAMPANYA ADI INPUT ── */
-.camp-name-input{width:220px;background:var(--s2);border:1px solid var(--border);border-radius:var(--rs);color:var(--tx);font-size:13px;padding:6px 10px;outline:none;font-family:'Sora',sans-serif;transition:border-color .15s}
+.camp-name-input{width:220px;background:var(--s2);border:1px solid var(--border);border-radius:var(--rs);color:var(--tx);font-size:13px;line-height:1.4;padding:6px 10px;outline:none;font-family:'Sora',sans-serif;transition:border-color .15s}
 .camp-name-input:focus{border-color:var(--border-a)}
 .camp-name-input::placeholder{color:var(--txm)}
 .camp-name-input.invalid{border-color:var(--red)}
