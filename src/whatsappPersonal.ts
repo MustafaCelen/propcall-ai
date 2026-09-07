@@ -30,17 +30,21 @@ import { recordChannelMessage } from './whatsappCampaigns';
 // buradan ASLA geçmemeli — önceki sürüm bunları filtrelemiyordu, sonucu: kullanıcının
 // üye olduğu WhatsApp grupları (bazılarında binlerce mesaj) "aday" olarak DB'ye
 // aktı, grup ID'leri "telefon numarası" diye kaydedildi ("anlamsız numaralar" bug'ı).
-function extractPhoneFromMessage(msg: WAMessage): string | null {
+async function extractPhoneFromMessage(socket: WASocket, msg: WAMessage): Promise<string | null> {
   const jid = msg.key.remoteJid;
   if (!jid) return null;
   const decoded = jidDecode(jid);
   if (!decoded?.user) return null;
   if (decoded.server === 'g.us' || decoded.server === 'broadcast' || decoded.server === 'newsletter') return null;
   if (decoded.server === 'lid') {
-    // Baileys bazı sürümlerde LID mesajlarında gerçek telefon numarasını remoteJidAlt'ta verir.
-    const alt = (msg.key as any).remoteJidAlt as string | undefined;
-    const altDecoded = alt ? jidDecode(alt) : undefined;
-    return altDecoded?.user && altDecoded.server === 's.whatsapp.net' ? altDecoded.user : null;
+    // LID (Linked ID) — WhatsApp'ın telefon numarası taşımayan opak kimlik sistemi.
+    // Gerçek numarayı çözmenin resmi yolu Baileys'in signalRepository.lidMapping'i —
+    // önceki sürüm var olmayan bir msg.key.remoteJidAlt alanına bakıyordu (her zaman
+    // null dönüyordu), bu yüzden LID'li her mesaj sessizce atlanıyordu.
+    const pn = await socket.signalRepository.lidMapping.getPNForLID(jid).catch(() => null);
+    if (!pn) return null;
+    const pnDecoded = jidDecode(pn);
+    return pnDecoded?.user && pnDecoded.server === 's.whatsapp.net' ? pnDecoded.user : null;
   }
   if (decoded.server !== 's.whatsapp.net') return null;
   return decoded.user;
@@ -167,7 +171,7 @@ export async function connectPersonalWhatsapp(userId: string): Promise<void> {
   socket.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify' && type !== 'append') return;
     for (const msg of messages) {
-      await processPersonalMessage(userId, msg).catch(err =>
+      await processPersonalMessage(userId, socket, msg).catch(err =>
         console.error('[whatsapp-personal] Mesaj kaydı hatası:', err));
     }
   });
@@ -177,7 +181,7 @@ export async function connectPersonalWhatsapp(userId: string): Promise<void> {
   socket.ev.on('messaging-history.set', async ({ messages }) => {
     let imported = 0;
     for (const msg of messages) {
-      const ok = await processPersonalMessage(userId, msg, true).catch(err => {
+      const ok = await processPersonalMessage(userId, socket, msg, true).catch(err => {
         console.error('[whatsapp-personal] Geçmiş mesaj kaydı hatası:', err);
         return false;
       });
@@ -187,9 +191,9 @@ export async function connectPersonalWhatsapp(userId: string): Promise<void> {
   });
 }
 
-async function processPersonalMessage(userId: string, msg: WAMessage, isHistory = false): Promise<boolean> {
+async function processPersonalMessage(userId: string, socket: WASocket, msg: WAMessage, isHistory = false): Promise<boolean> {
   if (!msg.message) return false;
-  const fromPhone = extractPhoneFromMessage(msg);
+  const fromPhone = await extractPhoneFromMessage(socket, msg);
   const body = extractMessageText(msg);
   if (!fromPhone || !body) return false;
 

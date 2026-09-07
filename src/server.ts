@@ -758,7 +758,7 @@ async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
           console.log(`[Webhook] ${vapiCallId} streaming transcript korundu (${existingTranscriptLen} >= ${validMessages.length})`);
         }
       } else {
-        console.warn(`[Webhook] ${vapiCallId} artifact.messages yok — streaming transcript korundu`);
+        // console.warn(`[Webhook] ${vapiCallId} artifact.messages yok — streaming transcript korundu`);
       }
 
       // Cost merge: cost-update ile biriken değerleri sıfırlamadan güncelle
