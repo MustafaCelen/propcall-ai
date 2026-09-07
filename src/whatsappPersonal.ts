@@ -12,12 +12,43 @@
 
 import makeWASocket, {
   DisconnectReason, AuthenticationCreds, AuthenticationState,
-  BufferJSON, initAuthCreds, WASocket, proto,
+  BufferJSON, initAuthCreds, WASocket, proto, jidDecode,
+  type WAMessage,
 } from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
 import { Boom } from '@hapi/boom';
 import pool from './db';
-import { recordInboundMessage } from './whatsappCampaigns';
+import { recordChannelMessage } from './whatsappCampaigns';
+
+// remoteJid'den (örn. "905321234567:12@s.whatsapp.net") gerçek telefon numarasını
+// çıkarır — jidDecode cihaz sonekini (":12") ve sunucu kısmını (@s.whatsapp.net) temizler.
+//
+// KRİTİK — grup/broadcast/LID filtresi: remoteJid SADECE bire-bir sohbetlerde
+// (server === 's.whatsapp.net') gerçek bir telefon numarasıdır. WhatsApp GRUPLARI
+// (@g.us, "120363...@g.us" gibi 18 haneli veya eski "telefon-zaman@g.us" formatı),
+// yayın listeleri (@broadcast) ve LID (yeni opak kimlik, telefon numarası taşımaz)
+// buradan ASLA geçmemeli — önceki sürüm bunları filtrelemiyordu, sonucu: kullanıcının
+// üye olduğu WhatsApp grupları (bazılarında binlerce mesaj) "aday" olarak DB'ye
+// aktı, grup ID'leri "telefon numarası" diye kaydedildi ("anlamsız numaralar" bug'ı).
+function extractPhoneFromMessage(msg: WAMessage): string | null {
+  const jid = msg.key.remoteJid;
+  if (!jid) return null;
+  const decoded = jidDecode(jid);
+  if (!decoded?.user) return null;
+  if (decoded.server === 'g.us' || decoded.server === 'broadcast' || decoded.server === 'newsletter') return null;
+  if (decoded.server === 'lid') {
+    // Baileys bazı sürümlerde LID mesajlarında gerçek telefon numarasını remoteJidAlt'ta verir.
+    const alt = (msg.key as any).remoteJidAlt as string | undefined;
+    const altDecoded = alt ? jidDecode(alt) : undefined;
+    return altDecoded?.user && altDecoded.server === 's.whatsapp.net' ? altDecoded.user : null;
+  }
+  if (decoded.server !== 's.whatsapp.net') return null;
+  return decoded.user;
+}
+
+function extractMessageText(msg: WAMessage): string {
+  return msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
+}
 
 interface Session {
   socket: WASocket;
@@ -129,37 +160,48 @@ export async function connectPersonalWhatsapp(userId: string): Promise<void> {
     }
   });
 
-  // Yeni gelen mesajlar (canlı).
+  // Yeni mesajlar (canlı) — HEM gelen HEM telefonun kendisinden (WhatsApp uygulamasından,
+  // bu uygulama dışından) atılan giden mesajlar. Önceden fromMe=true olanlar atlanıyordu —
+  // "giden mesajlar hiç görünmüyor" şikayetinin kaynağı buydu: sadece bu uygulama
+  // üzerinden gönderilenler kaydediliyordu, telefondan elle yazılanlar yoktu.
   socket.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
+    if (type !== 'notify' && type !== 'append') return;
     for (const msg of messages) {
-      if (msg.key.fromMe || !msg.message) continue;
-      const fromPhone = msg.key.remoteJid?.split('@')[0];
-      const body = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
-      if (!fromPhone || !body) continue;
-      await recordInboundMessage(userId, fromPhone, body, msg.key.id || `personal_${Date.now()}`, 'PERSONAL')
-        .catch(err => console.error('[whatsapp-personal] Gelen mesaj kaydı hatası:', err));
+      await processPersonalMessage(userId, msg).catch(err =>
+        console.error('[whatsapp-personal] Mesaj kaydı hatası:', err));
     }
   });
 
   // İlk bağlantıda WhatsApp geçmiş sohbetleri tek seferlik gönderir (history sync) —
   // bu olmadan sadece bağlandıktan SONRA gelen mesajlar görünürdü, geçmiş boş kalırdı.
-  // Sadece gelen (fromMe=false) mesajları içe aktarıyoruz; kendi geçmiş gönderdiklerimiz
-  // kapsam dışı (sadece bundan sonra bu uygulamadan gönderilenler kaydedilir).
   socket.ev.on('messaging-history.set', async ({ messages }) => {
     let imported = 0;
     for (const msg of messages) {
-      if (msg.key.fromMe || !msg.message) continue;
-      const fromPhone = msg.key.remoteJid?.split('@')[0];
-      const body = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
-      if (!fromPhone || !body) continue;
-      try {
-        await recordInboundMessage(userId, fromPhone, body, msg.key.id || `personal_hist_${msg.messageTimestamp}`, 'PERSONAL');
-        imported++;
-      } catch (err) { console.error('[whatsapp-personal] Geçmiş mesaj kaydı hatası:', err); }
+      const ok = await processPersonalMessage(userId, msg, true).catch(err => {
+        console.error('[whatsapp-personal] Geçmiş mesaj kaydı hatası:', err);
+        return false;
+      });
+      if (ok) imported++;
     }
     if (imported) console.log(`[whatsapp-personal] ${userId}: ${imported} geçmiş mesaj içe aktarıldı`);
   });
+}
+
+async function processPersonalMessage(userId: string, msg: WAMessage, isHistory = false): Promise<boolean> {
+  if (!msg.message) return false;
+  const fromPhone = extractPhoneFromMessage(msg);
+  const body = extractMessageText(msg);
+  if (!fromPhone || !body) return false;
+
+  const direction = msg.key.fromMe ? 'OUT' : 'IN';
+  const ts = msg.messageTimestamp ? new Date(Number(msg.messageTimestamp) * 1000) : new Date();
+  const externalId = msg.key.id || `personal_${isHistory ? 'hist_' : ''}${fromPhone}_${ts.getTime()}`;
+
+  await recordChannelMessage(userId, {
+    fromPhone, body, externalId, channel: 'PERSONAL', direction, timestamp: ts,
+    contactName: direction === 'IN' ? (msg.pushName || undefined) : undefined,
+  });
+  return true;
 }
 
 export function getPersonalStatus(userId: string): { status: string; qrDataUrl: string | null; phoneNumber: string | null } {

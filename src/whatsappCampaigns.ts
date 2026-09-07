@@ -112,17 +112,35 @@ export async function sendSingleMessage(
   }
 }
 
-// Twilio (channel='TWILIO') veya şahsi hesap (channel='PERSONAL', bkz. whatsappPersonal.ts)
-// inbound olaylarından çağrılır — telefon numarasına göre en son eşleşen adayı bulur,
-// yoksa (özellikle şahsi hesapta biri ilk kez yazdığında) yeni bir aday oluşturur —
-// gelen bir mesaj hiçbir zaman sessizce kaybolmaz.
-export async function recordInboundMessage(
-  userId: string, fromPhone: string, body: string, externalId: string, channel: 'TWILIO' | 'PERSONAL' = 'TWILIO',
-): Promise<void> {
+// Twilio (channel='TWILIO', her zaman IN — Twilio webhook'u sadece gelen mesaj bildirir)
+// veya şahsi hesap (channel='PERSONAL', bkz. whatsappPersonal.ts — HEM gelen HEM
+// telefonun kendisinden atılan giden mesajlar) olaylarından çağrılır. Telefon
+// numarasına göre en son eşleşen adayı bulur, yoksa yeni bir aday oluşturur —
+// bir mesaj hiçbir zaman sessizce kaybolmaz.
+//
+// contactName: sadece IN mesajlarda WhatsApp'ın kendi gönderdiği görünen ad (Baileys'te
+// pushName) — yeni aday oluşturulurken telefon numarası yerine gerçek isim kullanılsın
+// diye. timestamp verilmezse (Twilio'da olduğu gibi) DB'nin NOW()'ı kullanılır; Baileys
+// hem canlı hem GEÇMİŞ mesajlar için gerçek WhatsApp zaman damgasını verir — bunsuz
+// geçmiş mesajlar hep "şimdi" ile kaydedilip sıralama bozulurdu.
+export async function recordChannelMessage(userId: string, params: {
+  fromPhone: string; body: string; externalId: string; channel: 'TWILIO' | 'PERSONAL';
+  direction?: 'IN' | 'OUT'; contactName?: string; timestamp?: Date;
+}): Promise<void> {
+  const { fromPhone, body, externalId, channel } = params;
+  const direction = params.direction ?? 'IN';
   const dupe = await pool.query(`SELECT 1 FROM whatsapp_messages WHERE twilio_sid = $1`, [externalId]);
   if (dupe.rows[0]) return;
 
   const normalized = fromPhone.replace(/^whatsapp:/, '').replace(/\D/g, '');
+  // Savunma katmanı: E.164 gerçek telefon numaraları en fazla 15 hane olur (ITU
+  // standardı). Grup/broadcast/LID JID'leri filtrelensin diye whatsappPersonal.ts'te
+  // zaten engelleniyor ama burada da kontrol ederek olası başka bir kanaldan (ileride
+  // eklenecek) benzer bir sızıntının "aday" olarak DB'ye akmasını önlüyoruz.
+  if (normalized.length < 7 || normalized.length > 15) {
+    console.warn(`[whatsapp] Geçersiz telefon formatı, mesaj atlandı: "${fromPhone}" (${channel})`);
+    return;
+  }
   const { rows: leadRows } = await pool.query(
     `SELECT id FROM leads WHERE user_id = $1 AND regexp_replace(data->>'phone', '\\D', '', 'g') = $2 ORDER BY updated_at DESC LIMIT 1`,
     [userId, normalized],
@@ -133,20 +151,31 @@ export async function recordInboundMessage(
     leadId = leadRows[0].id;
   } else {
     const { createLead } = await import('./leads');
-    const created = await createLead(userId, { firstName: fromPhone, phone: fromPhone, source: 'OTHER' });
+    const created = await createLead(userId, {
+      firstName: params.contactName?.trim() || ('+' + normalized),
+      phone: '+' + normalized,
+      source: 'OTHER',
+    });
     leadId = created.id;
-    console.log(`[whatsapp] Gelen mesaj için yeni aday oluşturuldu: ${fromPhone} (${channel})`);
+    console.log(`[whatsapp] Yeni mesaj için yeni aday oluşturuldu: ${fromPhone} (${channel})`);
   }
 
   await pool.query(
-    `INSERT INTO whatsapp_messages (id, user_id, lead_id, twilio_sid, direction, status, body, channel)
-     VALUES ($1, $2, $3, $4, 'IN', 'RECEIVED', $5, $6)`,
-    [newId('wam'), userId, leadId, externalId, body, channel],
+    `INSERT INTO whatsapp_messages (id, user_id, lead_id, twilio_sid, direction, status, body, channel, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, NOW()))`,
+    [newId('wam'), userId, leadId, externalId, direction, direction === 'IN' ? 'RECEIVED' : 'SENT', body, channel, params.timestamp ?? null],
   );
   await pool.query(
-    `INSERT INTO lead_activities (id, lead_id, user_id, type, data) VALUES ($1, $2, $3, 'MESSAGE_RECEIVED', $4)`,
-    [newId('act'), leadId, userId, JSON.stringify({ body })],
+    `INSERT INTO lead_activities (id, lead_id, user_id, type, data) VALUES ($1, $2, $3, $4, $5)`,
+    [newId('act'), leadId, userId, direction === 'IN' ? 'MESSAGE_RECEIVED' : 'MESSAGE_SENT', JSON.stringify({ body, channel })],
   );
+}
+
+// Geriye dönük uyumluluk — Twilio webhook'u (server.ts) bunu çağırır, her zaman IN.
+export async function recordInboundMessage(
+  userId: string, fromPhone: string, body: string, externalId: string, channel: 'TWILIO' | 'PERSONAL' = 'TWILIO',
+): Promise<void> {
+  return recordChannelMessage(userId, { fromPhone, body, externalId, channel, direction: 'IN' });
 }
 
 // ─── Kampanyalar (toplu gönderim) ────────────────────────────────────────────
