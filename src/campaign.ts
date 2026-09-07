@@ -653,7 +653,11 @@ async function fillQueue(entry: CampaignEngineEntry): Promise<void> {
       if (already.summary) c.result = already.summary;
       if ((STATUS_PRIORITY[mappedStatus] ?? -1) > (STATUS_PRIORITY[c.status] ?? -1)) c.status = mappedStatus;
       reconciledAny = true;
-      console.warn(`[Campaign] "${c.name}" (${c.phone}) koruma penceresi içinde zaten arandı (${already.vapiCallId}) — tekrar aranmadı, durum senkronize edildi.`);
+      // KASITLI console.log (console.warn DEĞİL) — bu bir hata değil, tekrar arama
+      // kontrolünün (duplicate-call protection) doğru çalıştığının kaydı. console.warn
+      // stderr'e yazılır ve Railway bunu kırmızı "error" seviyesinde gösterir, bu da
+      // danışmana kampanyada gerçek bir hata varmış gibi yanlış izlenim veriyordu.
+      console.log(`[Campaign] Tekrar arama kontrolü: "${c.name}" (${c.phone}) zaten arandı (${already.vapiCallId}) — tekrar aranmadı, durum senkronize edildi.`);
       continue;
     }
 
