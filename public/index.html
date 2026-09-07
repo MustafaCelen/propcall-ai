@@ -407,7 +407,15 @@
         <!-- Üst kontrol çubuğu -->
         <div class="campaign-toolbar">
 
-          <!-- Satır 1: kampanya kimliği -->
+          <!-- Satır 1: dosya yükleme -->
+          <div class="campaign-toolbar-row">
+            <div class="campaign-upload-area" id="campaignUploadArea">
+              <input type="file" id="campaignFile" accept=".xlsx,.xls,.csv" style="display:none"/>
+              <button class="btn-upload" id="btnUpload">📂 Excel / CSV Yükle</button>
+            </div>
+          </div>
+
+          <!-- Satır 2: kampanya kimliği -->
           <div class="campaign-toolbar-row campaign-toolbar-row-top">
             <div class="concurrency-group camp-name-group" title="Bu kampanyayı geçmişte tanıyacağınız isim — zorunlu">
               <label>Kampanya Adı</label>
@@ -419,16 +427,9 @@
                 <option value="">— Varsayılan prompt —</option>
               </select>
             </div>
-            <div class="campaign-upload-group">
-              <label>&nbsp;</label>
-              <div class="campaign-upload-area" id="campaignUploadArea">
-                <input type="file" id="campaignFile" accept=".xlsx,.xls,.csv" style="display:none"/>
-                <button class="btn-upload" id="btnUpload">📂 Excel / CSV Yükle</button>
-              </div>
-            </div>
           </div>
 
-          <!-- Satır 2: kuyruk ayarları + aksiyon butonları -->
+          <!-- Satır 3: kuyruk ayarları + aksiyon butonları -->
           <div class="campaign-toolbar-row">
             <div class="campaign-settings-group">
               <div class="concurrency-group">
