@@ -2441,7 +2441,14 @@ function renderImportSummary(loadedCount, skipped) {
   if (dismiss) dismiss.addEventListener('click', () => { el.style.display = 'none'; });
 }
 
-async function loadCampaignState() {
+// Büyük kampanyalarda (binlerce kişi) JSON yanıtı ağır olabiliyor — yavaş/kararsız bir
+// ağda (örn. başka bir PC/bağlantı) istek zaman aşımına uğrayabilir veya kesilebilirdi.
+// Önceden burası sessizce yutuluyordu (catch(_) {}) — kullanıcı hiçbir hata görmeden
+// kampanya verisi boş/eksik kalıyordu ("başka PC'den açınca bilgiler tam gelmiyor"
+// şikayetinin kaynağı). Artık birkaç kez otomatik tekrar dener, hepsi başarısız olursa
+// kullanıcıyı açıkça bilgilendirir.
+async function loadCampaignState(attempt = 1) {
+  const MAX_ATTEMPTS = 3;
   try {
     // Daha önce odaklanılmış belirli bir kampanya varsa (localStorage'dan, sayfa
     // yüklenirken senkron okundu) ONU iste — id vermezsek backend "en son güncellenen"e
@@ -2449,11 +2456,13 @@ async function loadCampaignState() {
     const focusedId = campaign.id;
     const qs   = focusedId ? ('?campaignId=' + encodeURIComponent(focusedId)) : '';
     let resp = await fetch('/api/campaign' + qs);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
     let json = await resp.json();
 
     // Kayıtlı kampanya artık yok/temizlenmiş — genel "en son"a düş.
     if (focusedId && (!json.success || !json.data || !json.data.id)) {
       resp = await fetch('/api/campaign');
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
       json = await resp.json();
     }
 
@@ -2478,7 +2487,14 @@ async function loadCampaignState() {
     renderCallingHoursNotice(json.data.autoHeld);
     $('campaignProgressBar').style.display = 'block';
     toast('Önceki kampanya yüklendi (' + campaign.contacts.length + ' kişi)', 'info');
-  } catch(_) {}
+  } catch (err) {
+    if (attempt < MAX_ATTEMPTS) {
+      setTimeout(() => loadCampaignState(attempt + 1), attempt * 1500);
+    } else {
+      console.error('[Campaign] Kampanya durumu yüklenemedi:', err);
+      toast('Kampanya bilgileri yüklenemedi — bağlantınızı kontrol edip sayfayı yenileyin', 'error');
+    }
+  }
 }
 
 // Kampanya Geçmişi'nden yarıda kalmış (bekliyor kişisi olan) belirli bir kampanyayı
