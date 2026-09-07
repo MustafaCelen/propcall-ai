@@ -27,9 +27,12 @@ import {
   submitTemplate, startTemplateSyncJob,
 } from './whatsappTemplates';
 import {
-  getMessagesForLead, sendSingleMessage, recordInboundMessage,
+  getMessagesForLead, sendSingleMessage, recordInboundMessage, getInbox,
   getAllCampaigns, previewCampaignRecipients, createCampaign, sendCampaign,
 } from './whatsappCampaigns';
+import {
+  connectPersonalWhatsapp, getPersonalStatus, disconnectPersonalWhatsapp, reconnectAllPersonalSessions,
+} from './whatsappPersonal';
 import { getAllScenarios, getScenario, createScenario, updateScenario, deleteScenario, seedDefaultScenario } from './scenarios';
 import { findUnsupportedVariables } from './templateVariables';
 import {
@@ -1455,11 +1458,35 @@ app.get('/api/leads/:id/messages', requireUserAuth, async (req: Request, res: Re
 
 app.post('/api/leads/:id/messages', requireUserAuth, async (req: Request, res: Response) => {
   try {
-    const { body } = req.body as { body?: string };
+    const { body, channel } = req.body as { body?: string; channel?: 'TWILIO' | 'PERSONAL' };
     if (!body?.trim()) return res.status(400).json({ success: false, error: 'Mesaj boş olamaz' });
-    const message = await sendSingleMessage(req.userId!, req.params.id, body.trim());
+    const message = await sendSingleMessage(req.userId!, req.params.id, body.trim(), channel || 'TWILIO');
     return res.status(201).json({ success: true, data: message });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+// ─── ŞAHSİ WHATSAPP (Baileys/WhatsApp Web) — SADECE bire-bir kullanım ───────
+// bkz. whatsappPersonal.ts başındaki kısıt notu: toplu gönderim buradan ASLA yapılmaz.
+
+app.post('/api/whatsapp/personal/connect', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    connectPersonalWhatsapp(req.userId!).catch(err => console.error('[whatsapp-personal] Bağlantı hatası:', err));
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.get('/api/whatsapp/personal/status', requireUserAuth, (req: Request, res: Response) => {
+  return res.json({ success: true, data: getPersonalStatus(req.userId!) });
+});
+
+app.post('/api/whatsapp/personal/disconnect', requireUserAuth, async (req: Request, res: Response) => {
+  try { await disconnectPersonalWhatsapp(req.userId!); return res.json({ success: true }); }
+  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
+
+app.get('/api/whatsapp/inbox', requireUserAuth, async (req: Request, res: Response) => {
+  try { return res.json({ success: true, data: await getInbox(req.userId!) }); }
+  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
 });
 
 app.get('/api/whatsapp/campaigns', requireUserAuth, async (req: Request, res: Response) => {
@@ -1805,6 +1832,7 @@ initDb()
     await loadAllActiveCampaigns();
     startMetaSyncJob();
     startTemplateSyncJob();
+    reconnectAllPersonalSessions().catch(err => console.error('[whatsapp-personal] Boot yeniden bağlanma hatası:', err));
     const staleCount = await reconcileStaleCalls();
     if (staleCount > 0) {
       console.log(`[Reconcile] ${staleCount} eski "in-progress" arama "failed" olarak kapatıldı (webhook gelmemişti)`);

@@ -313,6 +313,23 @@
       </div>
       <div class="adm-field-status" id="statusWhatsapp"></div>
     </div>
+
+    <div class="adm-card">
+      <div class="adm-section-title">📱 Şahsi WhatsApp (WhatsApp Web)</div>
+      <div class="adm-field-hint" style="margin-bottom:12px">Kendi WhatsApp hesabınızı QR kod okutarak bağlayın — WhatsApp Web'in aynısı. ⚠️ <b>Bu bağlantı SADECE bire-bir mesajlaşma/takip içindir</b>, toplu kampanya asla bu numaradan gönderilmez (resmi olmayan bir protokol kullandığı için hesap askıya alınma riski var — düşük ama gerçek).</div>
+      <div id="waPersonalDisconnected">
+        <button class="adm-save-btn" id="btnConnectPersonalWa">📷 QR Kod ile Bağlan</button>
+      </div>
+      <div id="waPersonalQr" style="display:none;text-align:center;padding:12px">
+        <img id="waPersonalQrImg" style="width:220px;height:220px;border-radius:8px" />
+        <div class="adm-field-hint" style="margin-top:8px">Telefonunuzda WhatsApp → Ayarlar → Bağlı Cihazlar → Cihaz Bağla ile bu kodu okutun</div>
+      </div>
+      <div id="waPersonalConnected" style="display:none">
+        <span class="adm-source db">Bağlı</span> <span id="waPersonalPhoneLabel"></span>
+        <button class="adm-save-btn" id="btnDisconnectPersonalWa" style="margin-left:8px">Bağlantıyı Kes</button>
+      </div>
+      <div class="adm-field-status" id="statusPersonalWa"></div>
+    </div>
     </div>
   </div>
 
@@ -514,6 +531,66 @@ $('btnDisconnectWhatsapp').addEventListener('click', async () => {
   await fetch('/api/settings/whatsapp', { method: 'DELETE' });
   loadCrmSettings();
 });
+
+// ─── ŞAHSİ WHATSAPP (Baileys) — QR eşleştirme ──────────────────────────────
+// bkz. src/whatsappPersonal.ts başındaki kısıt notu: SADECE bire-bir kullanım.
+
+let personalWaPollTimer = null;
+
+function renderPersonalWaStatus(data) {
+  const disc = $('waPersonalDisconnected'), qr = $('waPersonalQr'), conn = $('waPersonalConnected');
+  disc.style.display = 'none'; qr.style.display = 'none'; conn.style.display = 'none';
+  if (data.status === 'connected') {
+    conn.style.display = 'block';
+    $('waPersonalPhoneLabel').textContent = data.phoneNumber || '';
+    stopPersonalWaPolling();
+  } else if (data.status === 'qr_pending' && data.qrDataUrl) {
+    qr.style.display = 'block';
+    $('waPersonalQrImg').src = data.qrDataUrl;
+  } else {
+    disc.style.display = 'block';
+  }
+}
+
+async function pollPersonalWaStatus() {
+  try {
+    const r = await fetch('/api/whatsapp/personal/status');
+    const j = await r.json();
+    if (j.success) renderPersonalWaStatus(j.data);
+  } catch (_) {}
+}
+
+function startPersonalWaPolling() {
+  stopPersonalWaPolling();
+  personalWaPollTimer = setInterval(pollPersonalWaStatus, 2500);
+}
+function stopPersonalWaPolling() {
+  if (personalWaPollTimer) { clearInterval(personalWaPollTimer); personalWaPollTimer = null; }
+}
+
+$('btnConnectPersonalWa').addEventListener('click', async () => {
+  const status = $('statusPersonalWa');
+  status.textContent = 'Bağlantı başlatılıyor, QR kod birkaç saniye içinde görünecek...';
+  status.className = 'adm-field-status';
+  try {
+    const r = await fetch('/api/whatsapp/personal/connect', { method: 'POST' });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    startPersonalWaPolling();
+  } catch (err) {
+    status.textContent = '✗ ' + err.message;
+    status.className = 'adm-field-status err';
+  }
+});
+
+$('btnDisconnectPersonalWa').addEventListener('click', async () => {
+  if (!await uiConfirm('Şahsi WhatsApp bağlantısını kesmek istediğinize emin misiniz?')) return;
+  stopPersonalWaPolling();
+  await fetch('/api/whatsapp/personal/disconnect', { method: 'POST' });
+  pollPersonalWaStatus();
+});
+
+pollPersonalWaStatus();
 
 // ─── ARAMA KURALLARI (saat aralığı) ─────────────────────────────────────────
 

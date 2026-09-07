@@ -251,6 +251,9 @@ export interface WhatsappTemplate {
 export const MESSAGE_DIRECTIONS = ['IN', 'OUT'] as const;
 export type MessageDirection = (typeof MESSAGE_DIRECTIONS)[number];
 
+export const MESSAGE_CHANNELS = ['TWILIO', 'PERSONAL'] as const;
+export type MessageChannel = (typeof MESSAGE_CHANNELS)[number];
+
 export interface WhatsappMessage {
   id: string;
   leadId: string;
@@ -261,6 +264,7 @@ export interface WhatsappMessage {
   templateId: string | null;
   campaignId: string | null;
   errorMessage: string | null;
+  channel: MessageChannel;
   createdAt: string;
 }
 

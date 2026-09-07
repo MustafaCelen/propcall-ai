@@ -300,6 +300,24 @@ export async function initDb(): Promise<void> {
       sent_at      TIMESTAMPTZ,
       UNIQUE (campaign_id, lead_id)
     );
+
+    -- Mesaj hangi kanaldan gitti/geldi — 'TWILIO' (Business API, toplu kampanyalar
+    -- SADECE buradan gider) veya 'PERSONAL' (şahsi hesap, Baileys/WhatsApp Web
+    -- protokolü — KASITLI olarak sadece bire-bir kullanım için, bkz. whatsappPersonal.ts).
+    ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS channel TEXT NOT NULL DEFAULT 'TWILIO';
+
+    -- Şahsi WhatsApp (Baileys) oturumu — dosya sistemi yerine DB'de tutulur, çünkü
+    -- Railway container'ları her deploy'da sıfırlanır (useMultiFileAuthState'in
+    -- varsayılan dosya tabanlı deposu kalıcı olmazdı, her deploy'da yeniden QR
+    -- okutmak gerekirdi). creds/keys Baileys'in kendi BufferJSON formatıyla saklanır.
+    CREATE TABLE IF NOT EXISTS whatsapp_personal_sessions (
+      user_id      TEXT PRIMARY KEY REFERENCES users(id),
+      creds        JSONB,
+      keys         JSONB NOT NULL DEFAULT '{}',
+      status       TEXT NOT NULL DEFAULT 'disconnected', -- disconnected|qr_pending|connected
+      phone_number TEXT,
+      updated_at   TIMESTAMPTZ DEFAULT NOW()
+    );
   `;
 
   for (let attempt = 1; attempt <= INIT_RETRIES; attempt++) {

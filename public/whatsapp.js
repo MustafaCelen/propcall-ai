@@ -7,12 +7,124 @@ const WA_STAGE_LABELS = {
   VIEWING: 'Gezme', OFFER: 'Teklif', WON: 'Kazanıldı', LOST: 'Kaybedildi',
 };
 
-const waState = { templates: [], selectedStages: new Set(), previewedCount: null };
+const waState = { templates: [], selectedStages: new Set(), previewedCount: null, inbox: [], openLeadId: null, personalConnected: false, replyChannel: 'TWILIO' };
 
 async function loadWhatsappTab() {
-  await Promise.all([loadTemplates(), loadCampaignHistoryWa()]);
+  await Promise.all([loadTemplates(), loadCampaignHistoryWa(), loadInbox(), checkPersonalWaAvailable()]);
   renderStageChecks();
 }
+
+async function checkPersonalWaAvailable() {
+  try {
+    const r = await fetch('/api/whatsapp/personal/status');
+    const j = await r.json();
+    waState.personalConnected = j.success && j.data.status === 'connected';
+  } catch (_) { waState.personalConnected = false; }
+}
+
+// ─── GELEN KUTUSU (WhatsApp Web tarzı, Twilio + şahsi hep aynı listede) ─────
+
+async function loadInbox() {
+  const list = $('waInboxList');
+  try {
+    const r = await fetch('/api/whatsapp/inbox');
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error || 'Gelen kutusu yüklenemedi');
+    waState.inbox = j.data;
+    renderInboxList();
+  } catch (err) {
+    list.innerHTML = `<div class="drawer-error">✗ ${err.message}</div>`;
+  }
+}
+
+function renderInboxList() {
+  const list = $('waInboxList');
+  if (!waState.inbox.length) { list.innerHTML = '<div class="lead-column-empty" style="padding:20px">Henüz mesaj yok</div>'; return; }
+  list.innerHTML = waState.inbox.map(c => `
+    <div class="wa-inbox-item${c.leadId === waState.openLeadId ? ' active' : ''}" data-lead-id="${c.leadId}">
+      <div class="wa-inbox-item-name">
+        <span>${esc([c.firstName, c.lastName].filter(Boolean).join(' ') || c.phone || '(isimsiz)')}</span>
+        <span class="wa-inbox-item-channel">${c.lastChannel}</span>
+      </div>
+      <div class="wa-inbox-item-preview">${c.lastDirection === 'OUT' ? 'Siz: ' : ''}${esc(c.lastMessage)}</div>
+    </div>
+  `).join('');
+  list.querySelectorAll('.wa-inbox-item').forEach(el => {
+    el.addEventListener('click', () => openInboxThread(el.dataset.leadId));
+  });
+}
+
+async function openInboxThread(leadId) {
+  waState.openLeadId = leadId;
+  renderInboxList();
+  const entry = waState.inbox.find(c => c.leadId === leadId);
+  const thread = $('waInboxThread');
+  thread.innerHTML = `
+    <div class="wa-inbox-thread-header">${esc([entry?.firstName, entry?.lastName].filter(Boolean).join(' ') || entry?.phone || '')}</div>
+    <div class="wa-inbox-thread-body" id="waInboxThreadBody"><div class="drawer-loading">⏳ Yükleniyor...</div></div>
+    <div class="wa-inbox-thread-footer">
+      ${waState.personalConnected ? `
+      <div class="wa-channel-toggle">
+        <button class="wa-channel-btn${waState.replyChannel === 'TWILIO' ? ' active' : ''}" data-channel="TWILIO">Twilio</button>
+        <button class="wa-channel-btn${waState.replyChannel === 'PERSONAL' ? ' active' : ''}" data-channel="PERSONAL">Şahsi</button>
+      </div>` : ''}
+      <input type="text" id="waInboxReplyInput" placeholder="Mesaj yazın..." />
+      <button class="btn-save-notes" id="waInboxReplySend">Gönder</button>
+    </div>
+  `;
+  thread.querySelectorAll('[data-channel]').forEach(btn => {
+    btn.addEventListener('click', () => { waState.replyChannel = btn.dataset.channel; openInboxThread(leadId); });
+  });
+  $('waInboxReplySend').addEventListener('click', () => sendInboxReply(leadId));
+  await loadInboxThreadMessages(leadId);
+}
+
+async function loadInboxThreadMessages(leadId) {
+  const body = $('waInboxThreadBody');
+  try {
+    const r = await fetch(`/api/leads/${leadId}/messages`);
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    body.innerHTML = j.data.length ? j.data.map(m => `
+      <div class="lead-msg ${m.direction}">
+        <div>${esc(m.body)}</div>
+        <div class="lead-msg-time">${leadRelativeTime(m.createdAt)} · ${m.channel}${m.status === 'FAILED' ? ' · ✗' : ''}</div>
+      </div>
+    `).join('') : '<div class="lead-column-empty">Henüz mesaj yok</div>';
+    body.scrollTop = body.scrollHeight;
+  } catch (err) {
+    body.innerHTML = `<div class="drawer-error">✗ ${err.message}</div>`;
+  }
+}
+
+async function sendInboxReply(leadId) {
+  const input = $('waInboxReplyInput');
+  const body = input.value.trim();
+  if (!body) return;
+  try {
+    const r = await fetch(`/api/leads/${leadId}/messages`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body, channel: waState.replyChannel }),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error || 'Gönderilemedi');
+    input.value = '';
+    loadInboxThreadMessages(leadId);
+    loadInbox();
+  } catch (err) {
+    toast('✗ ' + err.message, 'error');
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  $('waSubtabs').querySelectorAll('.fu-subtab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      $('waSubtabs').querySelectorAll('.fu-subtab').forEach(b => b.classList.toggle('active', b === btn));
+      $('waSubInbox').classList.toggle('active', btn.dataset.wasub === 'inbox');
+      $('waSubTemplates').classList.toggle('active', btn.dataset.wasub === 'templates');
+    });
+  });
+});
 
 async function loadTemplates() {
   const box = $('waTemplates');

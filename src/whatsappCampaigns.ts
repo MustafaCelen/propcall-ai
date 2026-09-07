@@ -25,8 +25,41 @@ function rowToMessage(r: any): WhatsappMessage {
   return {
     id: r.id, leadId: r.lead_id, twilioSid: r.twilio_sid, direction: r.direction,
     status: r.status, body: r.body, templateId: r.template_id, campaignId: r.campaign_id,
-    errorMessage: r.error_message, createdAt: r.created_at.toISOString(),
+    errorMessage: r.error_message, channel: r.channel, createdAt: r.created_at.toISOString(),
   };
+}
+
+// WhatsApp Web tarzı gelen kutusu — konuşması olan TÜM adayları en son mesaja göre
+// sıralar (kanal fark etmeksizin, Twilio + şahsi hep aynı listede).
+export interface InboxEntry {
+  leadId: string;
+  firstName: string;
+  lastName: string | null;
+  phone: string | null;
+  lastMessage: string;
+  lastDirection: string;
+  lastChannel: string;
+  lastAt: string;
+}
+
+export async function getInbox(userId: string): Promise<InboxEntry[]> {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT ON (m.lead_id)
+       m.lead_id, l.data->>'firstName' AS "firstName", l.data->>'lastName' AS "lastName",
+       l.data->>'phone' AS phone, m.body, m.direction, m.channel, m.created_at
+     FROM whatsapp_messages m
+     JOIN leads l ON l.id = m.lead_id
+     WHERE m.user_id = $1
+     ORDER BY m.lead_id, m.created_at DESC`,
+    [userId],
+  );
+  return rows
+    .map(r => ({
+      leadId: r.lead_id, firstName: r.firstName, lastName: r.lastName, phone: r.phone,
+      lastMessage: r.body, lastDirection: r.direction, lastChannel: r.channel,
+      lastAt: r.created_at.toISOString(),
+    }))
+    .sort((a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime());
 }
 
 export async function getMessagesForLead(userId: string, leadId: string): Promise<WhatsappMessage[]> {
@@ -37,56 +70,78 @@ export async function getMessagesForLead(userId: string, leadId: string): Promis
   return rows.map(rowToMessage);
 }
 
-export async function sendSingleMessage(userId: string, leadId: string, body: string): Promise<WhatsappMessage> {
-  const config = await getUserWhatsappConfig(userId);
-  if (!config) throw new Error('WhatsApp hesap bilgileriniz tanımlı değil — Ayarlarım sayfasından ekleyin.');
+// channel='PERSONAL' SADECE bire-bir bu fonksiyon üzerinden çağrılabilir — toplu
+// kampanya motoru (sendCampaign, aşağıda) bu parametreyi hiç kullanmaz/kullanamaz,
+// her zaman 'TWILIO'dur. Bkz. whatsappPersonal.ts başındaki kısıt notu.
+export async function sendSingleMessage(
+  userId: string, leadId: string, body: string, channel: 'TWILIO' | 'PERSONAL' = 'TWILIO',
+): Promise<WhatsappMessage> {
   const { rows: leadRows } = await pool.query(`SELECT data FROM leads WHERE id = $1 AND user_id = $2`, [leadId, userId]);
   const lead = leadRows[0]?.data as Lead | undefined;
   if (!lead?.phone) throw new Error('Adayın telefon numarası yok');
 
   const id = newId('wam');
   try {
-    const sent = await sendWhatsAppMessage(config, lead.phone, body);
+    let twilioSid: string | null = null;
+    if (channel === 'PERSONAL') {
+      const { sendPersonalMessage } = await import('./whatsappPersonal');
+      await sendPersonalMessage(userId, lead.phone, body);
+    } else {
+      const config = await getUserWhatsappConfig(userId);
+      if (!config) throw new Error('WhatsApp hesap bilgileriniz tanımlı değil — Ayarlarım sayfasından ekleyin.');
+      const sent = await sendWhatsAppMessage(config, lead.phone, body);
+      twilioSid = sent.sid;
+    }
     const { rows } = await pool.query(
-      `INSERT INTO whatsapp_messages (id, user_id, lead_id, twilio_sid, direction, status, body)
-       VALUES ($1, $2, $3, $4, 'OUT', 'SENT', $5) RETURNING *`,
-      [id, userId, leadId, sent.sid, body],
+      `INSERT INTO whatsapp_messages (id, user_id, lead_id, twilio_sid, direction, status, body, channel)
+       VALUES ($1, $2, $3, $4, 'OUT', 'SENT', $5, $6) RETURNING *`,
+      [id, userId, leadId, twilioSid, body, channel],
     );
     await pool.query(
       `INSERT INTO lead_activities (id, lead_id, user_id, type, data) VALUES ($1, $2, $3, 'MESSAGE_SENT', $4)`,
-      [newId('act'), leadId, userId, JSON.stringify({ body })],
+      [newId('act'), leadId, userId, JSON.stringify({ body, channel })],
     );
     return rowToMessage(rows[0]);
   } catch (err) {
     const { rows } = await pool.query(
-      `INSERT INTO whatsapp_messages (id, user_id, lead_id, direction, status, body, error_message)
-       VALUES ($1, $2, $3, 'OUT', 'FAILED', $4, $5) RETURNING *`,
-      [id, userId, leadId, body, String((err as Error).message || err)],
+      `INSERT INTO whatsapp_messages (id, user_id, lead_id, direction, status, body, error_message, channel)
+       VALUES ($1, $2, $3, 'OUT', 'FAILED', $4, $5, $6) RETURNING *`,
+      [id, userId, leadId, body, String((err as Error).message || err), channel],
     );
     return rowToMessage(rows[0]);
   }
 }
 
-// Twilio inbound webhook'undan çağrılır — telefon numarasına göre en son eşleşen
-// adayı bulur (dedup için Twilio SID kontrolü de yapılır).
-export async function recordInboundMessage(userId: string, fromPhone: string, body: string, twilioSid: string): Promise<void> {
-  const dupe = await pool.query(`SELECT 1 FROM whatsapp_messages WHERE twilio_sid = $1`, [twilioSid]);
+// Twilio (channel='TWILIO') veya şahsi hesap (channel='PERSONAL', bkz. whatsappPersonal.ts)
+// inbound olaylarından çağrılır — telefon numarasına göre en son eşleşen adayı bulur,
+// yoksa (özellikle şahsi hesapta biri ilk kez yazdığında) yeni bir aday oluşturur —
+// gelen bir mesaj hiçbir zaman sessizce kaybolmaz.
+export async function recordInboundMessage(
+  userId: string, fromPhone: string, body: string, externalId: string, channel: 'TWILIO' | 'PERSONAL' = 'TWILIO',
+): Promise<void> {
+  const dupe = await pool.query(`SELECT 1 FROM whatsapp_messages WHERE twilio_sid = $1`, [externalId]);
   if (dupe.rows[0]) return;
 
-  const normalized = fromPhone.replace(/^whatsapp:/, '');
+  const normalized = fromPhone.replace(/^whatsapp:/, '').replace(/\D/g, '');
   const { rows: leadRows } = await pool.query(
-    `SELECT id FROM leads WHERE user_id = $1 AND data->>'phone' = $2 ORDER BY updated_at DESC LIMIT 1`,
+    `SELECT id FROM leads WHERE user_id = $1 AND regexp_replace(data->>'phone', '\\D', '', 'g') = $2 ORDER BY updated_at DESC LIMIT 1`,
     [userId, normalized],
   );
-  if (!leadRows[0]) {
-    console.warn(`[whatsapp] Gelen mesaj eşleşen adayı bulunamadı: ${normalized}`);
-    return;
+
+  let leadId: string;
+  if (leadRows[0]) {
+    leadId = leadRows[0].id;
+  } else {
+    const { createLead } = await import('./leads');
+    const created = await createLead(userId, { firstName: fromPhone, phone: fromPhone, source: 'OTHER' });
+    leadId = created.id;
+    console.log(`[whatsapp] Gelen mesaj için yeni aday oluşturuldu: ${fromPhone} (${channel})`);
   }
-  const leadId = leadRows[0].id;
+
   await pool.query(
-    `INSERT INTO whatsapp_messages (id, user_id, lead_id, twilio_sid, direction, status, body)
-     VALUES ($1, $2, $3, $4, 'IN', 'RECEIVED', $5)`,
-    [newId('wam'), userId, leadId, twilioSid, body],
+    `INSERT INTO whatsapp_messages (id, user_id, lead_id, twilio_sid, direction, status, body, channel)
+     VALUES ($1, $2, $3, $4, 'IN', 'RECEIVED', $5, $6)`,
+    [newId('wam'), userId, leadId, externalId, body, channel],
   );
   await pool.query(
     `INSERT INTO lead_activities (id, lead_id, user_id, type, data) VALUES ($1, $2, $3, 'MESSAGE_RECEIVED', $4)`,
