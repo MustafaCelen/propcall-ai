@@ -50,8 +50,29 @@ async function extractPhoneFromMessage(socket: WASocket, msg: WAMessage): Promis
   return decoded.user;
 }
 
+// ÖNEMLİ — medya/sesli mesaj boşluğu: sadece conversation/extendedTextMessage okunuyordu,
+// yani resim, sesli mesaj, video, belge, konum, kişi kartı ve sticker'lar metin
+// çıkarılamadığı için processPersonalMessage'da SESSİZCE atlanıyordu — DB'ye hiç
+// düşmüyordu, sohbet geçmişinde bir "boşluk" olarak kalıyordu (emlak işinde mülk
+// fotoğrafı/konum paylaşımı gibi kritik içerikler kaybolabiliyordu). Artık her tip için
+// görünür bir yer tutucu (+ varsa caption) döndürülüyor, hiçbir mesaj sessizce kaybolmaz.
 function extractMessageText(msg: WAMessage): string {
-  return msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
+  const m = msg.message;
+  if (!m) return '';
+  if (m.conversation) return m.conversation;
+  if (m.extendedTextMessage?.text) return m.extendedTextMessage.text;
+  if (m.imageMessage) return m.imageMessage.caption ? `📷 ${m.imageMessage.caption}` : '📷 Resim';
+  if (m.videoMessage) return m.videoMessage.caption ? `🎥 ${m.videoMessage.caption}` : '🎥 Video';
+  if (m.audioMessage) return m.audioMessage.ptt ? '🎤 Sesli mesaj' : '🎵 Ses dosyası';
+  if (m.documentMessage) {
+    return m.documentMessage.caption
+      ? `📄 ${m.documentMessage.caption}`
+      : `📄 Belge${m.documentMessage.fileName ? ': ' + m.documentMessage.fileName : ''}`;
+  }
+  if (m.stickerMessage) return '😀 Sticker';
+  if (m.locationMessage) return '📍 Konum paylaşıldı';
+  if (m.contactMessage) return `👤 Kişi kartı${m.contactMessage.displayName ? ': ' + m.contactMessage.displayName : ''}`;
+  return '';
 }
 
 interface Session {
