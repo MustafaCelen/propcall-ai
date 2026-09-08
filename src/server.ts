@@ -103,15 +103,27 @@ app.use(express.static(path.join(__dirname, '..', 'public'), {
 // güvenlik açığıydı. IP başına 15 dakikada 10 deneme — gerçek bir kullanıcının normal
 // şifre unutma senaryosunu engellemeyecek kadar gevşek, otomatik saldırıyı engelleyecek
 // kadar sıkı.
+//
+// KRİTİK — Railway'in X-Forwarded-For'u req.ip ile UYUMSUZ: canlıda ölçüldü, header
+// "gerçekMüşteriIP, railwayEdgeIP" şeklinde geliyor (soldaki sabit/gerçek, sağdaki HER
+// İSTEKTE değişen Railway edge node IP'si) — ama Express'in trust-proxy sayısal hop
+// mantığı (`trust proxy: 1`) burada rightmost'u seçiyor, yani DEĞİŞEN edge IP'sini "istemci"
+// sanıyor. Bunun sonucu: sayaç asla tutarlı artmıyordu, limiter fiilen işe yaramıyordu
+// (her istek "yeni" bir IP'den geliyormuş gibi görünüyordu). O yüzden req.ip yerine
+// X-Forwarded-For'un EN SOLUNDAKİ (gerçek orijinal istemci) değerini elle okuyoruz.
+function realClientIp(req: Request): string {
+  const xff = req.headers['x-forwarded-for'];
+  const first = Array.isArray(xff) ? xff[0] : xff;
+  const leftmost = first?.split(',')[0]?.trim();
+  return leftmost || req.socket.remoteAddress || 'unknown';
+}
+
 const loginLimiter = rateLimit({
   windowMs: 15 * 60_000,
   limit: 10,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => {
-    console.log(`[RateLimit DEBUG] req.ip=${req.ip} x-forwarded-for="${req.headers['x-forwarded-for']}"`);
-    return req.ip || 'unknown';
-  },
+  keyGenerator: realClientIp,
   message: { success: false, error: 'Çok fazla başarısız giriş denemesi — 15 dakika sonra tekrar deneyin.' },
 });
 
