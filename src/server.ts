@@ -108,6 +108,10 @@ const loginLimiter = rateLimit({
   limit: 10,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: (req) => {
+    console.log(`[RateLimit DEBUG] req.ip=${req.ip} x-forwarded-for="${req.headers['x-forwarded-for']}"`);
+    return req.ip || 'unknown';
+  },
   message: { success: false, error: 'Çok fazla başarısız giriş denemesi — 15 dakika sonra tekrar deneyin.' },
 });
 
