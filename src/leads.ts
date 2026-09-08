@@ -156,6 +156,15 @@ export async function upsertLeadFromCallOutcome(
   ozet: string,
 ): Promise<void> {
   if (!phone?.trim()) return;
+
+  // KASITLI FİLTRE: CRM'i gerçek fırsatla doldur, her soğuk aramayı değil. Randevu
+  // alınmışsa veya danışman ilgiyi orta/yüksek işaretlemişse aday oluştur/güncelle;
+  // düşük ilgi veya hiç ilgi yoksa (ret, ulaşılamadı, konuşmak istemedi vb.) CRM'e hiç
+  // dokunma — ne yeni aday açılır ne mevcut adaya aktivite eklenir. Bu, binlerce
+  // aramalık kampanyalarda CRM'in "ilgisiz arandı" kayıtlarıyla boğulmasını önler.
+  const qualifies = randevuAlindi || ilgiSeviyesi === 'orta' || ilgiSeviyesi === 'yüksek';
+  if (!qualifies) return;
+
   const candidateStage: LeadStage = randevuAlindi ? 'QUALIFIED' : 'CONTACTED';
 
   const { rows } = await pool.query(
