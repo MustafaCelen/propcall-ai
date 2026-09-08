@@ -1303,11 +1303,11 @@ app.post('/api/leads', requireUserAuth, async (req: Request, res: Response) => {
 
 app.patch('/api/leads/:id', requireUserAuth, async (req: Request, res: Response) => {
   try {
-    const { firstName, lastName, email, phone, notes, tags } = req.body as {
+    const { firstName, lastName, email, phone, notes, tags, whatsappIgnored } = req.body as {
       firstName?: string; lastName?: string | null; email?: string | null; phone?: string | null;
-      notes?: string | null; tags?: string[];
+      notes?: string | null; tags?: string[]; whatsappIgnored?: boolean;
     };
-    const lead = await updateLead(req.userId!, req.params.id, { firstName, lastName, email, phone, notes, tags });
+    const lead = await updateLead(req.userId!, req.params.id, { firstName, lastName, email, phone, notes, tags, whatsappIgnored });
     if (!lead) return res.status(404).json({ success: false, error: 'Aday bulunamadı' });
     return res.json({ success: true, data: lead });
   } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }

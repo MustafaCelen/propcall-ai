@@ -60,7 +60,13 @@ async function openInboxThread(leadId) {
   const entry = waState.inbox.find(c => c.leadId === leadId);
   const thread = $('waInboxThread');
   thread.innerHTML = `
-    <div class="wa-inbox-thread-header">${esc([entry?.firstName, entry?.lastName].filter(Boolean).join(' ') || entry?.phone || '')}</div>
+    <div class="wa-inbox-thread-header">
+      <span>${esc([entry?.firstName, entry?.lastName].filter(Boolean).join(' ') || entry?.phone || '')}</span>
+      <button class="wa-ignore-toggle${entry?.whatsappIgnored ? ' active' : ''}" id="waIgnoreToggle"
+        title="İşaretlenirse bu kişiden gelen mesajlar CRM için hiç analiz edilmez (şahsi/müşteri değil)">
+        ${entry?.whatsappIgnored ? '🔕 Şahsi (analiz kapalı)' : '🔕 Şahsi olarak işaretle'}
+      </button>
+    </div>
     <div class="wa-inbox-thread-body" id="waInboxThreadBody"><div class="drawer-loading">⏳ Yükleniyor...</div></div>
     <div class="wa-inbox-thread-footer">
       ${waState.personalConnected ? `
@@ -76,7 +82,25 @@ async function openInboxThread(leadId) {
     btn.addEventListener('click', () => { waState.replyChannel = btn.dataset.channel; openInboxThread(leadId); });
   });
   $('waInboxReplySend').addEventListener('click', () => sendInboxReply(leadId));
+  $('waIgnoreToggle').addEventListener('click', () => toggleWhatsappIgnore(leadId, !entry?.whatsappIgnored));
   await loadInboxThreadMessages(leadId);
+}
+
+async function toggleWhatsappIgnore(leadId, whatsappIgnored) {
+  try {
+    const r = await fetch(`/api/leads/${leadId}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ whatsappIgnored }),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error || 'Güncellenemedi');
+    toast(whatsappIgnored ? '🔕 Şahsi olarak işaretlendi — artık CRM analizi çalışmayacak' : '✓ İşaret kaldırıldı', 'success');
+    const entry = waState.inbox.find(c => c.leadId === leadId);
+    if (entry) entry.whatsappIgnored = whatsappIgnored;
+    openInboxThread(leadId);
+  } catch (err) {
+    toast('✗ ' + err.message, 'error');
+  }
 }
 
 async function loadInboxThreadMessages(leadId) {

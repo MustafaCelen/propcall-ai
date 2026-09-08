@@ -209,6 +209,9 @@ export interface Lead {
   tags: string[];
   adData: LeadAdData | null;
   linkedCallId: string | null; // arama sonucundan oluşturulduysa/güncellendiyse — bkz. onCallSummaryReady
+  whatsappIgnored?: boolean; // true ise bu numaradan gelen WhatsApp yazışmaları AI analizi
+                             // tetiklemez, stage hep NEW kalır — danışmanın "bu şahsi bir
+                             // kişi, müşteri değil" diye elle işaretlemesi için (bkz. whatsappCampaigns.ts)
   createdAt: string;
   updatedAt: string;
 }

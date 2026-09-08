@@ -80,6 +80,7 @@ export interface UpdateLeadInput {
   phone?: string | null;
   notes?: string | null;
   tags?: string[];
+  whatsappIgnored?: boolean;
 }
 
 export async function updateLead(userId: string, id: string, patch: UpdateLeadInput): Promise<Lead | null> {

@@ -40,13 +40,15 @@ export interface InboxEntry {
   lastDirection: string;
   lastChannel: string;
   lastAt: string;
+  whatsappIgnored: boolean;
 }
 
 export async function getInbox(userId: string): Promise<InboxEntry[]> {
   const { rows } = await pool.query(
     `SELECT DISTINCT ON (m.lead_id)
        m.lead_id, l.data->>'firstName' AS "firstName", l.data->>'lastName' AS "lastName",
-       l.data->>'phone' AS phone, m.body, m.direction, m.channel, m.created_at
+       l.data->>'phone' AS phone, (l.data->>'whatsappIgnored')::boolean AS "whatsappIgnored",
+       m.body, m.direction, m.channel, m.created_at
      FROM whatsapp_messages m
      JOIN leads l ON l.id = m.lead_id
      WHERE m.user_id = $1
@@ -57,7 +59,7 @@ export async function getInbox(userId: string): Promise<InboxEntry[]> {
     .map(r => ({
       leadId: r.lead_id, firstName: r.firstName, lastName: r.lastName, phone: r.phone,
       lastMessage: r.body, lastDirection: r.direction, lastChannel: r.channel,
-      lastAt: r.created_at.toISOString(),
+      lastAt: r.created_at.toISOString(), whatsappIgnored: !!r.whatsappIgnored,
     }))
     .sort((a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime());
 }
@@ -142,17 +144,20 @@ export async function recordChannelMessage(userId: string, params: {
     return;
   }
   const { rows: leadRows } = await pool.query(
-    `SELECT id, stage, data->>'firstName' AS "firstName", data->>'lastName' AS "lastName"
+    `SELECT id, stage, data->>'firstName' AS "firstName", data->>'lastName' AS "lastName",
+            (data->>'whatsappIgnored')::boolean AS "whatsappIgnored"
      FROM leads WHERE user_id = $1 AND regexp_replace(data->>'phone', '\\D', '', 'g') = $2 ORDER BY updated_at DESC LIMIT 1`,
     [userId, normalized],
   );
 
   let leadId: string;
   let leadStage = 'NEW';
+  let whatsappIgnored = false;
   let customerName = params.contactName?.trim() || ('+' + normalized);
   if (leadRows[0]) {
     leadId = leadRows[0].id;
     leadStage = leadRows[0].stage;
+    whatsappIgnored = !!leadRows[0].whatsappIgnored;
     customerName = [leadRows[0].firstName, leadRows[0].lastName].filter(Boolean).join(' ') || customerName;
   } else {
     const { createLead } = await import('./leads');
@@ -180,7 +185,9 @@ export async function recordChannelMessage(userId: string, params: {
   // üstündeki adaylar için tekrar analiz gerekmez (bu yoldan zaten en yüksek aşamaya
   // ulaşmıştır). Ayrıca aynı kişiyle hızlı art arda mesajlaşmada her mesajda Anthropic'e
   // gitmemek için 3 dakikalık bir debounce var — son WHATSAPP_ANALYZED aktivitesine bakar.
-  if (direction === 'IN' && leadStage !== 'QUALIFIED' && leadStage !== 'VIEWING' && leadStage !== 'OFFER' && leadStage !== 'WON') {
+  // whatsappIgnored=true ise (danışman elle "şahsi" işaretlemiş) hiç tetiklenmez — AI
+  // prompt'undaki is_business_related filtresine ek, kalıcı ve garantili bir muafiyet.
+  if (!whatsappIgnored && direction === 'IN' && leadStage !== 'QUALIFIED' && leadStage !== 'VIEWING' && leadStage !== 'OFFER' && leadStage !== 'WON') {
     const { rows: lastAnalyzed } = await pool.query(
       `SELECT created_at FROM lead_activities WHERE lead_id = $1 AND type = 'WHATSAPP_ANALYZED' ORDER BY created_at DESC LIMIT 1`,
       [leadId],
