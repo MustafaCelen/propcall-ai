@@ -165,3 +165,79 @@ geri_donus_notu:
 
   return { summary, usage: { inputTokens, outputTokens, costUsd } };
 }
+
+export interface WhatsappThreadAnalysis {
+  randevu_alindi: boolean;
+  ilgi_seviyesi: 'yüksek' | 'orta' | 'düşük' | 'yok';
+  ozet: string;
+}
+
+// Arama özetiyle aynı ilke: bir WhatsApp yazışmasının CRM'e "gerçek fırsat" olarak
+// yansıması için danışmanın kendisi değil, bu analiz karar verir (bkz. leads.ts
+// upsertLeadFromCallOutcome'daki asimetrik-risk yorumu — burada da SADECE ileri taşır).
+export async function analyzeWhatsappThread(
+  apiKey: string,
+  customerName: string,
+  messages: Array<{ direction: 'IN' | 'OUT'; body: string }>,
+): Promise<{ analysis: WhatsappThreadAnalysis; usage: { inputTokens: number; outputTokens: number; costUsd: number } }> {
+  if (!apiKey) throw new Error('Anthropic API key tanımlanmamış (Ayarlarım sayfasından ekleyin)');
+  const client = new Anthropic({ apiKey });
+  const threadText = messages
+    .map(m => `${m.direction === 'IN' ? 'Müşteri' : 'Danışman'}: ${m.body}`)
+    .join('\n');
+
+  const response = await client.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 300,
+    system: `Sen bir emlak danışmanının WhatsApp yazışmalarını analiz eden bir CRM asistanısın.
+Sana verilen yazışmayı analiz edeceksin ve SADECE geçerli JSON döndüreceksin, başka hiçbir şey yazmayacaksın.`,
+    messages: [
+      {
+        role: 'user',
+        content: `Aşağıdaki WhatsApp yazışmasını analiz et. Müşteri: ${customerName}
+
+Yazışma:
+${threadText}
+
+SADECE bu JSON formatında döndür:
+{
+  "randevu_alindi": true|false,
+  "ilgi_seviyesi": "yüksek|orta|düşük|yok",
+  "ozet": "1 cümle"
+}
+
+ALAN KRİTERLERİ:
+
+randevu_alindi:
+- true: Müşteri bir görüşme/randevu/mülk gezme teklifini AÇIKÇA kabul etti
+- false: Henüz kabul yok, sadece soru soruyor, ya da hiç yanıt yok
+
+ilgi_seviyesi:
+- "yüksek": randevu_alindi=true İSE HER ZAMAN "yüksek" — YA DA müşteri aktif soru soruyor,
+  detay istiyor, fiyat/konum/randevu ile ilgileniyor
+- "orta": Kısa/nötr yanıtlar veriyor ama konuşmayı tamamen kapatmadı, "düşüneyim" gibi
+- "düşük": Kısa, ilgisiz görünen tek kelimelik yanıtlar ("ok", "tamam") — net red değil
+- "yok": Hiç yanıt yok (sadece danışmandan giden mesaj var), net bir "ilgilenmiyorum"/"yanlış
+  numara" cevabı, ya da yazışma çok kısa/anlamsız (tek bir "Merhaba" gibi) ve karar verecek
+  içerik yok
+
+ozet: Yazışmanın şu anki durumunu 1 cümleyle özetle.`,
+      },
+    ],
+  });
+
+  const content = response.content[0];
+  if (content.type !== 'text') throw new Error('Beklenmeyen yanıt tipi');
+
+  const jsonText = content.text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+  const analysis = JSON.parse(jsonText) as WhatsappThreadAnalysis;
+  if (analysis.randevu_alindi) analysis.ilgi_seviyesi = 'yüksek';
+
+  const inputTokens  = response.usage?.input_tokens  ?? 0;
+  const outputTokens = response.usage?.output_tokens ?? 0;
+  const costUsd = Math.round(
+    ((inputTokens / 1e6) * ANTHROPIC_INPUT_PER_MTOK + (outputTokens / 1e6) * ANTHROPIC_OUTPUT_PER_MTOK) * 1e6,
+  ) / 1e6;
+
+  return { analysis, usage: { inputTokens, outputTokens, costUsd } };
+}

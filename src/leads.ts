@@ -212,6 +212,64 @@ export async function upsertLeadFromCallOutcome(
   );
 }
 
+// ─── WhatsApp yazışması → Aday aşaması (aramadakiyle aynı asimetrik-risk ilkesi) ────
+// Farkı: WhatsApp mesajı geldiğinde aday zaten var (recordChannelMessage mesajı
+// saklamak için hemen oluşturur — bir mesaj gövdesinin nereye ait olacağı DB şeması
+// gereği bilinmeden depolanamaz). Bu yüzden burada "aday oluştur mu" sorusu yok,
+// sadece "bu yazışma aşamayı İLERİ taşımaya değer mi" sorusu var — düşük/hiç ilgi
+// yazışmaları aday NEW'de kalır (Kanban'da zaten "henüz nitelendirilmedi" anlamına
+// gelir), CONTACTED/QUALIFIED'a SADECE gerçek ilgi/randevu ile yükselir.
+export async function applyWhatsappAnalysisToLead(
+  userId: string, leadId: string, randevuAlindi: boolean, ilgiSeviyesi: string, ozet: string,
+): Promise<void> {
+  const qualifies = randevuAlindi || ilgiSeviyesi === 'orta' || ilgiSeviyesi === 'yüksek';
+  const candidateStage: LeadStage = randevuAlindi ? 'QUALIFIED' : 'CONTACTED';
+
+  if (qualifies) {
+    const { rows } = await pool.query(`SELECT stage FROM leads WHERE id = $1 AND user_id = $2`, [leadId, userId]);
+    if (rows[0]) {
+      const currentRank = STAGE_RANK[rows[0].stage] ?? 0;
+      if (STAGE_RANK[candidateStage] > currentRank) {
+        await pool.query(
+          `UPDATE leads SET stage = $3, updated_at = NOW() WHERE id = $1 AND user_id = $2`,
+          [leadId, userId, candidateStage],
+        );
+      }
+    }
+  }
+
+  // qualifies=false olsa bile HER ZAMAN loglanır — bu kayıt aynı zamanda "en son ne zaman
+  // analiz edildi" damgası olarak kullanılır (bkz. whatsappCampaigns.ts recordChannelMessage
+  // debounce kontrolü), her gelen mesajda tekrar tekrar Anthropic'e gitmemek için.
+  await pool.query(
+    `INSERT INTO lead_activities (id, lead_id, user_id, type, data) VALUES ($1, $2, $3, 'WHATSAPP_ANALYZED', $4)`,
+    [newActivityId(), leadId, userId, JSON.stringify({ randevuAlindi, ilgiSeviyesi, ozet, qualifies })],
+  );
+}
+
+// leadId'ye ait TÜM WhatsApp thread'ini (kanal fark etmeksizin) Anthropic'e gönderip
+// analiz sonucunu applyWhatsappAnalysisToLead ile uygular. Anthropic key tanımlı
+// değilse sessizce atlar — mesaj kaydı zaten yapılmış olur, sadece aşama yükseltmesi
+// (ve dolayısıyla CRM'e "gerçek fırsat" olarak yansıma) gerçekleşmez.
+export async function analyzeWhatsappThreadForLead(userId: string, leadId: string, customerName: string): Promise<void> {
+  const { rows } = await pool.query(
+    `SELECT direction, body FROM whatsapp_messages WHERE lead_id = $1 AND user_id = $2 ORDER BY created_at ASC`,
+    [leadId, userId],
+  );
+  if (!rows.length) return;
+
+  const { getUserAnthropicKey } = await import('./users');
+  const apiKey = await getUserAnthropicKey(userId);
+  if (!apiKey) return;
+
+  const { analyzeWhatsappThread } = await import('./ai');
+  const { analysis } = await analyzeWhatsappThread(
+    apiKey, customerName,
+    rows.map(r => ({ direction: r.direction as 'IN' | 'OUT', body: r.body as string })),
+  );
+  await applyWhatsappAnalysisToLead(userId, leadId, analysis.randevu_alindi, analysis.ilgi_seviyesi, analysis.ozet);
+}
+
 export async function addLeadActivity(
   userId: string, leadId: string, type: LeadActivityType, data: Record<string, unknown>,
 ): Promise<LeadActivity | null> {

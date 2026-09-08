@@ -215,7 +215,7 @@ export interface Lead {
 
 export const LEAD_ACTIVITY_TYPES = [
   'STAGE_CHANGE', 'NOTE', 'CALL_COMPLETED', 'ASSIGNED',
-  'MESSAGE_SENT', 'MESSAGE_RECEIVED',
+  'MESSAGE_SENT', 'MESSAGE_RECEIVED', 'WHATSAPP_ANALYZED',
 ] as const;
 export type LeadActivityType = (typeof LEAD_ACTIVITY_TYPES)[number];
 

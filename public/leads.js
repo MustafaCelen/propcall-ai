@@ -14,6 +14,7 @@ const LEAD_SOURCE_LABELS = {
 const LEAD_ACTIVITY_LABELS = {
   STAGE_CHANGE: 'Aşama değişti', NOTE: 'Not eklendi', CALL_COMPLETED: 'Arama tamamlandı',
   ASSIGNED: 'Atandı', MESSAGE_SENT: 'Mesaj gönderildi', MESSAGE_RECEIVED: 'Mesaj alındı',
+  WHATSAPP_ANALYZED: 'Yazışma analiz edildi',
 };
 
 const leadsState = { leads: [], openId: null, draggedId: null };
@@ -225,6 +226,10 @@ async function loadLeadActivities(id) {
 function leadActivitySummary(a) {
   if (a.type === 'STAGE_CHANGE') return `Aşama → <b>${LEAD_STAGE_LABELS[a.data.to] || a.data.to}</b>`;
   if (a.type === 'NOTE') return esc(a.data.note || '');
+  if (a.type === 'WHATSAPP_ANALYZED') {
+    const tag = a.data.qualifies ? '✅ Fırsat' : '— Yeterli ilgi yok';
+    return `Yazışma analiz edildi (${esc(a.data.ilgiSeviyesi || '')}, ${tag})${a.data.ozet ? ' — ' + esc(a.data.ozet) : ''}`;
+  }
   return LEAD_ACTIVITY_LABELS[a.type] || a.type;
 }
 

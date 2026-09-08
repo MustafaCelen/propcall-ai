@@ -142,17 +142,22 @@ export async function recordChannelMessage(userId: string, params: {
     return;
   }
   const { rows: leadRows } = await pool.query(
-    `SELECT id FROM leads WHERE user_id = $1 AND regexp_replace(data->>'phone', '\\D', '', 'g') = $2 ORDER BY updated_at DESC LIMIT 1`,
+    `SELECT id, stage, data->>'firstName' AS "firstName", data->>'lastName' AS "lastName"
+     FROM leads WHERE user_id = $1 AND regexp_replace(data->>'phone', '\\D', '', 'g') = $2 ORDER BY updated_at DESC LIMIT 1`,
     [userId, normalized],
   );
 
   let leadId: string;
+  let leadStage = 'NEW';
+  let customerName = params.contactName?.trim() || ('+' + normalized);
   if (leadRows[0]) {
     leadId = leadRows[0].id;
+    leadStage = leadRows[0].stage;
+    customerName = [leadRows[0].firstName, leadRows[0].lastName].filter(Boolean).join(' ') || customerName;
   } else {
     const { createLead } = await import('./leads');
     const created = await createLead(userId, {
-      firstName: params.contactName?.trim() || ('+' + normalized),
+      firstName: customerName,
       phone: '+' + normalized,
       source: 'OTHER',
     });
@@ -169,6 +174,24 @@ export async function recordChannelMessage(userId: string, params: {
     `INSERT INTO lead_activities (id, lead_id, user_id, type, data) VALUES ($1, $2, $3, $4, $5)`,
     [newId('act'), leadId, userId, direction === 'IN' ? 'MESSAGE_RECEIVED' : 'MESSAGE_SENT', JSON.stringify({ body, channel })],
   );
+
+  // Gelen mesajdan sonra CRM'e "gerçek fırsat" olarak yansısın mı diye AI analizi tetikle —
+  // aramalardaki upsertLeadFromCallOutcome ile aynı ilke (bkz. leads.ts). QUALIFIED ve
+  // üstündeki adaylar için tekrar analiz gerekmez (bu yoldan zaten en yüksek aşamaya
+  // ulaşmıştır). Ayrıca aynı kişiyle hızlı art arda mesajlaşmada her mesajda Anthropic'e
+  // gitmemek için 3 dakikalık bir debounce var — son WHATSAPP_ANALYZED aktivitesine bakar.
+  if (direction === 'IN' && leadStage !== 'QUALIFIED' && leadStage !== 'VIEWING' && leadStage !== 'OFFER' && leadStage !== 'WON') {
+    const { rows: lastAnalyzed } = await pool.query(
+      `SELECT created_at FROM lead_activities WHERE lead_id = $1 AND type = 'WHATSAPP_ANALYZED' ORDER BY created_at DESC LIMIT 1`,
+      [leadId],
+    );
+    const debounced = lastAnalyzed[0] && (Date.now() - new Date(lastAnalyzed[0].created_at).getTime()) < 3 * 60_000;
+    if (!debounced) {
+      const { analyzeWhatsappThreadForLead } = await import('./leads');
+      analyzeWhatsappThreadForLead(userId, leadId, customerName).catch(err =>
+        console.error('[whatsapp] Yazışma analizi hatası:', err));
+    }
+  }
 }
 
 // Geriye dönük uyumluluk — Twilio webhook'u (server.ts) bunu çağırır, her zaman IN.
