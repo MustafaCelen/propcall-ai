@@ -1,17 +1,28 @@
 import { Pool } from 'pg';
 
+// max:3 önceden Neon serverless'in düşük bağlantı limitine karşı savunmaydı — proje o
+// zamandan beri Railway'in kendi (self-hosted tarzı) Postgres'ine taşındı, sunucunun
+// gerçek max_connections'ı 100 (doğrulandı: `SHOW max_connections`). 3 bağlantıyla tek
+// danışmanla test ederken sorun çıkmıyordu ama çok-kiracılı hedefte (aynı anda onlarca
+// danışman arama başlatıp kampanya çalıştırınca) bu doğrudan darboğaz olurdu — her arama
+// başlatma + kampanya tick döngüsü (campaign.ts, TÜM kullanıcıların aktif kampanyalarını
+// aynı global interval'da işler) birkaç sorgu gerektiriyor, 3 bağlantı hızla kuyruğa
+// girer, connectionTimeoutMillis'e (10sn) takılıp arama başlatma hataları üretebilirdi.
+// 20, sunucunun 100'lük tavanında bolca pay bırakıyor (Railway'in kendi yönetim
+// bağlantıları + elle SSH/debug bağlantıları için).
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: /localhost|@db:/.test(process.env.DATABASE_URL ?? '')
     ? false
     : { rejectUnauthorized: false },
-  max: 3,
+  max: 20,
   idleTimeoutMillis:     30_000,
   connectionTimeoutMillis: 10_000,
 });
 
-// Neon serverless: uç nokta askıya alındığında pool 'error' fırlatır.
-// İşlenmezse Node süreci çöker — bu hatayı yakala ve yoksay (bağlantı zaten yeniden denenir).
+// Bağlantı sunucu tarafında (deploy, bakım, geçici ağ kesintisi vb.) koparsa pool 'error'
+// fırlatır. İşlenmezse Node süreci çöker — bu hatayı yakala ve yoksay (havuz zaten
+// bağlantıyı bir sonraki sorguda yeniden kurar).
 pool.on('error', (err) => {
   console.warn('[DB] Pool bağlantı hatası (yeniden denenecek):', (err as Error).message);
 });

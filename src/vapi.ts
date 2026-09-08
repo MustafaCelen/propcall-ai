@@ -108,11 +108,24 @@ export async function createVapiCall(
   });
 
   if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Vapi API hatası: ${response.status} - ${errText}`);
+    throw new Error(`Vapi API hatası: ${response.status} - ${await extractVapiErrorMessage(response)}`);
   }
 
   return response.json() as Promise<VapiCallResponse>;
+}
+
+// Vapi hata gövdesi genelde {"message": "..." | ["...", ...], "error": "...", "statusCode": ...}
+// şeklinde JSON döner — önceden bu ham JSON metni doğrudan danışmana toast olarak
+// gösteriliyordu (örn. arama başlatılamadığında). Mümkünse okunabilir mesajı çıkar,
+// parse edilemezse (JSON değilse) ham metne düş.
+async function extractVapiErrorMessage(response: Response): Promise<string> {
+  const raw = await response.text();
+  try {
+    const parsed = JSON.parse(raw) as { message?: string | string[] };
+    if (Array.isArray(parsed.message)) return parsed.message.join(', ');
+    if (typeof parsed.message === 'string') return parsed.message;
+  } catch (_) { /* JSON değil, ham metne düş */ }
+  return raw;
 }
 
 // Ses kaydı için kısa ömürlü imzalı URL al (raw recordingUrl'ler HIPAA bucket'ında
@@ -135,8 +148,7 @@ export async function endVapiCall(apiKey: string, vapiCallId: string): Promise<v
   });
 
   if (!response.ok && response.status !== 404) {
-    const errText = await response.text();
-    throw new Error(`Vapi arama sonlandırma hatası: ${response.status} - ${errText}`);
+    throw new Error(`Vapi arama sonlandırma hatası: ${response.status} - ${await extractVapiErrorMessage(response)}`);
   }
 }
 

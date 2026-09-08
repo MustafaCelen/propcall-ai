@@ -3305,14 +3305,26 @@ async function saveVapiLivePrompt() {
   }
 }
 
-async function loadScenarios() {
+// Önceden hata sessizce yutuluyordu — ağ hatası/geçici sunucu kesintisinde senaryo
+// dropdown'u boş kalır, danışman neden kendi senaryosunu göremediğini anlamazdı.
+// Artık birkaç kez tekrar dener, hepsi başarısız olursa açıkça uyarır.
+async function loadScenarios(attempt = 1) {
+  const MAX_ATTEMPTS = 3;
   try {
     const resp = await fetch('/api/scenarios');
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const json = await resp.json();
-    if (!json.success) return;
+    if (!json.success) throw new Error(json.error || 'Senaryolar yüklenemedi');
     scenariosCache = json.data;
     refreshScenarioSelects();
-  } catch(e) {}
+  } catch (err) {
+    if (attempt < MAX_ATTEMPTS) {
+      setTimeout(() => loadScenarios(attempt + 1), attempt * 1500);
+    } else {
+      console.error('[Scenarios] Yüklenemedi:', err);
+      toast('Senaryolar yüklenemedi — sayfayı yenileyin', 'error');
+    }
+  }
 }
 
 function refreshScenarioSelects() {
