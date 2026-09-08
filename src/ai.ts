@@ -167,6 +167,7 @@ geri_donus_notu:
 }
 
 export interface WhatsappThreadAnalysis {
+  is_business_related: boolean;
   randevu_alindi: boolean;
   ilgi_seviyesi: 'yüksek' | 'orta' | 'düşük' | 'yok';
   ozet: string;
@@ -201,12 +202,26 @@ ${threadText}
 
 SADECE bu JSON formatında döndür:
 {
+  "is_business_related": true|false,
   "randevu_alindi": true|false,
   "ilgi_seviyesi": "yüksek|orta|düşük|yok",
   "ozet": "1 cümle"
 }
 
 ALAN KRİTERLERİ:
+
+is_business_related — HER ŞEYDEN ÖNCE bunu belirle, diğer alanlar buna bağlı:
+- true: Yazışma emlak/mülk/randevu ile ilgili GERÇEK bir müşteri iletişimi — soru, fiyat,
+  konum, gezme talebi, ilan hakkında herhangi bir şey
+- false: Danışmanın KİŞİSEL hayatına ait bir yazışma — arkadaş/aile/tanıdık sohbeti, iş
+  dışı teşekkür/rica/sohbet, eşya/randevu gibi konular emlakla İLGİSİZSE (örn. "minik
+  adaptörü sende unuttum", "bugünkü destek için teşekkürler" gibi mesajlar — bunlar
+  emlak müşterisi DEĞİL, danışmanın tanıdığı biri). ŞÜPHEDE KALDIĞINDA (konu net değilse
+  ama en ufak bir emlak/mülk/randevu ipucu varsa) true seç — burada asimetri TERSİNE
+  döner: false'u yanlış seçmenin bedeli gerçek bir müşterinin CRM'e hiç girmemesi, true'yu
+  yanlış seçmenin bedeli sadece boşa bir "orta/yüksek ilgi" etiketi.
+- is_business_related=false İSE randevu_alindi HER ZAMAN false, ilgi_seviyesi HER ZAMAN
+  "yok" olmalı — konu ne kadar sıcak/samimi olursa olsun, iş dışıysa CRM'e yansımamalı.
 
 randevu_alindi:
 - true: Müşteri bir görüşme/randevu/mülk gezme teklifini AÇIKÇA kabul etti
@@ -218,8 +233,8 @@ ilgi_seviyesi:
 - "orta": Kısa/nötr yanıtlar veriyor ama konuşmayı tamamen kapatmadı, "düşüneyim" gibi
 - "düşük": Kısa, ilgisiz görünen tek kelimelik yanıtlar ("ok", "tamam") — net red değil
 - "yok": Hiç yanıt yok (sadece danışmandan giden mesaj var), net bir "ilgilenmiyorum"/"yanlış
-  numara" cevabı, ya da yazışma çok kısa/anlamsız (tek bir "Merhaba" gibi) ve karar verecek
-  içerik yok
+  numara" cevabı, yazışma çok kısa/anlamsız (tek bir "Merhaba" gibi) ve karar verecek içerik
+  yok, YA DA is_business_related=false
 
 ozet: Yazışmanın şu anki durumunu 1 cümleyle özetle.`,
       },
@@ -231,7 +246,15 @@ ozet: Yazışmanın şu anki durumunu 1 cümleyle özetle.`,
 
   const jsonText = content.text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
   const analysis = JSON.parse(jsonText) as WhatsappThreadAnalysis;
-  if (analysis.randevu_alindi) analysis.ilgi_seviyesi = 'yüksek';
+  // Modele güvenmek yerine deterministik olarak zorla (enforceSummaryConsistency ile aynı
+  // ilke) — is_business_related=false ise ne kadar "sıcak" bir yazışma olursa olsun CRM'e
+  // asla yansımamalı, model bunu unutup ilgi_seviyesi'ni yanlış doldursa bile.
+  if (!analysis.is_business_related) {
+    analysis.randevu_alindi = false;
+    analysis.ilgi_seviyesi = 'yok';
+  } else if (analysis.randevu_alindi) {
+    analysis.ilgi_seviyesi = 'yüksek';
+  }
 
   const inputTokens  = response.usage?.input_tokens  ?? 0;
   const outputTokens = response.usage?.output_tokens ?? 0;
