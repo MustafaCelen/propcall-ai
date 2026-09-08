@@ -120,7 +120,12 @@ export async function connectPersonalWhatsapp(userId: string): Promise<void> {
   if (existing && (existing.status === 'connected' || existing.status === 'qr_pending' || existing.status === 'connecting')) return;
 
   const { state, saveState } = await loadDbAuthState(userId);
-  const socket = makeWASocket({ auth: state, printQRInTerminal: false });
+  // syncFullHistory:true — bu olmadan WhatsApp ilk eşleşmede SADECE yakın zamanlı, kısıtlı
+  // bir geçmiş gönderiyor ("mesajlar geçmişle tam yüklenmiyor" şikayetinin sebebi), telefonun
+  // yıllara yayılan tam sohbet geçmişini değil. ÖNEMLİ: bu ayar sadece YENİ bir eşleşmede
+  // (yeni QR okutma) etkilidir — zaten bağlı bir oturum için WhatsApp geçmiş senkron
+  // anlaşmasını ilk eşleşmede tamamlamıştır, geriye dönük olarak daha fazla geçmiş çekmez.
+  const socket = makeWASocket({ auth: state, printQRInTerminal: false, syncFullHistory: true });
 
   const session: Session = { socket, status: 'connecting', qrDataUrl: null, phoneNumber: null };
   sessions.set(userId, session);
