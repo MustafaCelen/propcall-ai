@@ -64,6 +64,7 @@ import {
   findPendingTopup, cleanupStalePendingTopups,
 } from './fonzip';
 import { hashPassword, login, logout, getSessionUser, requireUserAuth, requireAdmin } from './auth';
+import rateLimit from 'express-rate-limit';
 import { generateVapiPrompt, PromptGenInput } from './promptgen';
 import { getScriptRules, setScriptRules, lintGeneratedPrompt, rulesToSystemPromptAddendum } from './scriptRules';
 import { simulateScenario } from './scenariotest';
@@ -72,6 +73,12 @@ const app  = express();
 const PORT = process.env.PORT || 5000;
 const HOST = '0.0.0.0';
 let httpServer: ReturnType<typeof app.listen> | undefined;
+
+// Railway trafiği kendi edge proxy'sinden geçiriyor — bu olmadan req.ip her zaman
+// Railway'in iç proxy adresini gösterir, gerçek istemci IP'sini asla göremeyiz.
+// IP bazlı rate limiting (aşağıdaki login limiter gibi) bunsuz işe yaramaz — ya
+// herkesi tek IP sanıp topluca kilitler ya da hiç ayırt edemez.
+app.set('trust proxy', 1);
 
 app.use(cors());
 app.use(cookieParser());
@@ -90,7 +97,21 @@ app.use(express.static(path.join(__dirname, '..', 'public'), {
 
 // ─── DANIŞMAN AUTH (e-posta + şifre) ─────────────────────────────────────────
 
-app.post('/api/auth/login',  login);
+// Önceden hiç rate limit yoktu — scrypt hash'i her denemeyi biraz yavaşlatsa da (doğal
+// bir fren) gerçek bir brute-force/credential-stuffing koruması değil. Çok kiracılı,
+// internete açık bir sisteme onlarca gerçek hesapla çıkmadan önce olmazsa olmaz bir
+// güvenlik açığıydı. IP başına 15 dakikada 10 deneme — gerçek bir kullanıcının normal
+// şifre unutma senaryosunu engellemeyecek kadar gevşek, otomatik saldırıyı engelleyecek
+// kadar sıkı.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60_000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Çok fazla başarısız giriş denemesi — 15 dakika sonra tekrar deneyin.' },
+});
+
+app.post('/api/auth/login',  loginLimiter, login);
 app.post('/api/auth/logout', logout);
 app.get('/api/auth/session', getSessionUser);
 
@@ -1837,6 +1858,16 @@ initDb()
     if (staleCount > 0) {
       console.log(`[Reconcile] ${staleCount} eski "in-progress" arama "failed" olarak kapatıldı (webhook gelmemişti)`);
     }
+    // Önceden sadece açılışta çalışıyordu — webhook'un runtime sırasında (deploy'dan
+    // bağımsız, örn. geçici ağ kesintisi) kaybolduğu durumlarda arama bir sonraki
+    // deploy'a kadar sonsuza dek "in-progress" görünürdü. Aktif geliştirmede sık deploy
+    // olduğu için fark edilmiyordu, ama production'da haftalarca deploy olmayabilir.
+    setInterval(async () => {
+      try {
+        const n = await reconcileStaleCalls();
+        if (n > 0) console.log(`[Reconcile] Periyodik tarama: ${n} eski "in-progress" arama kapatıldı`);
+      } catch (err) { console.error('[Reconcile] Periyodik tarama hatası:', err); }
+    }, 15 * 60_000).unref();
 
     // Vapi bilgileri tam ama henüz webhook secret'ı üretilmemiş kullanıcılar için
     // (örn. eski global ayarlardan taşınan bootstrap admin) otomatik kurulum tamamla.
