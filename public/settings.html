@@ -42,6 +42,24 @@
       <div id="fieldsContainer-profil"></div>
     </div>
 
+    <div class="adm-card">
+      <div class="adm-section-title">🔒 Şifre Değiştir</div>
+      <div class="form-group">
+        <label class="adm-mini-label">Mevcut Şifre</label>
+        <input type="password" id="pwCurrentInput" autocomplete="current-password" />
+      </div>
+      <div class="form-group">
+        <label class="adm-mini-label">Yeni Şifre</label>
+        <input type="password" id="pwNewInput" autocomplete="new-password" placeholder="En az 8 karakter" />
+      </div>
+      <div class="form-group">
+        <label class="adm-mini-label">Yeni Şifre (Tekrar)</label>
+        <input type="password" id="pwConfirmInput" autocomplete="new-password" />
+      </div>
+      <button class="adm-save-btn" id="btnChangePassword" type="button">Şifreyi Değiştir</button>
+      <div class="adm-field-status" id="statusChangePassword"></div>
+    </div>
+
     <div class="adm-card" id="tourConnectionCard">
       <div class="adm-section-title">📞 Telefon Numarası & Asistan</div>
       <div id="fieldsContainer-baglanti"></div>
@@ -392,6 +410,39 @@ const FIELD_SECTIONS = [
 ];
 
 function $(id) { return document.getElementById(id); }
+
+$('btnChangePassword').addEventListener('click', async () => {
+  const status = $('statusChangePassword');
+  status.className = 'adm-field-status'; status.textContent = '';
+  const currentPassword = $('pwCurrentInput').value;
+  const newPassword     = $('pwNewInput').value;
+  const confirmPassword = $('pwConfirmInput').value;
+  if (!currentPassword || !newPassword) {
+    status.textContent = '✗ Mevcut ve yeni şifre zorunlu'; status.className = 'adm-field-status err'; return;
+  }
+  if (newPassword.length < 8) {
+    status.textContent = '✗ Yeni şifre en az 8 karakter olmalı'; status.className = 'adm-field-status err'; return;
+  }
+  if (newPassword !== confirmPassword) {
+    status.textContent = '✗ Yeni şifreler eşleşmiyor'; status.className = 'adm-field-status err'; return;
+  }
+  try {
+    const r = await fetch('/api/auth/change-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    status.textContent = '✓ Şifre değiştirildi';
+    status.className = 'adm-field-status ok';
+    $('pwCurrentInput').value = '';
+    $('pwNewInput').value = '';
+    $('pwConfirmInput').value = '';
+  } catch (err) {
+    status.textContent = '✗ ' + err.message;
+    status.className = 'adm-field-status err';
+  }
+});
 
 document.querySelectorAll('.adm-tab').forEach(btn => {
   btn.addEventListener('click', () => {

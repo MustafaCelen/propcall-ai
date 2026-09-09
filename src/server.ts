@@ -48,7 +48,7 @@ import {
 } from './campaign';
 import { listCampaigns, getCampaign } from './campaigns';
 import {
-  ensureBootstrapAdmin, backfillOwnerlessRows, getSettingsForUser,
+  ensureBootstrapAdmin, backfillOwnerlessRows, getSettingsForUser, getAuthRecord,
   listUsers, createUser, setUserActive, setUserPassword, setUserMaxConcurrent, setUserCallingHours, setUserDuplicateCallProtection,
   setUserElevenLabsRate, setUserVapiCredentials, setUserElevenLabsKey, setUserAnthropicKey,
   getUserVapiCredentials, getUserElevenLabsKey, getUserAnthropicKey, resolveVapiCreds, getUserById,
@@ -63,7 +63,7 @@ import {
   getDebtAmount, getDebtDetails, verifyWebhookAuthToken, ensureWebhookRegistered,
   findPendingTopup, cleanupStalePendingTopups,
 } from './fonzip';
-import { hashPassword, login, logout, getSessionUser, requireUserAuth, requireAdmin } from './auth';
+import { hashPassword, verifyPassword, login, logout, getSessionUser, requireUserAuth, requireAdmin } from './auth';
 import rateLimit from 'express-rate-limit';
 import { generateVapiPrompt, PromptGenInput } from './promptgen';
 import { getScriptRules, setScriptRules, lintGeneratedPrompt, rulesToSystemPromptAddendum } from './scriptRules';
@@ -130,6 +130,28 @@ const loginLimiter = rateLimit({
 app.post('/api/auth/login',  loginLimiter, login);
 app.post('/api/auth/logout', logout);
 app.get('/api/auth/session', getSessionUser);
+
+// Danışman kendi şifresini değiştirir — önceden bu hiç yoktu, sadece admin'in
+// "Şifre Sıfırla" ile başka birinin şifresini ELLE değiştirmesi mümkündü. Gerçek
+// kullanıcılara açılmadan önce olmazsa olmaz bir eksiklik: her şifre değişikliği
+// için admin'e bağımlı olmak 100 danışmanlık ölçekte sürdürülemez.
+app.post('/api/auth/change-password', requireUserAuth, loginLimiter, async (req: Request, res: Response) => {
+  try {
+    const { currentPassword, newPassword } = req.body as { currentPassword?: string; newPassword?: string };
+    if (!currentPassword || !newPassword?.trim()) {
+      return res.status(400).json({ success: false, error: 'Mevcut ve yeni şifre zorunlu' });
+    }
+    if (newPassword.trim().length < 8) {
+      return res.status(400).json({ success: false, error: 'Yeni şifre en az 8 karakter olmalı' });
+    }
+    const record = await getAuthRecord(req.user!.email);
+    if (!record || !verifyPassword(currentPassword, record.passwordHash)) {
+      return res.status(401).json({ success: false, error: 'Mevcut şifre yanlış' });
+    }
+    await setUserPassword(req.userId!, hashPassword(newPassword));
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+});
 
 app.get('/login', (_req: Request, res: Response) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'login.html'));
