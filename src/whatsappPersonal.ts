@@ -84,20 +84,22 @@ interface Session {
 
 const sessions = new Map<string, Session>();
 
+// creds küçük (birkaç KB, nadiren değişir) — tek JSONB blob olarak kalıyor.
+// keys (Signal protokolü oturum anahtarları) ARTIK whatsapp_personal_keys'te satır
+// bazlı — sebep için tablo tanımındaki yorum (db.ts) bkz.: eski tek-blob yaklaşımı
+// her mesajda TÜM anahtar deposunu (staging'de sadece birkaç günde ~465KB'a ulaştı)
+// yeniden yazıyordu.
 async function loadDbAuthState(userId: string): Promise<{ state: AuthenticationState; saveState: () => Promise<void> }> {
-  const { rows } = await pool.query(`SELECT creds, keys FROM whatsapp_personal_sessions WHERE user_id = $1`, [userId]);
+  const { rows } = await pool.query(`SELECT creds FROM whatsapp_personal_sessions WHERE user_id = $1`, [userId]);
   const creds: AuthenticationCreds = rows[0]?.creds
     ? JSON.parse(JSON.stringify(rows[0].creds), BufferJSON.reviver)
     : initAuthCreds();
-  const keysData: Record<string, Record<string, any>> = rows[0]?.keys
-    ? JSON.parse(JSON.stringify(rows[0].keys), BufferJSON.reviver)
-    : {};
 
   const saveState = async () => {
     await pool.query(
-      `INSERT INTO whatsapp_personal_sessions (user_id, creds, keys, updated_at) VALUES ($1, $2, $3, NOW())
-       ON CONFLICT (user_id) DO UPDATE SET creds = $2, keys = $3, updated_at = NOW()`,
-      [userId, JSON.stringify(creds, BufferJSON.replacer), JSON.stringify(keysData, BufferJSON.replacer)],
+      `INSERT INTO whatsapp_personal_sessions (user_id, creds, updated_at) VALUES ($1, $2, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET creds = $2, updated_at = NOW()`,
+      [userId, JSON.stringify(creds, BufferJSON.replacer)],
     );
   };
 
@@ -105,22 +107,58 @@ async function loadDbAuthState(userId: string): Promise<{ state: AuthenticationS
     creds,
     keys: {
       get: async (type, ids) => {
+        if (!ids.length) return {};
+        const { rows } = await pool.query(
+          `SELECT key_id, value FROM whatsapp_personal_keys WHERE user_id = $1 AND category = $2 AND key_id = ANY($3)`,
+          [userId, type, ids],
+        );
         const result: Record<string, any> = {};
-        for (const id of ids) {
-          let value = keysData[type]?.[id];
-          if (value && type === 'app-state-sync-key') {
-            value = proto.Message.AppStateSyncKeyData.fromObject(value);
-          }
-          if (value !== undefined) result[id] = value;
+        for (const r of rows) {
+          let value = JSON.parse(JSON.stringify(r.value), BufferJSON.reviver);
+          if (type === 'app-state-sync-key') value = proto.Message.AppStateSyncKeyData.fromObject(value);
+          result[r.key_id] = value;
         }
         return result;
       },
+      // KRİTİK — her çağrıda SADECE değişen anahtarları yazar (eski davranış: her
+      // çağrıda TÜM anahtar deposunu yeniden serialize edip yazıyordu). Baileys null
+      // değer vererek bir anahtarın silinmesini işaret eder — bu satırları upsert
+      // etmek yerine gerçekten DB'den siliyoruz, aksi halde tablo "hayalet" (tombstone)
+      // satırlarla şişer.
       set: async (data) => {
+        const upserts: Array<{ category: string; keyId: string; json: string }> = [];
+        const deletes: Array<{ category: string; keyId: string }> = [];
         for (const category of Object.keys(data)) {
-          keysData[category] = keysData[category] || {};
-          Object.assign(keysData[category], (data as any)[category]);
+          const catData = (data as any)[category];
+          for (const keyId of Object.keys(catData)) {
+            const value = catData[keyId];
+            if (value === null || value === undefined) {
+              deletes.push({ category, keyId });
+            } else {
+              upserts.push({ category, keyId, json: JSON.stringify(value, BufferJSON.replacer) });
+            }
+          }
         }
-        await saveState();
+        if (upserts.length) {
+          const values: unknown[] = [userId];
+          const rowSql = upserts.map(u => {
+            values.push(u.category, u.keyId, u.json);
+            const n = values.length;
+            return `($1, $${n - 2}, $${n - 1}, $${n}::jsonb, NOW())`;
+          }).join(', ');
+          await pool.query(
+            `INSERT INTO whatsapp_personal_keys (user_id, category, key_id, value, updated_at)
+             VALUES ${rowSql}
+             ON CONFLICT (user_id, category, key_id) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+            values,
+          );
+        }
+        for (const d of deletes) {
+          await pool.query(
+            `DELETE FROM whatsapp_personal_keys WHERE user_id = $1 AND category = $2 AND key_id = $3`,
+            [userId, d.category, d.keyId],
+          );
+        }
       },
     },
   };
@@ -176,6 +214,7 @@ export async function connectPersonalWhatsapp(userId: string): Promise<void> {
       sessions.delete(userId);
       if (loggedOut) {
         await pool.query(`DELETE FROM whatsapp_personal_sessions WHERE user_id = $1`, [userId]);
+        await pool.query(`DELETE FROM whatsapp_personal_keys WHERE user_id = $1`, [userId]);
         console.log(`[whatsapp-personal] ${userId} oturumu kapattı (logged out) — DB temizlendi`);
       } else {
         // Kod 515 ("restart required") ilk eşleşmeden hemen sonra Baileys/WhatsApp'ın
@@ -247,6 +286,7 @@ export async function disconnectPersonalWhatsapp(userId: string): Promise<void> 
     sessions.delete(userId);
   }
   await pool.query(`DELETE FROM whatsapp_personal_sessions WHERE user_id = $1`, [userId]);
+  await pool.query(`DELETE FROM whatsapp_personal_keys WHERE user_id = $1`, [userId]);
 }
 
 // Sadece bire-bir mesaj — BİLİNÇLİ olarak toplu/döngüsel çağrı için tasarlanmadı,

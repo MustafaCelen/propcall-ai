@@ -324,10 +324,27 @@ export async function initDb(): Promise<void> {
     CREATE TABLE IF NOT EXISTS whatsapp_personal_sessions (
       user_id      TEXT PRIMARY KEY REFERENCES users(id),
       creds        JSONB,
-      keys         JSONB NOT NULL DEFAULT '{}',
+      keys         JSONB NOT NULL DEFAULT '{}', -- ARTIK KULLANILMIYOR (bkz. whatsapp_personal_keys) — geriye
+                                                 -- dönük uyumluluk için sütun silinmedi, yeni yazım/okuma yapılmıyor.
       status       TEXT NOT NULL DEFAULT 'disconnected', -- disconnected|qr_pending|connected
       phone_number TEXT,
       updated_at   TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    -- Signal protokolü anahtarları — ÖNCEDEN whatsapp_personal_sessions.keys'te TEK BİR
+    -- dev JSONB blob'du: her mesajda (Baileys'in keys.set çağrısında) TÜM blob yeniden
+    -- serialize edilip Postgres'e komple yazılıyordu. Sadece birkaç günlük hafif testte
+    -- bile bu blob ~465KB'a ulaşmıştı — gerçek kullanımda MB'lara çıkar, her mesajda o
+    -- kadar veriyi yeniden yazmak DB'ye/gecikmeye gereksiz yük bindirir, özellikle
+    -- onlarca danışman aynı anda bağlıyken aynı sınırlı bağlantı havuzunu paylaşarak.
+    -- Satır bazlı saklama, her yazımı SADECE değişen anahtarlarla sınırlar.
+    CREATE TABLE IF NOT EXISTS whatsapp_personal_keys (
+      user_id      TEXT NOT NULL REFERENCES users(id),
+      category     TEXT NOT NULL,
+      key_id       TEXT NOT NULL,
+      value        JSONB NOT NULL,
+      updated_at   TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (user_id, category, key_id)
     );
   `;
 
