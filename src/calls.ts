@@ -208,13 +208,19 @@ export async function getBestCallsByPhoneForCampaign(
 // bu DIŞARIDAN doğrulama ikinci bir güvence katmanı sağlar. sinceIso koruma penceresinin
 // başlangıcı — danışmanın duplicateCallProtectionDays ayarına göre hesaplanır (1 gün =
 // sadece bugün, 90 güne kadar — bkz. src/campaign.ts protectionWindowStartIso).
+//
+// SADECE status='completed' (gerçekten cevaplanmış) aramalar korumaya takılır — ÖNCEDEN
+// cevapsız/meşgul/başarısız denemeler de sayılıyordu, bu yüzden bir kampanyanın
+// "cevapsız" kişilerini alıp yeni bir listeye koyup tekrar aratmak imkansızdı (henüz
+// hiç konuşulmamış birine "zaten arandı" deniyordu). Amaç zaten konuşulmuş birini
+// rahatsız etmemek — hiç ulaşılamamış birini tekrar denemeyi engellemek değil.
 export async function findRecentCallForPhone(
   userId: string, phone: string, sinceIso: string,
 ): Promise<BestCallInfo | null> {
   const { rows } = await pool.query<{ vapi_call_id: string; status: string; summary: CallSummary | null }>(
     `SELECT vapi_call_id, status, data->'summary' AS summary
      FROM calls
-     WHERE user_id = $1 AND data->>'customerPhone' = $2 AND start_time >= $3
+     WHERE user_id = $1 AND data->>'customerPhone' = $2 AND start_time >= $3 AND status = 'completed'
      ORDER BY
        (data->'summary'->>'randevu_alindi')::boolean DESC NULLS LAST,
        (data->'summary' IS NOT NULL) DESC,
