@@ -17,7 +17,16 @@ const LEAD_ACTIVITY_LABELS = {
   WHATSAPP_ANALYZED: 'Yazışma analiz edildi',
 };
 
-const leadsState = { leads: [], openId: null, draggedId: null };
+const leadsState = {
+  leads: [], openId: null, draggedId: null,
+  view: 'kanban', // 'kanban' | 'list'
+  selectedIds: new Set(),
+  filters: { stage: '', source: '', region: '', tag: '', neverContacted: false },
+};
+
+function parseTagsInput(raw) {
+  return [...new Set((raw || '').split(',').map(t => t.trim()).filter(Boolean))];
+}
 
 function leadFullName(lead) {
   return [lead.firstName, lead.lastName].filter(Boolean).join(' ') || '(isimsiz)';
@@ -39,9 +48,129 @@ async function loadLeads() {
     const j = await r.json();
     if (!j.success) throw new Error(j.error || 'Adaylar yüklenemedi');
     leadsState.leads = j.data;
-    renderLeadsBoard();
+    renderLeadsView();
   } catch (err) {
     board.innerHTML = `<div class="drawer-error">✗ ${err.message}</div>`;
+  }
+}
+
+function renderLeadsView() {
+  if (leadsState.view === 'list') renderLeadsList();
+  else renderLeadsBoard();
+}
+
+function setLeadsView(view) {
+  leadsState.view = view;
+  $('leadsBoard').style.display = view === 'kanban' ? 'flex' : 'none';
+  $('leadsListWrap').style.display = view === 'list' ? 'block' : 'none';
+  $('btnLeadsViewKanban').classList.toggle('active', view === 'kanban');
+  $('btnLeadsViewList').classList.toggle('active', view === 'list');
+  renderLeadsView();
+}
+
+// Not: "Hiç aranmamış" burada sadece bir İSTEMCİ TARAFI ön-izleme sezgisi —
+// gerçek CALL_COMPLETED aktivite kaydına bakmıyor (o veri bu listede yok),
+// sadece source'un arama kaynaklı olmadığını ve hiç linkedCallId'si olmadığını
+// kontrol ediyor. Kesin/doğru kural Faz 4'te backend'de (querySegment,
+// lead_activities'e karşı SQL) uygulanacak — bu sadece hızlı bir filtre.
+function leadLooksNeverContacted(lead) {
+  return lead.source !== 'CALL_CAMPAIGN' && !lead.linkedCallId;
+}
+
+function filteredLeads() {
+  const f = leadsState.filters;
+  return leadsState.leads.filter(l => {
+    if (f.stage && l.stage !== f.stage) return false;
+    if (f.source && l.source !== f.source) return false;
+    if (f.region && !(l.region || '').toLowerCase().includes(f.region.toLowerCase())) return false;
+    if (f.tag && !(l.tags || []).some(t => t.toLowerCase().includes(f.tag.toLowerCase()))) return false;
+    if (f.neverContacted && !leadLooksNeverContacted(l)) return false;
+    return true;
+  });
+}
+
+function renderLeadsList() {
+  const wrap = $('leadsListWrap');
+  const leads = filteredLeads();
+
+  wrap.querySelector('#leadsListBody').innerHTML = leads.length
+    ? leads.map(l => `
+      <tr class="leads-list-row${leadsState.selectedIds.has(l.id) ? ' selected' : ''}" data-lead-id="${l.id}">
+        <td><input type="checkbox" class="lead-select-checkbox" data-lead-id="${l.id}" ${leadsState.selectedIds.has(l.id) ? 'checked' : ''} /></td>
+        <td class="leads-list-name">${esc(leadFullName(l))}</td>
+        <td>${esc(l.phone || '—')}</td>
+        <td><span class="lead-stage-tag">${LEAD_STAGE_LABELS[l.stage] || l.stage}</span></td>
+        <td>${LEAD_SOURCE_LABELS[l.source] || l.source}</td>
+        <td>${esc(l.region || '—')}</td>
+        <td>${(l.tags || []).length ? l.tags.map(t => `<span class="lead-tag-chip">${esc(t)}</span>`).join(' ') : '—'}</td>
+        <td>${leadRelativeTime(l.updatedAt)}</td>
+      </tr>
+    `).join('')
+    : '<tr><td colspan="8" class="lead-column-empty">Filtreye uyan aday yok</td></tr>';
+
+  wrap.querySelectorAll('.lead-select-checkbox').forEach(cb => {
+    cb.addEventListener('change', () => {
+      if (cb.checked) leadsState.selectedIds.add(cb.dataset.leadId);
+      else leadsState.selectedIds.delete(cb.dataset.leadId);
+      cb.closest('tr').classList.toggle('selected', cb.checked);
+      renderLeadsSelectionBar();
+    });
+  });
+  wrap.querySelectorAll('.leads-list-row .leads-list-name').forEach(td => {
+    td.addEventListener('click', () => openLeadDrawer(td.closest('tr').dataset.leadId));
+  });
+
+  const selectAllCb = $('leadsSelectAll');
+  if (selectAllCb) {
+    selectAllCb.checked = leads.length > 0 && leads.every(l => leadsState.selectedIds.has(l.id));
+  }
+
+  renderLeadsSelectionBar();
+}
+
+function renderLeadsSelectionBar() {
+  const bar = $('leadsSelectionBar');
+  const n = leadsState.selectedIds.size;
+  if (n === 0) { bar.style.display = 'none'; return; }
+  bar.style.display = 'flex';
+  $('leadsSelectionCount').textContent = `${n} aday seçildi`;
+}
+
+function toggleSelectAllLeads(checked) {
+  const leads = filteredLeads();
+  if (checked) leads.forEach(l => leadsState.selectedIds.add(l.id));
+  else leads.forEach(l => leadsState.selectedIds.delete(l.id));
+  renderLeadsList();
+}
+
+async function createCampaignFromSelection() {
+  const leadIds = [...leadsState.selectedIds];
+  if (!leadIds.length) return;
+  try {
+    const r = await fetch('/api/leads/to-campaign-contacts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leadIds }),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error || 'Kampanya kişileri hazırlanamadı');
+    if (!j.data.length) { toast('Seçilen adayların hiçbirinde telefon numarası yok', 'error'); return; }
+
+    setFocusedCampaign(null);
+    campaign.contacts = j.data.map(c => ({ ...c, status: 'bekliyor', vapiCallId: null, result: null }));
+    campaign.running = false;
+    campaign.paused = false;
+    renderImportSummary(campaign.contacts.length, []);
+    renderCampaignTable();
+    $('btnCampaignStart').disabled = false;
+    savePendingCampaignDraft();
+
+    leadsState.selectedIds.clear();
+    renderLeadsSelectionBar();
+
+    switchTab('campaign');
+    toast(`✓ ${campaign.contacts.length} aday Toplu Arama'ya aktarıldı — kampanyayı buradan yapılandırıp başlatın`, 'success');
+  } catch (err) {
+    toast('✗ ' + err.message, 'error');
   }
 }
 
@@ -108,11 +237,43 @@ async function moveLeadStage(id, stage) {
     if (!j.success) throw new Error(j.error || 'Aşama güncellenemedi');
     const idx = leadsState.leads.findIndex(l => l.id === id);
     if (idx !== -1) leadsState.leads[idx] = j.data;
-    renderLeadsBoard();
+    renderLeadsView();
     if (leadsState.openId === id) openLeadDrawer(id);
   } catch (err) {
     toast('✗ ' + err.message, 'error');
   }
+}
+
+async function saveLeadTags(id, tags) {
+  try {
+    const r = await fetch(`/api/leads/${id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags }),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error || 'Etiket güncellenemedi');
+    const idx = leadsState.leads.findIndex(l => l.id === id);
+    if (idx !== -1) leadsState.leads[idx] = j.data;
+    renderLeadsView();
+    if (leadsState.openId === id) openLeadDrawer(id);
+  } catch (err) {
+    toast('✗ ' + err.message, 'error');
+  }
+}
+
+function addLeadTag(id) {
+  const input = $('leadTagInput');
+  const tag = input.value.trim();
+  if (!tag) return;
+  const lead = leadsState.leads.find(l => l.id === id);
+  const tags = [...new Set([...(lead?.tags || []), tag])];
+  saveLeadTags(id, tags);
+}
+
+function removeLeadTag(id, tag) {
+  const lead = leadsState.leads.find(l => l.id === id);
+  const tags = (lead?.tags || []).filter(t => t !== tag);
+  saveLeadTags(id, tags);
 }
 
 // ─── ADAY DETAY DRAWER ──────────────────────────────────────────────────────
@@ -129,6 +290,18 @@ async function openLeadDrawer(id) {
       <div class="drawer-section-title">Aşama</div>
       <div class="lead-drawer-actions" id="leadStageButtons">
         ${LEAD_STAGES.map(s => `<button class="lead-drawer-stage-btn${s === lead.stage ? ' active' : ''}" data-stage="${s}">${LEAD_STAGE_LABELS[s]}</button>`).join('')}
+      </div>
+    </div>
+    <div class="drawer-section">
+      <div class="drawer-section-title">Etiketler</div>
+      <div class="lead-tag-list" id="leadDrawerTags">
+        ${(lead.tags || []).length
+          ? lead.tags.map(t => `<span class="lead-tag-chip removable" data-tag="${esc(t)}">${esc(t)} <button class="lead-tag-remove" data-tag="${esc(t)}" title="Kaldır">✕</button></span>`).join('')
+          : '<span class="lead-column-empty" style="padding:0">Etiket yok</span>'}
+      </div>
+      <div class="drawer-actions" style="margin-top:8px">
+        <input type="text" id="leadTagInput" placeholder="Yeni etiket..." style="flex:1" />
+        <button class="btn-save-notes" id="leadTagAdd">Ekle</button>
       </div>
     </div>
     <div class="drawer-section">
@@ -155,6 +328,11 @@ async function openLeadDrawer(id) {
 
   $('leadStageButtons').querySelectorAll('.lead-drawer-stage-btn').forEach(btn => {
     btn.addEventListener('click', () => moveLeadStage(id, btn.dataset.stage));
+  });
+  $('leadTagAdd').addEventListener('click', () => addLeadTag(id));
+  $('leadTagInput').addEventListener('keydown', e => { if (e.key === 'Enter') addLeadTag(id); });
+  $('leadDrawerTags').querySelectorAll('.lead-tag-remove').forEach(btn => {
+    btn.addEventListener('click', () => removeLeadTag(id, btn.dataset.tag));
   });
   $('leadNoteSave').addEventListener('click', () => saveLeadNote(id));
   if (lead.phone) {
@@ -261,7 +439,7 @@ function closeLeadDrawer() {
 // ─── YENİ ADAY MODAL ────────────────────────────────────────────────────────
 
 function openLeadFormModal() {
-  ['leadFormFirstName', 'leadFormLastName', 'leadFormPhone', 'leadFormEmail', 'leadFormNotes'].forEach(id => { $(id).value = ''; });
+  ['leadFormFirstName', 'leadFormLastName', 'leadFormPhone', 'leadFormEmail', 'leadFormNotes', 'leadFormTags'].forEach(id => { $(id).value = ''; });
   $('leadFormModal').classList.add('open');
   $('leadFormOverlay').classList.add('visible');
   $('leadFormFirstName').focus();
@@ -281,6 +459,7 @@ async function saveNewLead() {
     phone: $('leadFormPhone').value.trim() || null,
     email: $('leadFormEmail').value.trim() || null,
     notes: $('leadFormNotes').value.trim() || null,
+    tags: parseTagsInput($('leadFormTags').value),
   };
   try {
     const r = await fetch('/api/leads', {
@@ -290,7 +469,7 @@ async function saveNewLead() {
     const j = await r.json();
     if (!j.success) throw new Error(j.error || 'Aday eklenemedi');
     leadsState.leads.unshift(j.data);
-    renderLeadsBoard();
+    renderLeadsView();
     closeLeadFormModal();
     toast('✓ Aday eklendi', 'success');
   } catch (err) {
@@ -307,4 +486,189 @@ document.addEventListener('DOMContentLoaded', () => {
 
   $('leadDrawerClose').addEventListener('click', closeLeadDrawer);
   $('leadDrawerOverlay').addEventListener('click', closeLeadDrawer);
+
+  $('btnImportLeads').addEventListener('click', () => $('leadImportFile').click());
+  $('leadImportFile').addEventListener('change', onLeadImportFileSelected);
+  $('leadImportCancel').addEventListener('click', closeLeadImportModal);
+  $('leadImportOverlay').addEventListener('click', closeLeadImportModal);
+  $('leadImportClose').addEventListener('click', closeLeadImportModal);
+
+  $('btnLeadsViewKanban').addEventListener('click', () => setLeadsView('kanban'));
+  $('btnLeadsViewList').addEventListener('click', () => setLeadsView('list'));
+  $('leadsSelectAll').addEventListener('change', e => toggleSelectAllLeads(e.target.checked));
+  $('btnCreateCampaignFromSelection').addEventListener('click', createCampaignFromSelection);
+
+  ['leadsFilterStage', 'leadsFilterSource', 'leadsFilterRegion', 'leadsFilterTag'].forEach(id => {
+    $(id).addEventListener('input', () => {
+      leadsState.filters.stage = $('leadsFilterStage').value;
+      leadsState.filters.source = $('leadsFilterSource').value;
+      leadsState.filters.region = $('leadsFilterRegion').value;
+      leadsState.filters.tag = $('leadsFilterTag').value;
+      renderLeadsList();
+    });
+  });
+  $('leadsFilterNeverContacted').addEventListener('change', e => {
+    leadsState.filters.neverContacted = e.target.checked;
+    renderLeadsList();
+  });
+});
+
+// ─── ADAY İÇE AKTARMA (CSV/EXCEL) + ÇAKIŞMA ÇÖZÜMÜ ─────────────────────────
+// parseSpreadsheetRows (app.js) ile aynı sütun-tespiti/telefon-temizleme mantığını
+// kullanır — Toplu Arama'nın CSV yüklemesiyle birebir aynı dosya biçimini kabul eder,
+// ama sonuçlar geçici bir kampanya listesine değil KALICI müşteri veritabanına yazılır.
+const leadImportState = { newRows: [], conflicts: [], resolutions: [] };
+
+function onLeadImportFileSelected(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function (ev) {
+    try {
+      const wb   = XLSX.read(ev.target.result, { type: 'array', codepage: 65001 });
+      const ws   = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+      if (!rows.length) { toast('Dosya boş', 'error'); return; }
+      const parsed = parseSpreadsheetRows(rows);
+      if (!parsed.phoneColumnFound) {
+        toast('⚠️ \'Telefon\' sütunu bulunamadı — 2. sütun telefon numarası olarak varsayıldı.', 'error');
+      }
+      if (!parsed.rows.length) { toast('Geçerli telefon bulunamadı', 'error'); return; }
+      previewLeadImport(parsed.rows, parsed.skipped);
+    } catch (err) {
+      toast('Dosya okunamadı: ' + err.message, 'error');
+    }
+  };
+  reader.readAsArrayBuffer(file);
+  e.target.value = '';
+}
+
+async function previewLeadImport(rows, skipped) {
+  openLeadImportModal();
+  $('leadImportSummary').innerHTML = '<div class="drawer-loading">⏳ Çakışmalar kontrol ediliyor...</div>';
+  $('leadImportConflicts').innerHTML = '';
+  $('leadImportConfirm').style.display = 'none';
+  try {
+    const r = await fetch('/api/leads/import/preview', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rows }),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error || 'Önizleme başarısız');
+
+    leadImportState.newRows = j.data.newRows;
+    leadImportState.conflicts = j.data.conflicts;
+    leadImportState.resolutions = j.data.conflicts.map(c => ({ row: c.row, existingLeadId: c.existingLead.id, action: 'skip' }));
+
+    renderLeadImportSummary(skipped);
+  } catch (err) {
+    $('leadImportSummary').innerHTML = `<div class="drawer-error">✗ ${err.message}</div>`;
+  }
+}
+
+function renderLeadImportSummary(skipped) {
+  const { newRows, conflicts } = leadImportState;
+  const skippedHtml = (skipped && skipped.length)
+    ? `<div class="adm-field-hint">${skipped.length} satır dosyadan atlandı (geçersiz/boş/mükerrer telefon)</div>`
+    : '';
+
+  $('leadImportSummary').innerHTML = `
+    <div class="is-headline">
+      <span class="is-ok">✓ ${newRows.length} yeni aday eklenecek</span>
+      ${conflicts.length ? `<span class="is-warn-static">⚠️ ${conflicts.length} çakışma bulundu — zaten veritabanınızda var</span>` : ''}
+    </div>
+    ${skippedHtml}
+  `;
+
+  $('leadImportTagsGroup').style.display = (newRows.length || conflicts.length) ? 'block' : 'none';
+
+  if (!conflicts.length) {
+    $('leadImportConflicts').innerHTML = '';
+    $('leadImportConfirm').style.display = 'inline-block';
+    return;
+  }
+
+  $('leadImportConflicts').innerHTML = `
+    <div class="drawer-section">
+      <div class="drawer-section-title">Çakışmalar — her biri için işlem seçin</div>
+      <div class="lead-import-bulk-row">
+        <span>Tümü:</span>
+        <button class="btn-secondary" data-bulk="skip">Atla</button>
+        <button class="btn-secondary" data-bulk="update">Güncelle</button>
+        <button class="btn-secondary" data-bulk="create-new">Yeni Oluştur</button>
+      </div>
+      <div class="lead-import-conflict-list" id="leadImportConflictList">
+        ${conflicts.map((c, i) => `
+          <div class="lead-import-conflict-row" data-idx="${i}">
+            <div class="lead-import-conflict-info">
+              <b>${esc(c.row.name)}</b> (${esc(c.row.phone)}) — mevcut aday: <b>${esc(leadFullName(c.existingLead))}</b>
+            </div>
+            <select class="lead-import-action-select" data-idx="${i}">
+              <option value="skip" selected>Atla (mevcut aday değişmez)</option>
+              <option value="update">Güncelle (yeni bilgilerle üzerine yaz)</option>
+              <option value="create-new">Yeni Oluştur (ayrı bir aday olarak ekle)</option>
+            </select>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+
+  $('leadImportConflicts').querySelectorAll('[data-bulk]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const action = btn.dataset.bulk;
+      leadImportState.resolutions.forEach(res => { res.action = action; });
+      $('leadImportConflicts').querySelectorAll('.lead-import-action-select').forEach(sel => { sel.value = action; });
+    });
+  });
+  $('leadImportConflicts').querySelectorAll('.lead-import-action-select').forEach(sel => {
+    sel.addEventListener('change', () => {
+      leadImportState.resolutions[Number(sel.dataset.idx)].action = sel.value;
+    });
+  });
+
+  $('leadImportConfirm').style.display = 'inline-block';
+}
+
+async function commitLeadImport() {
+  const btn = $('leadImportConfirm');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/leads/import/commit', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        newRows: leadImportState.newRows,
+        resolutions: leadImportState.resolutions,
+        tags: parseTagsInput($('leadImportTags').value),
+      }),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error || 'İçe aktarma başarısız');
+    toast(`✓ ${j.data.created} yeni, ${j.data.updated} güncellendi, ${j.data.skipped} atlandı`, 'success');
+    closeLeadImportModal();
+    loadLeads();
+  } catch (err) {
+    toast('✗ ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function openLeadImportModal() {
+  $('leadImportModal').classList.add('open');
+  $('leadImportOverlay').classList.add('visible');
+}
+
+function closeLeadImportModal() {
+  $('leadImportModal').classList.remove('open');
+  $('leadImportOverlay').classList.remove('visible');
+  leadImportState.newRows = [];
+  leadImportState.conflicts = [];
+  leadImportState.resolutions = [];
+  $('leadImportTags').value = '';
+  $('leadImportTagsGroup').style.display = 'none';
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  $('leadImportConfirm').addEventListener('click', commitLeadImport);
 });

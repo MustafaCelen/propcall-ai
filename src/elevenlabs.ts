@@ -36,8 +36,12 @@ export async function getElevenLabsCredit(apiKey: string): Promise<ElevenLabsCre
         ? data.next_character_count_reset_unix * 1000
         : undefined,
     };
-  } catch (err) {
-    return { ok: false, error: String(err) };
+  } catch {
+    // Ham "TypeError: fetch failed" kullanıcıya hiçbir şey anlatmaz. ok:false zaten
+    // "kredi durumundan emin olamadık" anlamına geliyor ve çağıran (campaign.ts
+    // hasElevenLabsCreditLeft) bu durumda kampanyayı ENGELLEMİYOR — mesaj sadece
+    // Ayarlarım ekranında bilgi amaçlı gösteriliyor.
+    return { ok: false, error: 'ElevenLabs sunucusuna ulaşılamadı — kredi bilgisi şu an okunamıyor.' };
   }
 }
 

@@ -12,6 +12,7 @@
   <!-- HEADER -->
   <header class="app-header">
     <div class="logo">
+      <button class="btn-secondary btn-left-toggle" id="btnLeftToggle" title="Müşteri bilgileri ve arama" aria-label="Müşteri panelini aç">☰</button>
       <div class="logo-icon">📞</div>
       <div class="logo-text">Prop<span>Call</span> AI</div>
     </div>
@@ -39,9 +40,9 @@
         </div>
         <button class="credit-refresh" id="btnCreditRefresh" title="Yenile">↻</button>
       </div>
-      <button class="btn-secondary" id="btnToggleApts" style="display:none">📅 Randevular</button>
-      <a class="btn-secondary" id="linkUsers" href="/admin" style="display:none;text-decoration:none">👥 Kullanıcılar</a>
-      <a class="btn-secondary" id="linkSettings" href="/settings" style="text-decoration:none">⚙️ Ayarlarım</a>
+      <button class="btn-secondary" id="btnToggleApts" style="display:none">📅 <span class="hdr-lbl">Randevular</span></button>
+      <a class="btn-secondary" id="linkUsers" href="/admin" style="display:none;text-decoration:none">👥 <span class="hdr-lbl">Kullanıcılar</span></a>
+      <a class="btn-secondary" id="linkSettings" href="/settings" style="text-decoration:none">⚙️ <span class="hdr-lbl">Ayarlarım</span></a>
       <button class="btn-help-tour" id="btnHelpTour" title="Kullanım kılavuzunu tekrar göster">?</button>
       <button class="btn-secondary" id="btnLogout">Çıkış</button>
     </div>
@@ -99,6 +100,7 @@
       <button class="btn-end" id="btnEndCall">⏹ Aramayı Sonlandır</button>
     </div>
   </aside>
+  <div class="left-panel-backdrop" id="leftPanelBackdrop"></div>
 
   <!-- RIGHT PANEL -->
   <main class="right-panel">
@@ -115,6 +117,8 @@
       <button class="tab-btn" data-tab="campaignHistory">📊 Kampanya Geçmişi</button>
       <button class="tab-btn" data-tab="leads">👥 Adaylar</button>
       <button class="tab-btn" data-tab="whatsapp">💬 WhatsApp</button>
+      <button class="tab-btn" data-tab="smartPlans">🧠 Akıllı Plan</button>
+      <button class="tab-btn" data-tab="roleplay">🎯 Pratik Yap</button>
     </div>
 
     <!-- ── TAB 1: CANLI ──────────────────────────────────── -->
@@ -422,6 +426,7 @@
             <div class="concurrency-group camp-name-group" style="grid-column:1 / 4" title="Bu kampanyayı geçmişte tanıyacağınız isim — zorunlu">
               <label>Kampanya Adı</label>
               <input type="text" id="campaignName" class="camp-name-input" placeholder="Örn: Ağustos KW Büyüme — Batch 2" />
+              <div id="campaignFocusNote" class="camp-focus-note" style="display:none"></div>
             </div>
             <div class="concurrency-group camp-scenario-group" style="grid-column:4 / 7" title="Kampanyadaki tüm aramalarda kullanılacak senaryo">
               <label>Senaryo</label>
@@ -447,27 +452,43 @@
               <label>Başlangıç Satırı</label>
               <input type="number" id="campaignStartFrom" class="camp-limit-input" min="1" placeholder="1" />
             </div>
-            <div class="concurrency-group" title="Toplam kaç arama yapılacak (0 = sınırsız)">
+            <div class="concurrency-group" title="Toplam kaç arama yapılacak (boş = sınırsız)">
               <label>Arama Limiti</label>
               <input type="number" id="campaignCallLimit" class="camp-limit-input" min="0" placeholder="∞" />
+              <!-- Limitin GERİ ALINABİLİR olduğunu baştan öğretir: danışman limite
+                   takılınca panik yapmasın, kalanların silinmediğini bilsin. -->
+              <small class="camp-help">Boş = sınırsız. Dolunca kalanlar bekler, sonra devam edebilirsiniz.</small>
             </div>
-            <div class="concurrency-group" title="Kaç kişi konuşunca duracak (0 = sınırsız)">
-              <label>Cevaplayan Limiti</label>
+            <div class="concurrency-group" title="Kaç kişiyle görüşülünce duracak (boş = sınırsız)">
+              <label>Görüşme Hedefi</label>
               <input type="number" id="campaignAnsweredLimit" class="camp-limit-input" min="0" placeholder="∞" />
+              <small class="camp-help">Boş = sınırsız. Hedefe ulaşınca kalanlar bekler.</small>
             </div>
-            <div class="concurrency-group" title="Cevapsız/meşgul aramalar otomatik kaç kez tekrar denensin (1 = tekrar arama yok)">
-              <label>Maks. Deneme</label>
-              <select id="campaignRetryAttempts">
-                <option value="1">1 (tekrar yok)</option>
-                <option value="2">2</option>
-                <option value="3">3</option>
-                <option value="4">4</option>
-                <option value="5">5</option>
-              </select>
-            </div>
-            <div class="concurrency-group" title="Tekrar aramadan önce beklenecek süre (dakika)">
-              <label>Tekrar Bekleme (dk)</label>
-              <input type="number" id="campaignRetryDelay" class="camp-limit-input" min="5" max="240" placeholder="30" />
+            <!-- Reattempt kuralı — tek cümle, tek kural (sektör standardı: JustCall
+                 "Reattempt Rules"). Eski "Maks. Deneme" + "Tekrar Bekleme (dk)" iki ayrı
+                 teknik alandı; danışman "deneme 2 ne demek, dakika neye göre?" diye
+                 soruyordu. Değerler aynı: campaignRetryAttempts = TOPLAM deneme,
+                 campaignRetryDelay = dakika. -->
+            <div class="concurrency-group camp-reattempt" title="Cevapsız veya meşgul çıkanlar aynı kampanya içinde otomatik olarak tekrar aranır; önceki sonuçlar korunur">
+              <label>Tekrar Arama</label>
+              <div class="camp-reattempt-row">
+                <span>Ulaşılamayanı tekrar ara:</span>
+                <select id="campaignRetryAttempts">
+                  <option value="1">Hayır</option>
+                  <option value="2" selected>1 kez daha</option>
+                  <option value="3">2 kez daha</option>
+                  <option value="4">3 kez daha</option>
+                  <option value="5">4 kez daha</option>
+                </select>
+                <select id="campaignRetryDelay">
+                  <option value="30">30 dk sonra</option>
+                  <option value="60">1 saat sonra</option>
+                  <option value="120" selected>2 saat sonra</option>
+                  <option value="240">4 saat sonra</option>
+                  <option value="1440">1 gün sonra</option>
+                </select>
+              </div>
+              <small class="camp-help">Cevapsız ve meşgul çıkanlar aynı kampanyada otomatik tekrar aranır; sonuçlar korunur.</small>
             </div>
           </div>
 
@@ -477,6 +498,14 @@
               <button class="btn-campaign-start" id="btnCampaignStart" disabled>▶ Başlat</button>
               <button class="btn-campaign-pause" id="btnCampaignPause" disabled>⏸ Duraklat</button>
               <button class="btn-campaign-stop"  id="btnCampaignStop"  disabled>⏹ Durdur</button>
+              <button class="btn-secondary" id="btnRetryFailed" style="display:none">♻️ Başarısızları Tekrar Dene</button>
+            </div>
+            <!-- Biten/durdurulan kampanyada görünür: seçilen kesim AYNI kampanyada tekrar
+                 aranır, önceki sonuçlar korunur (bkz. campaignRerun, campaign.ts). -->
+            <div class="campaign-rerun" id="campaignRerunBox" style="display:none">
+              <span class="campaign-rerun-label">🔁 Yeniden çalıştır:</span>
+              <select id="campaignRerunScope"></select>
+              <button class="btn-secondary" id="btnCampaignRerun">Tekrar Ara</button>
             </div>
           </div>
 
@@ -488,18 +517,42 @@
             <span id="progressText">0 / 0</span>
             <span id="progressPct">0%</span>
           </div>
-          <div class="progress-track">
-            <div class="progress-fill" id="progressFill" style="width:0%"></div>
+          <!-- Segmentli çubuk: her kova kendi rengiyle görünür. Önceden tek renkti,
+               danışman sonucun dağılımını ancak metin sayaçlarından okuyabiliyordu. -->
+          <div class="progress-track progress-track-segmented">
+            <div class="pseg pseg-appointment" id="psegAppointment" style="width:0%"></div>
+            <div class="pseg pseg-talked"      id="psegTalked"      style="width:0%"></div>
+            <div class="pseg pseg-unreachable" id="psegUnreachable" style="width:0%"></div>
+            <div class="pseg pseg-error"       id="psegError"       style="width:0%"></div>
+            <div class="pseg pseg-skipped"     id="psegSkipped"     style="width:0%"></div>
           </div>
+          <!-- Çipler tıklanabilir: tabloyu o kovaya filtreler (bkz. setCampaignFilter). -->
           <div class="progress-stats">
-            <span class="ps-item ps-randevu"     id="psRandevu">✅ 0 Randevu</span>
-            <span class="ps-item ps-talked"      id="psTalked">💬 0 Görüşüldü</span>
-            <span class="ps-item ps-unreachable" id="psUnreachable">📵 0 Ulaşılamadı</span>
-            <span class="ps-item ps-error"       id="psError">⚠️ 0 Hata</span>
-            <span class="ps-item ps-retrying"    id="psRetrying" style="display:none">♻️ 0 Tekrar Planlandı</span>
-            <span class="ps-item ps-active"      id="psActive">📞 0 Aktif</span>
+            <button type="button" class="ps-item cp-stat ps-randevu"     id="psRandevu"     data-bucket="appointment">✅ 0 Randevu</button>
+            <button type="button" class="ps-item cp-stat ps-talked"      id="psTalked"      data-bucket="talked">💬 0 Görüşüldü</button>
+            <button type="button" class="ps-item cp-stat ps-unreachable" id="psUnreachable" data-bucket="unreachable">📵 0 Ulaşılamadı</button>
+            <button type="button" class="ps-item cp-stat ps-error"       id="psError"       data-bucket="error">⚠️ 0 Hata</button>
+            <button type="button" class="ps-item cp-stat ps-retrying"    id="psRetrying"    data-bucket="retrying" style="display:none">♻️ 0 Tekrar Aranacak</button>
+            <button type="button" class="ps-item cp-stat ps-skipped"     id="psSkipped"     data-bucket="skipped" style="display:none">🔒 0 Atlandı</button>
+            <button type="button" class="ps-item cp-stat ps-active"      id="psActive"      data-bucket="active">📞 0 Aktif</button>
+          </div>
+          <div class="cp-filter-note" id="campaignFilterNote" style="display:none"></div>
+          <!-- Sonuç paneli: randevu alınan kişilerin hızlı görünümü — ad, telefon, özet,
+               tek tıkla Ara / WhatsApp. Danışman 4000 satırlık tabloda filtreleyip
+               satır satır bakmak yerine kampanyanın çıktısını burada görür. -->
+          <div class="cp-result-panel" id="campaignResultPanel" style="display:none"></div>
+          <!-- Limit banner'ı: kampanya sayısal bir limite takılıp durduğunda çıkar ve
+               tek tıkla devam etme yolu sunar. Önceden limit dolduğunda HİÇBİR bildirim
+               yoktu — danışman sadece satırlarda kilit ikonu görüyordu. -->
+          <div class="cp-limit-banner" id="campaignLimitBanner" style="display:none">
+            <div class="cp-limit-text" id="campaignLimitText"></div>
+            <div class="cp-limit-actions">
+              <button type="button" class="btn-start" id="btnRaiseLimit">Limiti artır ve devam et</button>
+              <button type="button" class="btn-secondary" id="btnFinishCampaign">Kampanyayı bitir</button>
+            </div>
           </div>
           <div class="calling-hours-notice" id="callingHoursNotice" style="display:none">⏰ Şu an tanımlı arama saatleri dışında — yeni arama başlatılmıyor, pencere açılınca otomatik devam edecek.</div>
+          <div class="calling-hours-notice" id="concurrencyLimitNotice" style="display:none">📶 Aynı anda en fazla belirlenen sayıda arama yapılabiliyor (Ayarlarım → Arama Kuralları) — sıradaki kişiler bekliyor, bir arama bitince otomatik devam edecek.</div>
         </div>
 
         <!-- İçe aktarma sonuç raporu -->
@@ -534,8 +587,27 @@
     <div class="tab-content" id="tabCampaignHistory">
       <div class="ch-toolbar">
         <span class="ch-hint">Geçmiş kampanyalar — senaryo bazında karşılaştırın, hangi listenin daha çok randevu getirdiğini görün.</span>
+        <input type="search" id="chSearch" class="ch-search" placeholder="🔍 Kampanya adı ara..." />
+        <select id="chStatusFilter" class="ch-select">
+          <option value="">Tüm durumlar</option>
+          <option value="running">Çalışıyor</option>
+          <option value="paused">Duraklatıldı</option>
+          <option value="completed">Tamamlandı</option>
+          <option value="stopped">Durduruldu</option>
+          <option value="draft">Taslak</option>
+        </select>
+        <select id="chSort" class="ch-select">
+          <option value="date-desc">En yeni önce</option>
+          <option value="date-asc">En eski önce</option>
+          <option value="randevu-desc">En çok randevu</option>
+          <option value="rate-desc">En yüksek dönüşüm</option>
+          <option value="calls-desc">En çok arama</option>
+          <option value="cost-desc">En yüksek maliyet</option>
+        </select>
+        <button class="btn-secondary" id="btnChExport" title="Görünen kampanyaları CSV olarak indir">⬇ CSV</button>
         <button class="btn-secondary" id="btnChRefresh">↻ Yenile</button>
       </div>
+      <div class="ch-filter-note" id="chFilterNote" style="display:none"></div>
       <div class="table-wrapper">
         <table class="calls-table">
           <thead>
@@ -559,14 +631,72 @@
       </div>
     </div>
 
-    <!-- ── TAB 6: ADAYLAR (LEADS KANBAN) ──────────────────── -->
+    <!-- ── TAB 6: ADAYLAR (LEADS KANBAN / LİSTE) ──────────────────── -->
     <div class="tab-content" id="tabLeads">
       <div class="ch-toolbar">
         <span class="ch-hint">Aday takip panosu — aşama değiştirmek için kartı sürükleyin veya karta tıklayıp detaydan değiştirin.</span>
+        <div class="leads-view-toggle">
+          <button class="leads-view-btn active" id="btnLeadsViewKanban" title="Pano görünümü">🗂️ Pano</button>
+          <button class="leads-view-btn" id="btnLeadsViewList" title="Liste görünümü — çoklu seçim ve kampanya oluşturma için">📋 Liste</button>
+        </div>
+        <input type="file" id="leadImportFile" accept=".xlsx,.xls,.csv" style="display:none"/>
+        <button class="btn-upload" id="btnImportLeads">📂 Excel / CSV Yükle</button>
         <button class="btn-upload" id="btnAddLead">+ Yeni Aday</button>
       </div>
+
       <div class="leads-board" id="leadsBoard">
         <div class="drawer-loading">⏳ Yükleniyor...</div>
+      </div>
+
+      <div class="leads-list-wrap" id="leadsListWrap" style="display:none">
+        <div class="leads-list-filters">
+          <select id="leadsFilterStage">
+            <option value="">Tüm Aşamalar</option>
+            <option value="NEW">Yeni</option>
+            <option value="CONTACTED">İletişime Geçildi</option>
+            <option value="QUALIFIED">Nitelikli</option>
+            <option value="VIEWING">Gezme</option>
+            <option value="OFFER">Teklif</option>
+            <option value="WON">Kazanıldı</option>
+            <option value="LOST">Kaybedildi</option>
+          </select>
+          <select id="leadsFilterSource">
+            <option value="">Tüm Kaynaklar</option>
+            <option value="MANUAL">Manuel</option>
+            <option value="META_LEAD_AD">Meta Lead Ad</option>
+            <option value="CSV_IMPORT">CSV</option>
+            <option value="CALL_CAMPAIGN">Arama Sonucu</option>
+            <option value="REFERRAL">Referans</option>
+            <option value="OTHER">Diğer</option>
+          </select>
+          <input type="text" id="leadsFilterRegion" placeholder="Bölgeye göre filtrele..." />
+          <input type="text" id="leadsFilterTag" placeholder="Etikete göre filtrele..." />
+          <label class="leads-filter-checkbox">
+            <input type="checkbox" id="leadsFilterNeverContacted" />
+            Hiç aranmamış olabilir
+          </label>
+        </div>
+
+        <div class="leads-selection-bar" id="leadsSelectionBar" style="display:none">
+          <span id="leadsSelectionCount">0 aday seçildi</span>
+          <button class="btn-start" id="btnCreateCampaignFromSelection" style="width:auto;padding:8px 16px">Kampanya Oluştur</button>
+        </div>
+
+        <table class="leads-list-table">
+          <thead>
+            <tr>
+              <th><input type="checkbox" id="leadsSelectAll" /></th>
+              <th>Ad Soyad</th>
+              <th>Telefon</th>
+              <th>Aşama</th>
+              <th>Kaynak</th>
+              <th>Bölge</th>
+              <th>Etiketler</th>
+              <th>Son Güncelleme</th>
+            </tr>
+          </thead>
+          <tbody id="leadsListBody"></tbody>
+        </table>
       </div>
     </div>
 
@@ -622,7 +752,160 @@
       </div>
     </div>
 
+    <!-- ── TAB: AKILLI PLAN ─────────────────────────────────── -->
+    <div class="tab-content" id="tabSmartPlans">
+      <div class="ch-toolbar">
+        <span class="ch-hint">Belirlediğiniz gün/saat penceresinde, günlük arama tavanıyla otomatik kampanya başlatır — her gün elle "Başlat"a basmanıza gerek kalmaz.</span>
+        <button class="btn-upload" id="btnAddSmartPlan">+ Yeni Plan</button>
+      </div>
+      <div id="smartPlansList">
+        <div class="drawer-loading">⏳ Yükleniyor...</div>
+      </div>
+    </div>
+
+    <!-- ── TAB: PRATİK YAP (Roleplay) ─────────────────────────────────── -->
+    <div class="tab-content" id="tabRoleplay">
+      <div class="rp-scroll">
+        <div class="ch-toolbar">
+          <span class="ch-hint" id="roleplayRateNote">Bu görüşmeler gerçek bir arama gibi dakika başı bakiyenizden düşülür.</span>
+        </div>
+        <div class="rp-cards" id="roleplayCards">
+          <div class="drawer-loading">⏳ Yükleniyor...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Transkript popup'ı — .tab-content/.rp-scroll'un DIŞINDA, sayfaya sabit
+         konumlu (fixed). Scroll/zoom'a bağımlı kalmadan her zaman görünür olsun
+         diye — önceki halde .rp-scroll içinde olduğu için kullanıcı sayfayı
+         zoom-out yapmadan göremiyordu. -->
+    <div class="rp-transcript-overlay" id="roleplayTranscriptOverlay" style="display:none">
+      <div class="rp-transcript-panel" id="roleplayTranscriptPanel">
+        <div class="rp-transcript-header">
+          <span id="rpTranscriptTitle">🎙️ Canlı Görüşme</span>
+          <button class="btn-secondary" id="btnRoleplayEndFromPanel">🔴 Görüşmeyi Bitir</button>
+        </div>
+        <div class="rp-transcript-body" id="roleplayTranscriptBody"></div>
+      </div>
+    </div>
+
   </main>
+</div>
+
+<!-- YENİ AKILLI PLAN MODAL -->
+<div class="modal-overlay" id="spFormOverlay"></div>
+<div class="modal" id="spFormModal">
+  <div class="modal-header">
+    <div class="modal-title">🧠 Yeni Akıllı Plan</div>
+    <button class="modal-close" id="spFormClose">✕</button>
+  </div>
+  <div class="modal-body">
+    <div class="form-group">
+      <label>Plan Adı *</label>
+      <input type="text" id="spFormName" placeholder="Örn: Hiç Aranmamışlar — Sabah Turu" />
+    </div>
+    <div class="form-group">
+      <label>Hedef Kitle *</label>
+      <select id="spFormRuleType">
+        <option value="STATIC_LIST">Sabit Liste — Adaylar → Liste'den seçilenler</option>
+        <option value="NEVER_CONTACTED">Hiç Aranmamış Kişiler</option>
+        <option value="STAGE_STALE">Bir Aşamada Uzun Süredir Hareketsiz</option>
+        <option value="STAGE_EQUALS">Belirli Bir Aşamadaki Herkes</option>
+        <option value="SOURCE_EQUALS">Belirli Bir Kaynaktan Gelenler</option>
+        <option value="TAG_INCLUDES">Belirli Bir Etikete Sahip Olanlar</option>
+      </select>
+
+      <div id="spRuleStaticList" class="sp-rule-subfield">
+        <div class="adm-field-hint" style="margin:6px 0">Adaylar sekmesinde Liste görünümünde seçtiğiniz adaylar buraya gelir. Önce Adaylar → Liste'den seçim yapın.</div>
+        <div id="spFormSelectionSummary" class="is-headline"><span class="is-warn-static">Henüz seçim yok — Adaylar sekmesine gidip Liste görünümünden aday seçin</span></div>
+      </div>
+
+      <div id="spRuleStageStale" class="sp-rule-subfield" style="display:none">
+        <div class="sp-rule-inline">
+          <select id="spRuleStaleStage">
+            <option value="NEW">Yeni</option>
+            <option value="CONTACTED">İletişime Geçildi</option>
+            <option value="QUALIFIED">Nitelikli</option>
+            <option value="VIEWING">Gezme</option>
+            <option value="OFFER">Teklif</option>
+          </select>
+          <input type="number" id="spRuleStaleDays" min="1" value="30" style="width:80px" />
+          <span class="adm-field-hint">gündür hareketsiz</span>
+        </div>
+      </div>
+
+      <div id="spRuleStageEquals" class="sp-rule-subfield" style="display:none">
+        <select id="spRuleStage">
+          <option value="NEW">Yeni</option>
+          <option value="CONTACTED">İletişime Geçildi</option>
+          <option value="QUALIFIED">Nitelikli</option>
+          <option value="VIEWING">Gezme</option>
+          <option value="OFFER">Teklif</option>
+          <option value="WON">Kazanıldı</option>
+          <option value="LOST">Kaybedildi</option>
+        </select>
+      </div>
+
+      <div id="spRuleSourceEquals" class="sp-rule-subfield" style="display:none">
+        <select id="spRuleSource">
+          <option value="MANUAL">Manuel</option>
+          <option value="META_LEAD_AD">Meta Lead Ad</option>
+          <option value="CSV_IMPORT">CSV</option>
+          <option value="CALL_CAMPAIGN">Arama Sonucu</option>
+          <option value="REFERRAL">Referans</option>
+          <option value="OTHER">Diğer</option>
+        </select>
+      </div>
+
+      <div id="spRuleTagIncludes" class="sp-rule-subfield" style="display:none">
+        <input type="text" id="spRuleTag" placeholder="Etiket adı..." list="spRuleTagOptions" />
+        <datalist id="spRuleTagOptions"></datalist>
+      </div>
+
+      <div class="sp-rule-inline" style="margin-top:8px">
+        <button class="btn-secondary" id="btnSpPreviewSegment" type="button">Kaç kişi eşleşiyor?</button>
+        <span id="spSegmentPreviewResult" class="adm-field-hint"></span>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Senaryo</label>
+      <select id="spFormScenario"><option value="">— Varsayılan prompt —</option></select>
+    </div>
+    <div class="form-group">
+      <label>Günler *</label>
+      <div class="sp-days-picker" id="spFormDays">
+        <label><input type="checkbox" value="1" checked /> Pzt</label>
+        <label><input type="checkbox" value="2" checked /> Sal</label>
+        <label><input type="checkbox" value="3" checked /> Çar</label>
+        <label><input type="checkbox" value="4" checked /> Per</label>
+        <label><input type="checkbox" value="5" checked /> Cum</label>
+        <label><input type="checkbox" value="6" /> Cmt</label>
+        <label><input type="checkbox" value="0" /> Paz</label>
+      </div>
+    </div>
+    <div class="form-group sp-hour-row">
+      <div>
+        <label>Başlangıç Saati *</label>
+        <input type="number" id="spFormStartHour" min="0" max="23" value="9" />
+      </div>
+      <div>
+        <label>Bitiş Saati *</label>
+        <input type="number" id="spFormEndHour" min="0" max="23" value="18" />
+      </div>
+      <div>
+        <label>Günlük Arama Tavanı</label>
+        <input type="number" id="spFormDailyCap" min="0" placeholder="0 = sınırsız" />
+      </div>
+      <div>
+        <label>Eşzamanlılık</label>
+        <input type="number" id="spFormMaxConcurrent" min="1" value="1" />
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-modal-cancel" id="spFormCancel" type="button">Vazgeç</button>
+      <button class="btn-modal-confirm" id="spFormSave" type="button">Planı Oluştur</button>
+    </div>
+  </div>
 </div>
 
 <!-- KAMPANYA DETAY MODAL -->
@@ -683,9 +966,34 @@
       <label>Not</label>
       <textarea id="leadFormNotes" rows="3" placeholder="Serbest not..."></textarea>
     </div>
+    <div class="form-group">
+      <label>Etiketler</label>
+      <input type="text" id="leadFormTags" placeholder="örn: sicak, yatirimci (virgülle ayırın)" />
+    </div>
     <div class="modal-actions">
       <button class="btn-modal-cancel" id="leadFormCancel" type="button">Vazgeç</button>
       <button class="btn-modal-confirm" id="leadFormSave" type="button">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADAY İÇE AKTARMA (CSV/EXCEL) + ÇAKIŞMA ÇÖZÜMÜ MODALI -->
+<div class="modal-overlay" id="leadImportOverlay"></div>
+<div class="modal" id="leadImportModal">
+  <div class="modal-header">
+    <div class="modal-title">📂 Adayları İçe Aktar</div>
+    <button class="modal-close" id="leadImportClose">✕</button>
+  </div>
+  <div class="modal-body">
+    <div id="leadImportSummary"></div>
+    <div class="form-group" id="leadImportTagsGroup" style="display:none">
+      <label>Bu partiye etiket ekle (opsiyonel)</label>
+      <input type="text" id="leadImportTags" placeholder="örn: eylul-2026-kampanya (virgülle ayırın)" />
+    </div>
+    <div id="leadImportConflicts"></div>
+    <div class="modal-actions">
+      <button class="btn-modal-cancel" id="leadImportCancel" type="button">Vazgeç</button>
+      <button class="btn-modal-confirm" id="leadImportConfirm" type="button" style="display:none">İçe Aktar</button>
     </div>
   </div>
 </div>
@@ -803,6 +1111,14 @@
         <label>Sistem Promptu</label>
         <textarea id="scenarioPrompt" rows="10" placeholder="[Identity]&#10;Sen bir..."></textarea>
       </div>
+      <div class="form-group">
+        <label>Ses Modeli (ElevenLabs)</label>
+        <select id="scenarioVoiceModel" style="width:auto;min-width:260px">
+          <option value="">Asistan varsayılanı (v3)</option>
+          <option value="eleven_v4_turbo">v4 Turbo — daha hızlı, daha ifadeli (deneysel)</option>
+        </select>
+        <div class="camp-help">Yalnızca bu senaryoyla yapılan aramaları etkiler. v4 Turbo'da metin içi ses etiketleri ([warm], [calm] gibi) uygulanır.</div>
+      </div>
       <div class="scenario-form-actions">
         <button class="btn-secondary" id="btnScenarioCancel">İptal</button>
         <button class="btn-start" id="btnScenarioSave" style="width:auto;padding:10px 20px">Kaydet</button>
@@ -826,10 +1142,6 @@
 
     <div id="pgStructuredFields">
       <div class="form-group">
-        <label>Şirket / Marka <span class="label-hint">zorunlu</span></label>
-        <input type="text" id="pgCompanyName" placeholder="Keller Williams Gayrimenkul" />
-      </div>
-      <div class="form-group">
         <label>Aramanın Amacı <span class="label-hint">zorunlu</span></label>
         <textarea id="pgCallGoal" rows="2" placeholder="Geçmişte ilgi göstermiş kişileri işe alım görüşmesine yeniden davet etmek"></textarea>
       </div>
@@ -840,10 +1152,6 @@
       <div class="form-group">
         <label>Konuşma Tonu <span class="label-hint">opsiyonel</span></label>
         <input type="text" id="pgTone" placeholder="Sıcak, güven verici, baskıcı olmayan" />
-      </div>
-      <div class="form-group">
-        <label>Detaylar İçin Yönlendirilecek Kişi <span class="label-hint">opsiyonel</span></label>
-        <input type="text" id="pgContactPerson" placeholder="Yeşim Hanım" />
       </div>
       <div class="form-group">
         <label>Maks. Görüşme Süresi (saniye) <span class="label-hint">opsiyonel</span></label>
@@ -867,15 +1175,22 @@
       <button class="btn-start" id="btnPgGenerate" style="width:auto;padding:10px 20px">Oluştur</button>
     </div>
   </div>
+  <div class="pg-loading-overlay" id="pgLoadingOverlay" style="display:none">
+    <div class="spinner" style="width:28px;height:28px;border-width:3px"></div>
+    <div class="pg-loading-text">✨ AI script'inizi yazıyor — bu 10-15 saniye sürebilir...</div>
+  </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="ui-kit.js"></script>
 <script src="tour.js"></script>
+<script src="terms.js"></script>
 <script src="app.js"></script>
 <script src="leads.js"></script>
 <script src="whatsapp.js"></script>
+<script src="smartPlans.js"></script>
+<script src="roleplay.js"></script>
 <script>
 // ─── KULLANIM KILAVUZU (onboarding tour) — non-technical danışmanlar için ────
 var APP_TOUR_STEPS = [

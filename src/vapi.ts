@@ -1,7 +1,7 @@
 // PropCall AI - Vapi API entegrasyonu — her danışman kendi Vapi hesabıyla çalışır,
 // bu yüzden her fonksiyon kimlik bilgilerini (apiKey/assistantId) açıkça parametre alır.
 
-import { CustomerInfo } from './types';
+import { CustomerInfo, ScenarioVoiceModel } from './types';
 import { ResolvedVapiCredentials } from './users';
 import { DEFAULT_SCENARIO_TEMPLATE } from './scenarios';
 
@@ -45,8 +45,62 @@ async function getAssistantModelConfig(apiKey: string, assistantId: string): Pro
   return result;
 }
 
+// Asistanın ses (TTS) ayarından SADECE voiceId + provider'ı okur — roleplay
+// override'ında danışmanın seçtiği sesi korumak, ama vurgu/hız parametrelerini
+// kendimiz belirlemek için (bkz. buildRoleplayAssistantOverrides).
+interface AssistantVoice { voiceId: string; stability?: number; similarityBoost?: number }
+
+// Asistanın 11labs ses ayarını (voiceId + stability/similarity) okur; kısa süreli
+// cache — kampanyada her arama için Vapi'ye ek bir GET atmamak için.
+const voiceCache = new Map<string, { voice: AssistantVoice | null; cachedAt: number }>();
+async function getAssistantVoice(apiKey: string, assistantId: string): Promise<AssistantVoice | null> {
+  const cached = voiceCache.get(assistantId);
+  if (cached && Date.now() - cached.cachedAt < MODEL_CONFIG_TTL_MS) return cached.voice;
+  let voice: AssistantVoice | null = null;
+  try {
+    const resp = await fetch(`${VAPI_BASE_URL}/assistant/${assistantId}`, { headers: getHeaders(apiKey) });
+    if (resp.ok) {
+      const data = await resp.json() as { voice?: { provider?: string; voiceId?: string; stability?: number; similarityBoost?: number } };
+      if (data.voice?.provider === '11labs' && data.voice.voiceId) {
+        voice = { voiceId: data.voice.voiceId, stability: data.voice.stability, similarityBoost: data.voice.similarityBoost };
+      }
+    }
+  } catch { /* aşağıda null */ }
+  voiceCache.set(assistantId, { voice, cachedAt: Date.now() });
+  return voice;
+}
+
+async function getAssistantVoiceId(apiKey: string, assistantId: string): Promise<string | null> {
+  return (await getAssistantVoice(apiKey, assistantId))?.voiceId ?? null;
+}
+
+// Senaryo bazlı TTS modeli override'ı (bkz. types.ts ScenarioVoiceModel). Asistanın
+// kendi sesini (voiceId) korur, sadece modeli değiştirir. eleven_v4_turbo'da
+// style/speed/SSML YOK — ifade yalnızca stability ve metin içi ses etiketleriyle
+// ([warm], [calm] …) yönetilir; bu yüzden o alanlar bilinçli olarak gönderilmiyor.
+// Asistan 11labs değilse (veya okunamazsa) override uygulanmaz, arama normal gider.
+async function buildScenarioVoiceOverride(
+  apiKey: string, assistantId: string, model: ScenarioVoiceModel,
+): Promise<Record<string, unknown> | null> {
+  const voice = await getAssistantVoice(apiKey, assistantId);
+  if (!voice) return null;
+  const isV4 = model === 'eleven_v4_turbo';
+  return {
+    provider: '11labs',
+    voiceId: voice.voiceId,
+    model,
+    language: 'tr',
+    // v4: düşük stability = daha canlı tonlama; asistan ayarı varsa ona saygı duy.
+    stability: voice.stability ?? (isV4 ? 0.4 : 0.6),
+    similarityBoost: voice.similarityBoost ?? 0.75,
+    useSpeakerBoost: true,
+    ...(isV4 ? {} : { optimizeStreamingLatency: 4 }),
+  };
+}
+
 function invalidateAssistantCaches(assistantId: string): void {
   modelConfigCache.delete(assistantId);
+  voiceCache.delete(assistantId);
   systemPromptCache.delete(assistantId);
 }
 
@@ -55,7 +109,7 @@ export async function createVapiCall(
   creds: ResolvedVapiCredentials,
   customer: CustomerInfo,
   systemPrompt?: string,
-  personalization?: { agentName?: string; consultantName?: string; companyName?: string },
+  personalization?: { agentName?: string; voiceModel?: ScenarioVoiceModel },
 ): Promise<VapiCallResponse> {
   const { apiKey, phoneNumberId, assistantId } = creds;
 
@@ -65,18 +119,10 @@ export async function createVapiCall(
       customerRegion: customer.region || 'belirtilmemiş',
       customerNotes: customer.notes || 'yok',
       customerReference: customer.reference || 'yok',
-      // Senaryo metinlerinde {{agentName}}/{{consultantName}}/{{companyName}} olarak
-      // kullanılır — script'i elle düzenlemeye gerek kalmadan kişiselleştirilmiş bir
-      // arama deneyimi sağlar. agentName = asistanın kendi kimliği (örn. "Deniz"),
-      // consultantName = danışmanın GERÇEK adı (örn. "İbrahim Erokyar") — ikisi kasıtlı
-      // olarak ayrı (bkz. users.assistant_name vs users.name).
+      // Senaryo metinlerinde {{agentName}} olarak kullanılır — asistanın kendi
+      // konuşma kimliği (örn. "Deniz"), script'i elle düzenlemeye gerek kalmadan
+      // kişiselleştirilmiş bir arama deneyimi sağlar.
       agentName: personalization?.agentName?.trim() || 'Asistan',
-      // Boş bırakılırsa "{{companyName}}'dan 'ın asistanı" gibi kırık bir cümle çıkardı
-      // (bkz. "AgentName/TeamName" olayı) — her zaman dolgulu, cümleyi bozmayan bir
-      // varsayılan (users.name artık zorunlu alan — setUserName/createUser boş adı
-      // reddediyor — bu satır sadece eski/elle müdahale edilmiş kayıtlara karşı savunma).
-      consultantName: personalization?.consultantName?.trim() || 'ekibimiz',
-      companyName: personalization?.companyName?.trim() || 'Şirketimiz',
     },
   };
 
@@ -91,12 +137,24 @@ export async function createVapiCall(
     };
   }
 
+  if (personalization?.voiceModel) {
+    const voice = await buildScenarioVoiceOverride(apiKey, assistantId, personalization.voiceModel);
+    if (voice) assistantOverrides.voice = voice;
+  }
+
   const body = {
     phoneNumberId,
     assistantId,
     customer: {
       number: customer.phone,
-      name: customer.name,
+      // Vapi customer.name'i 40 karakterle sınırlıyor. CRM'deki tüzel kişi/kurum
+      // adları ("DEVA DANIŞMANLIK VE ULUSLARARASI TİC.LTD.ŞTİ." gibi) bunu rahatça
+      // aşıyor — kırpılmadan gönderilince Vapi isteğin TAMAMINI 400 ile reddediyordu,
+      // kişi hiç aranmadan "başarısız" yakılıyordu (production'da düzinelerce kayıt
+      // bu yüzden atlanmıştı). {{customerName}} değişkeni (assistantOverrides,
+      // yukarıda) zaten TAM adı taşıyor — asistanın konuşmada kullandığı isim budur,
+      // burası sadece Vapi'nin dashboard/log görünümü için.
+      name: customer.name?.trim().slice(0, 40) || undefined,
     },
     assistantOverrides,
   };
@@ -112,6 +170,144 @@ export async function createVapiCall(
   }
 
   return response.json() as Promise<VapiCallResponse>;
+}
+
+// Roleplay Pratik (bkz. src/personas.ts) — createVapiCall'daki assistantOverrides
+// hesaplama mantığının (model.messages ile geçici sistem promptu enjeksiyonu),
+// REST /call'a hiç POST atmadan sadece override OBJESİNİ üreten hali. Tarayıcıdaki
+// Vapi Web SDK (vapiSDK.run) bu objeyi assistantOverrides olarak alıp danışmanın
+// kalıcı asistanını DEĞİŞTİRMEDEN geçici bir persona promptuyla çalıştırır.
+// Roleplay için sabit ElevenLabs ses ID'leri, cinsiyete göre. Danışmanın kendi
+// asistan sesi (varsayılan olarak kadın, örn. FDs1ZX5J4e4f2c2erxtW) sadece kadın
+// personalarda kullanılır — erkek karakterler (Mehmet, Burak, Cem, Kemal, vb.)
+// danışmanın kadın sesiyle konuşuyordu, bu ciddi bir gerçekçilik sorunuydu.
+// 'erkek' ID'si Mustafa'nın ElevenLabs'e eklediği sese sabitlenmiş
+// (bkz. https://elevenlabs.io/voices/7VqWGAWwo2HMrylfKrcm).
+const ROLEPLAY_VOICE_ID_BY_GENDER: Record<'kadin' | 'erkek', string> = {
+  kadin: 'FDs1ZX5J4e4f2c2erxtW',
+  erkek: '7VqWGAWwo2HMrylfKrcm',
+};
+
+export async function buildRoleplayAssistantOverrides(
+  creds: { apiKey: string; assistantId: string },
+  systemPrompt: string,
+  agentName?: string,
+  gender: 'kadin' | 'erkek' = 'kadin',
+): Promise<Record<string, unknown>> {
+  // Sadece provider'ı asistandan okuyoruz — model'i roleplay için AŞAĞIDA sabit
+  // bir değere (ROLEPLAY_MODEL) override ediyoruz, asistanın kendi modelini
+  // (luna) kullanmıyoruz.
+  const { provider } = await getAssistantModelConfig(creds.apiKey, creds.assistantId);
+  // 'kadin' personalarda danışmanın kendi seçtiği sesi kullanmaya devam ediyoruz
+  // (o zaten büyük çoğunlukla kadın), 'erkek' personalarda SABİT erkek sese
+  // geçiyoruz — danışmanın kendi ses tercihinden bağımsız, çünkü karakterin
+  // cinsiyeti prompt'ta net ve ses bununla çelişirse tuhaf kaçar.
+  const voiceId = gender === 'erkek'
+    ? ROLEPLAY_VOICE_ID_BY_GENDER.erkek
+    : (await getAssistantVoiceId(creds.apiKey, creds.assistantId)) || ROLEPLAY_VOICE_ID_BY_GENDER.kadin;
+
+  // ElevenLabs ses parametreleri — vurgu/doğallık parametrelerini roleplay için
+  // ayrı ayarlıyoruz. Varsayılan asistan (createDefaultAssistant) soğuk arama
+  // için ayarlı: style hiç verilmemiş (yani 0 = düz, vurgusuz okuma), speed 1.15
+  // (aceleci), stability 0.6 (monoton tarafa yakın). Pratikte karşımızdaki
+  // "gerçek bir insan" gibi duyulmalı.
+  const voiceOverride = voiceId ? {
+    voice: {
+      provider: '11labs',
+      voiceId,
+      model: 'eleven_v3',
+      language: 'tr',        // Dili açıkça bildir — model tahmin etmesin, Türkçe telaffuz tutarlı olsun
+      stability: 0.35,       // DÜŞÜK = daha fazla tonlama/duygu değişimi (0.6 monoton okutuyordu)
+      similarityBoost: 0.75, // Sesin kendi karakterini koru
+      style: 0.45,           // ASIL VURGU AYARI — 0 (varsayılan) düz okuma demekti
+      useSpeakerBoost: true, // Ses netliği/karakter tutarlılığı
+      speed: 1.0,            // 1.15 aceleci duyuluyordu — normal tempo daha doğal
+      // eleven_v3 en yüksek ifade gücünü veriyor ama en yavaş model — vurgu
+      // önceliğimiz olduğu için modeli değiştirmiyoruz, sadece ElevenLabs'ın
+      // kendi streaming gecikmesini maksimuma çekip telafi ediyoruz (0-4, varsayılan
+      // 3). minCharacters/chunkPlan'a DOKUNMUYORUZ — düşük tutmak kısa parçalar
+      // halinde TTS'e gönderim yapar, bu da "kekeleme" hissi yaratıp tam
+      // istemediğimiz sonucu doğurabilir.
+      optimizeStreamingLatency: 4,
+    },
+  } : {};
+
+  // Roleplay'de LLM'i danışmanın kalıcı asistanından (gpt-5.6-luna) DEĞİL, sabit
+  // gpt-5.6-sol'a override ediyoruz — deneme amaçlı, akıcılık/gerçekçilik
+  // karşılaştırması için. `model` değişkenini (asistandan okunan luna) kasıtlı
+  // olarak KULLANMIYORUZ, sadece `provider`'ı koruyoruz.
+  const ROLEPLAY_MODEL = 'gpt-5.6-sol';
+
+  return {
+    variableValues: { agentName: agentName?.trim() || 'Asistan' },
+    model: { provider, model: ROLEPLAY_MODEL, messages: [{ role: 'system', content: systemPrompt }] },
+    ...voiceOverride,
+
+    // GERİ ALINDI: Soniox stt-rt-v5 denendi ama gerçek bir web call'da Daily.co
+    // "Meeting ended due to ejection" hatasıyla görüşmeyi saniyeler içinde
+    // kapatıyordu (REST /call/web isteği 201 dönüyordu ama runtime'da bağlantı
+    // kuruluyor-kuruluyor sonra atılıyordu — muhtemelen bu Vapi hesabında Soniox
+    // provider'ı etkin değil, ya da negatif endpointSensitivity kombinasyonu bu
+    // hesap/plan için desteklenmiyor). Deepgram nova-3'e dönüldü — bu, danışmanın
+    // ana asistanında zaten kanıtlanmış şekilde çalışıyor.
+    transcriber: {
+      provider: 'deepgram',
+      model: 'nova-3',
+      language: 'tr',
+      endpointing: 400, // varsayılan 150'den daha sabırlı — Türkçenin devrik/ekli
+                        // cümle yapısında erken kesmeyi azaltmak için
+    },
+
+    // FSBO personaları müşteri rolünde — konuşmayı danışman başlatmalı, AI değil
+    // (bkz. persona promptlarındaki "danışman kendini tanıtana kadar konuşma"
+    // kuralı). Vapi'nin "asistan ilk konuşmayı yapmaz, kullanıcıyı bekler" modu.
+    firstMessageMode: 'assistant-waits-for-user',
+
+    // ─── Roleplay'e ÖZEL konuşma ayarları ───────────────────────────────────
+    // Danışmanın kendi asistanı GİDEN SOĞUK ARAMA için ayarlı (bkz.
+    // createDefaultAssistant): telefon hattında, tek kişiyle, 2 dakikalık aramalar
+    // için agresif kesme/erken cevap değerleri kullanıyor. Tarayıcıdan yapılan
+    // pratikte bu ayarlar ters tepiyor — ofis gürültüsü/hoparlör sesi AI'ı sürekli
+    // kesiyor, Türkçenin devrik/ekli cümle yapısında AI danışman cümlesini
+    // bitirmeden cevaba başlayıp kendini düzeltiyor ("başa sarma" hissi).
+    // Bu yüzden roleplay için AYRI, daha sabırlı değerler override ediliyor.
+
+    // Gürültü engelleme AÇIK (Krisp) — tarayıcı/laptop mikrofonu telefon hattından
+    // çok daha fazla ortam sesi topluyor. NOT: assistantOverrides'ta alan adı
+    // "backgroundDenoisingEnabled" DEĞİL (o sadece asistan tanımında geçerli),
+    // burada backgroundSpeechDenoisingPlan kullanılmalı — yanlış alan göndermek
+    // Vapi'nin tüm isteği reddetmesine yol açar.
+    backgroundSpeechDenoisingPlan: { smartDenoisingPlan: { enabled: true } },
+
+    // AI'ın susması için gereken eşiği YÜKSELT: varsayılan 4 kelime yerine 10 kelime
+    // (şema üst sınırı). Kısa bir öksürük, arka plandaki konuşma ya da "hı-hı" gibi
+    // onay sesleri artık AI'ı kesmiyor — kesmesi için karşı tarafın gerçekten
+    // konuşmaya başlaması gerekiyor.
+    // DİKKAT: voiceSeconds'ın Vapi şemasındaki ÜST SINIRI 0.5 — daha büyük bir değer
+    // göndermek TÜM isteği 400 ile reddettirir (call hiç oluşmaz). Bu yüzden gürültü
+    // toleransı voiceSeconds'tan değil, numWords + backoffSeconds'tan sağlanıyor.
+    stopSpeakingPlan: { numWords: 10, voiceSeconds: 0.5, backoffSeconds: 2 },
+
+    // Danışman konuşmayı BİTİRENE kadar bekle: Türkçede cümle sonu tespiti zor
+    // (noktalama olmadan, ek yığınlarıyla biten cümleler). waitSeconds 0.2 → 0.8,
+    // noktalama yoksa 1 → 2sn bekleme. AI artık yarıda atlamıyor.
+    startSpeakingPlan: {
+      waitSeconds: 0.8,
+      smartEndpointingEnabled: 'livekit',
+      transcriptionEndpointingPlan: { onPunctuationSeconds: 0.3, onNoPunctuationSeconds: 2, onNumberSeconds: 0.5 },
+    },
+
+    // Pratik görüşmesi 2 dakikayla sınırlı kalmasın — 10 dakika.
+    maxDurationSeconds: 600,
+
+    // Otomatik kapanma ifadeleri temizleniyor — gerçek aramada "iyi günler" demek
+    // görüşmeyi bitirir, ama pratikte danışman bunu senaryo gereği doğal olarak
+    // söyleyebilir ve görüşme ortasında beklenmedik şekilde kapanır. Pratiği
+    // bitirmenin tek yolu "Görüşmeyi Bitir" butonu olmalı.
+    // NOT: silenceTimeoutSeconds ve endCallFunctionEnabled assistantOverrides
+    // şemasında YOK (sadece asistan tanımında var) — göndermiyoruz.
+    endCallPhrases: [],
+  };
 }
 
 // Vapi hata gövdesi genelde {"message": "..." | ["...", ...], "error": "...", "statusCode": ...}
@@ -214,10 +410,19 @@ export async function verifyVapiApiKey(apiKey: string): Promise<{ ok: boolean; e
     const resp = await fetch(`${VAPI_BASE_URL}/assistant`, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
-    if (!resp.ok) return { ok: false, error: `HTTP ${resp.status}` };
+    if (!resp.ok) {
+      return {
+        ok: false,
+        error: resp.status === 401 || resp.status === 403
+          ? 'API Key geçersiz — Vapi hesabınızdan doğru anahtarı kopyaladığınızdan emin olun.'
+          : `Vapi doğrulaması başarısız (HTTP ${resp.status})`,
+      };
+    }
     return { ok: true };
-  } catch (err) {
-    return { ok: false, error: String(err) };
+  } catch {
+    // fetch'in kendisi patladı (ağ/DNS/TLS) — ham "TypeError: fetch failed" metni
+    // kullanıcıya hiçbir şey anlatmaz.
+    return { ok: false, error: 'Vapi sunucusuna ulaşılamadı — internet bağlantınızı kontrol edip tekrar deneyin.' };
   }
 }
 
@@ -275,7 +480,7 @@ export async function importAssistant(
 // Yeni danışman onboarding'i için — var olan bir template asistanı klonlamak yerine,
 // ses/model/transkripsiyon config'i burada SABİT tanımlanıp sıfırdan yeni bir Vapi
 // assistant oluşturulur (merkezi hesap üzerinde). Sistem promptu DEFAULT_SCENARIO_TEMPLATE
-// (scenarios.ts, {{agentName}}/{{companyName}} değişkenli) — böylece senaryo seçilmeden
+// (scenarios.ts, {{agentName}} değişkenli) — böylece senaryo seçilmeden
 // yapılan aramalarda da (Vapi'nin kendi baz promptu) tutarlı bir kimlik/davranış olur.
 export async function createDefaultAssistant(apiKey: string, name: string): Promise<{ id: string; name: string }> {
   const body = {

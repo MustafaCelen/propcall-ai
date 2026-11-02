@@ -77,6 +77,30 @@ export async function initDb(): Promise<void> {
     -- Varsayılan 'Deniz', danışman Ayarlarım'dan değiştirebilir.
     ALTER TABLE users ADD COLUMN IF NOT EXISTS assistant_name TEXT NOT NULL DEFAULT 'Deniz';
 
+    -- Kullanım Koşulları ve Sorumluluk Beyanı — danışman aradığı/mesaj attığı
+    -- numaraların İYS/KVKK uygunluğundan KENDİSİNİN sorumlu olduğunu kabul etmeden
+    -- sistemi kullanamaz (bkz. requireUserAuth + /api/terms/accept, server.ts).
+    -- terms_version: metin ileride değişirse eski kabul geçersiz sayılır, danışman
+    -- yeni versiyonu tekrar onaylamak zorunda kalır — CURRENT_TERMS_VERSION (auth.ts)
+    -- ile karşılaştırılır. accepted_ip, "kabul etti" iddiasına karşı basit bir kanıt.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_version INT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_ip TEXT;
+
+    -- Global "beni bir daha aramayın" ret listesi — İYS ret-listesi mantığıyla aynı
+    -- ilke: bir numara bir danışmana bunu söylediğinde ŞİRKET ÇAPINDA hiçbir danışman
+    -- o numarayı bir daha arayamaz (bkz. src/dncList.ts, campaign.ts fillQueue +
+    -- server.ts /api/call). Numara TEK doğal anahtar — hangi danışman/hangi arama
+    -- eklediyse denetim amaçlı ayrıca tutulur ama engel numaraya bağlı, kullanıcıya değil.
+    CREATE TABLE IF NOT EXISTS do_not_call_list (
+      phone        TEXT PRIMARY KEY,
+      reason       TEXT,             -- transkriptten/görüşme özetinden çıkan kısa gerekçe
+      source       TEXT NOT NULL,    -- 'ai_detected' | 'manual'
+      added_by_user_id TEXT REFERENCES users(id),
+      vapi_call_id TEXT,             -- ai_detected ise tespitin yapıldığı görüşme
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     -- Jeton (TL) hareketleri — her yükleme/ücretlendirme kalıcı bir satır. balance_try
     -- hızlı okunabilir güncel bakiye, buradaki kayıtlar denetim/geçmiş içindir.
     CREATE TABLE IF NOT EXISTS credit_transactions (
@@ -167,6 +191,11 @@ export async function initDb(): Promise<void> {
     -- aynı (hiç retry yok). delay_minutes sadece max_attempts>1 iken anlam kazanır.
     ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS retry_max_attempts  INT NOT NULL DEFAULT 1;
     ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS retry_delay_minutes INT NOT NULL DEFAULT 30;
+    -- Reattempt kuralı varsayılanı (sektör standardı, bkz. JustCall "Reattempt Rules"):
+    -- cevapsız/meşgul → 2 saat sonra 1 kez daha. Sadece YENİ satırları etkiler;
+    -- mevcut kampanyaların kendi değerleri korunur.
+    ALTER TABLE campaigns ALTER COLUMN retry_max_attempts  SET DEFAULT 2;
+    ALTER TABLE campaigns ALTER COLUMN retry_delay_minutes SET DEFAULT 120;
 
     -- Lead kaynağı (hangi ilan/reklam/liste) — raporlamada dönüşüm oranını kaynağa göre kırmak için.
     -- customer_phone/scenario_id gibi diğer JSONB alanlar da düz sütun değil, fonksiyonel
@@ -195,6 +224,14 @@ export async function initDb(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_appointments_user_id ON appointments (user_id);
     CREATE INDEX IF NOT EXISTS idx_scenarios_user_id    ON scenarios (user_id);
     CREATE INDEX IF NOT EXISTS idx_campaigns_user_id    ON campaigns (user_id);
+
+    -- Roleplay Pratik (bkz. src/personas.ts) — danışmanın tarayıcıdan mikrofonla AI
+    -- persona ile yaptığı pratik görüşmeler de GERÇEK aramalarla aynı calls tablosuna
+    -- yazılır (aynı webhook/billing zincirini olduğu gibi yeniden kullanmak için) —
+    -- ama İstatistikler/Geçmiş Aramalar gibi gerçek performans görünümlerini kirletmesin
+    -- diye bu bayrakla ayırt edilir (bkz. src/calls.ts getStats RANGE filtresi).
+    ALTER TABLE calls ADD COLUMN IF NOT EXISTS is_practice BOOLEAN NOT NULL DEFAULT false;
+    CREATE INDEX IF NOT EXISTS idx_calls_is_practice ON calls (is_practice) WHERE is_practice = true;
 
     -- Admin panelden girilen API key'leri (şifreli) — .env yerine canlı override
     CREATE TABLE IF NOT EXISTS app_settings (
@@ -242,6 +279,41 @@ export async function initDb(): Promise<void> {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_lead_activities_lead_id ON lead_activities (lead_id);
+
+    -- Akıllı Plan — belirli gün/saat penceresinde otomatik kampanya açıp kapatan
+    -- zamanlayıcı (bkz. src/smartPlans.ts). campaigns tablosuna MOD eklemek yerine
+    -- ayrı bir wrapper: her tetiklendiğinde normal bir campaigns satırı yaratıp
+    -- campaignLoad/campaignStart'ı olduğu gibi çağırır — dialer motoruna dokunmaz.
+    -- Faz 3: segment_rule şimdilik sadece sabit bir lead ID listesi tutar
+    -- ({"type":"STATIC_LIST","leadIds":[...]}); kural motoru (NEVER_CONTACTED vb.)
+    -- Faz 4'te eklenecek.
+    CREATE TABLE IF NOT EXISTS smart_plans (
+      id                  TEXT PRIMARY KEY,
+      user_id             TEXT NOT NULL REFERENCES users(id),
+      name                TEXT NOT NULL,
+      status              TEXT NOT NULL DEFAULT 'active', -- active|paused|archived
+      scenario_id         TEXT,
+      scenario_name       TEXT,
+      max_concurrent      INT NOT NULL DEFAULT 1,
+      daily_call_cap      INT NOT NULL DEFAULT 0,         -- 0 = sınırsız
+      days_of_week        INT[] NOT NULL DEFAULT '{1,2,3,4,5}', -- 0=Paz..6=Cmt
+      window_start_hour   INT NOT NULL,
+      window_end_hour     INT NOT NULL,
+      segment_rule        JSONB NOT NULL,
+      last_run_date       DATE,
+      active_campaign_id  TEXT REFERENCES campaigns(id),
+      created_at          TIMESTAMPTZ DEFAULT NOW(),
+      updated_at          TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_smart_plans_user_id ON smart_plans (user_id);
+    CREATE INDEX IF NOT EXISTS idx_smart_plans_status   ON smart_plans (status);
+
+    -- Bir kampanya bir Akıllı Plan tarafından otomatik açıldıysa geriye dönük bağlantı —
+    -- daha önce SADECE kampanya adındaki serbest metin ("Plan Adı — 2026-09-17") vardı,
+    -- danışman kendi plan adını tanımazsa Kampanya Geçmişi'nde "gizemli" bir kampanya
+    -- görüyordu. Elle açılan kampanyalarda NULL kalır.
+    ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS smart_plan_id TEXT REFERENCES smart_plans(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_campaigns_smart_plan_id ON campaigns (smart_plan_id);
 
     -- Meta Lead Ads bağlantısı — danışman Meta Business'tan aldığı Page Access Token'ı
     -- elle yapıştırır (Vapi/ElevenLabs key deseniyle aynı — tam OAuth akışı ayrı bir
@@ -316,6 +388,16 @@ export async function initDb(): Promise<void> {
     -- SADECE buradan gider) veya 'PERSONAL' (şahsi hesap, Baileys/WhatsApp Web
     -- protokolü — KASITLI olarak sadece bire-bir kullanım için, bkz. whatsappPersonal.ts).
     ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS channel TEXT NOT NULL DEFAULT 'TWILIO';
+
+    -- Twilio statusCallback ile güncellenen teslimat durumu (SENT→QUEUED→SENT→
+    -- DELIVERED→READ, veya UNDELIVERED/FAILED) — Twilio'nun kendi MessageStatus
+    -- değerleri büyük harfe çevrilerek doğrudan yazılır, bkz. whatsapp.ts.
+    ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS media_url TEXT;
+
+    -- Kampanya geçmişinde sent/failed sayıları kalıcı olsun diye (whatsapp_campaign_recipients
+    -- tek tek satır tutuyor ama geçmiş listesi bunları hiç aggregate etmiyordu).
+    ALTER TABLE whatsapp_campaigns ADD COLUMN IF NOT EXISTS sent_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE whatsapp_campaigns ADD COLUMN IF NOT EXISTS failed_count INTEGER NOT NULL DEFAULT 0;
 
     -- Şahsi WhatsApp (Baileys) oturumu — dosya sistemi yerine DB'de tutulur, çünkü
     -- Railway container'ları her deploy'da sıfırlanır (useMultiFileAuthState'in

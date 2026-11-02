@@ -9,8 +9,6 @@ export const SUPPORTED_TEMPLATE_VARIABLES = [
   'customerNotes',
   'customerReference',
   'agentName',
-  'consultantName',
-  'companyName',
 ] as const;
 
 const VARIABLE_PATTERN = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;

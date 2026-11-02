@@ -33,6 +33,10 @@ export interface CallSummary {
   ozet: string;
   tavsiye_edilen_aksiyon: 'Ara' | 'Bekleme listesine al' | 'Uğraşma';
   geri_donus_notu: string | null;
+  // Müşteri açıkça "numaramı nereden buldunuz", "bir daha aramayın", "beni arama
+  // listenizden çıkarın" gibi bir talep belirttiyse true — bkz. src/dncList.ts,
+  // bu true olduğunda numara global ret listesine eklenir (TÜM danışmanlar için).
+  beni_aramayin_talebi: boolean;
 }
 
 export interface CallRecord {
@@ -56,6 +60,8 @@ export interface CallRecord {
   scenarioName?: string;
   campaignId?: string;
   leadSource?: string; // hangi ilan/reklam/liste — raporlamada kaynak bazlı dönüşüm için
+  isPractice?: boolean; // Roleplay Pratik görüşmesi mi — bkz. src/personas.ts
+  personaId?: string;   // pratikse hangi persona ile (örn. 'fsbo-orta')
 }
 
 export interface Appointment {
@@ -72,10 +78,18 @@ export interface Appointment {
   outcomeNote?: string;
 }
 
+// Senaryo bazında ElevenLabs TTS modeli. Boş = danışmanın Vapi asistanındaki
+// varsayılan ses modeli (bugün eleven_v3) kullanılır. 'eleven_v4_turbo' seçilince
+// SADECE bu senaryoyla yapılan aramalar v4 Turbo ile seslendirilir — danışmanın
+// asistanına dokunulmaz (bkz. vapi.ts createVapiCall, assistantOverrides.voice).
+export type ScenarioVoiceModel = 'eleven_v3' | 'eleven_v4_turbo';
+export const SCENARIO_VOICE_MODELS: readonly ScenarioVoiceModel[] = ['eleven_v3', 'eleven_v4_turbo'];
+
 export interface Scenario {
   id: string;
   name: string;
   systemPrompt: string;
+  voiceModel?: ScenarioVoiceModel;
   createdAt: string;
   updatedAt?: string;
 }
@@ -205,6 +219,8 @@ export interface Lead {
   email: string | null;
   phone: string | null;
   notes: string | null;
+  region: string | null;
+  reference: string | null;
   metaLeadId: string | null;
   tags: string[];
   adData: LeadAdData | null;
@@ -212,6 +228,11 @@ export interface Lead {
   whatsappIgnored?: boolean; // true ise bu numaradan gelen WhatsApp yazışmaları AI analizi
                              // tetiklemez, stage hep NEW kalır — danışmanın "bu şahsi bir
                              // kişi, müşteri değil" diye elle işaretlemesi için (bkz. whatsappCampaigns.ts)
+  // Toplu içe aktarmadan (CSV/Excel) geldiyse: hangi dosya/kaynak etiketi ve
+  // hangi yükleme oturumundan geldiği — "bu içe aktarmayı geri al" gibi ileri
+  // özellikler ve raporlama için (bkz. leads.ts importSource kullanımı).
+  importSource: string | null;
+  importBatchId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -268,6 +289,7 @@ export interface WhatsappMessage {
   campaignId: string | null;
   errorMessage: string | null;
   channel: MessageChannel;
+  mediaUrl: string | null;
   createdAt: string;
 }
 
@@ -286,6 +308,8 @@ export interface WhatsappCampaign {
   status: WhatsappCampaignStatus;
   filter: WhatsappCampaignFilter;
   variableMap: Record<string, string>;
+  sentCount: number;
+  failedCount: number;
   createdAt: string;
   completedAt: string | null;
 }

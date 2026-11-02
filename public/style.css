@@ -9,6 +9,13 @@
   --blue:#2E7FD9; --blue-d:rgba(46,127,217,.12);
   --red:#E03E56; --orange:#E07820; --yellow:#C49000; --purple:#7C3AED;
   --r:12px; --rs:8px;
+  /* Kontrol sistemi — her input/select/buton aynı yükseklik ve yazı boyutunda
+     olsun diye tek yerden. (Tasarım geçişi 2026-10-01: önceden her bileşen kendi
+     padding'ini seçiyordu; aynı satırdaki alanlar 2-4px farklı yükseklikteydi.) */
+  --ctl-h:36px; --ctl-h-sm:30px; --ctl-fs:13px; --ctl-px:10px;
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px;
+  --shadow-sm:0 1px 2px rgba(26,29,46,.06);
+  --header-h:56px;
 }
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{height:100%;overflow:hidden}
@@ -391,8 +398,21 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 .modal-header{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
 .modal-title{font-size:15px;font-weight:700}
 .modal-close{background:none;border:none;color:var(--txm);cursor:pointer;font-size:20px;line-height:1}
+.pg-loading-overlay{position:absolute;inset:0;background:var(--s1);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;border-radius:var(--r);z-index:1}
+.pg-loading-text{font-size:13px;color:var(--tx2);max-width:280px;text-align:center;line-height:1.5}
 .modal-close:hover{color:var(--tx)}
 .modal-body{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:16px}
+
+/* ── KULLANIM KOŞULLARI GATE — kapatılamaz, tüm uygulamanın üzerinde ── */
+#termsGateOverlay{position:fixed;inset:0;background:rgba(10,12,16,.85);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px}
+.terms-gate-box{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);width:640px;max-width:100%;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.terms-gate-header{padding:18px 22px;border-bottom:1px solid var(--border);font-size:15px;font-weight:700;flex-shrink:0}
+.terms-gate-body{flex:1;overflow-y:auto;padding:18px 22px;font-size:13px;line-height:1.6;color:var(--tx2)}
+.terms-gate-body h4{color:var(--tx);font-size:13px;margin:16px 0 4px}
+.terms-gate-body h4:first-child{margin-top:0}
+.terms-gate-body p{margin:0 0 4px}
+.terms-gate-checkbox{display:flex;align-items:center;gap:8px;padding:14px 22px;border-top:1px solid var(--border);font-size:13px;color:var(--tx);cursor:pointer;flex-shrink:0}
+.terms-gate-actions{display:flex;justify-content:flex-end;gap:10px;padding:14px 22px;border-top:1px solid var(--border);flex-shrink:0}
 
 .sc-empty{font-size:13px;color:var(--txm);padding:8px 0 12px}
 .btn-sc-new{padding:8px 16px;background:var(--primary-dim);border:1px solid var(--border-a);border-radius:var(--rs);color:var(--primary);font-family:'Sora',sans-serif;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;align-self:flex-start;margin-bottom:8px}
@@ -468,7 +488,11 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 .btn-campaign-pause,.btn-campaign-stop{padding:8px 14px;background:var(--s2);border:1px solid var(--border);border-radius:var(--rs);font-family:'Sora',sans-serif;font-size:13px;color:var(--tx2);cursor:pointer;transition:all .2s;white-space:nowrap}
 .btn-campaign-pause:disabled,.btn-campaign-stop:disabled{opacity:.3;cursor:not-allowed}
 .btn-campaign-pause:not(:disabled):hover{border-color:var(--yellow);color:var(--yellow)}
-.btn-campaign-stop:not(:disabled):hover{border-color:var(--red);color:var(--red)}
+/* Durdur, Duraklat'tan DAHA AĞIR görünmeli: duraklatma geçici, durdurma bekleyen
+   herkesi "durduruldu" işaretler. Önceden ikisi görsel olarak eşdeğerdi ve fark
+   yalnızca hover renginde ortaya çıkıyordu — danışman yanlışlıkla Durdur'a basıyordu. */
+.btn-campaign-stop:not(:disabled){border-color:rgba(217,58,58,.45);color:var(--red)}
+.btn-campaign-stop:not(:disabled):hover{border-color:var(--red);background:rgba(217,58,58,.10)}
 
 @media (max-width: 900px) {
   .campaign-actions-group{width:100%}
@@ -505,12 +529,69 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 .ct-fail{background:rgba(255,83,112,.12);color:var(--red)}
 .ct-error{background:rgba(255,83,112,.18);color:var(--red);border:1px solid rgba(255,83,112,.35)}
 .ct-retry{background:rgba(46,127,217,.12);color:var(--blue)}
+.ct-skip{background:var(--s2);color:var(--txm);border:1px solid var(--border)}
 
 /* Progress bar mini stats — kova renkleri */
 .ps-talked{color:var(--purple)}
 .ps-unreachable{color:var(--orange)}
 .ps-error{color:var(--red)}
 .ps-retrying{color:var(--blue)}
+.ps-skipped{color:var(--txm)}
+
+/* Segmentli ilerleme çubuğu — her kova toplam içindeki payı kadar yer kaplar.
+   Önceden tek renkti; danışman dağılımı ancak metin sayaçlarından okuyabiliyordu. */
+.progress-track-segmented{display:flex}
+.pseg{height:100%;transition:width .5s}
+.pseg-appointment{background:var(--primary)}
+.pseg-talked{background:var(--purple)}
+.pseg-unreachable{background:var(--orange)}
+.pseg-error{background:var(--red)}
+.pseg-skipped{background:var(--txm);opacity:.5}
+
+/* Durum çipleri artık tıklanabilir filtre — buton görünümü değil, metin gibi
+   dursun ama tıklanabilir olduğu belli olsun. */
+.cp-stat{background:none;border:1px solid transparent;border-radius:var(--rs);padding:2px 6px;font-family:inherit;cursor:pointer;transition:all .15s}
+.cp-stat:hover{border-color:var(--border);background:var(--s2)}
+.cp-stat-active{border-color:currentColor;background:var(--s2)}
+.cp-filter-note{font-size:11.5px;color:var(--tx2);margin-top:6px}
+.cp-filter-note a{color:var(--blue)}
+
+/* Limit banner'ı — kampanya sayısal bir limite takıldığında ne olduğunu ve tek
+   tıkla nasıl devam edileceğini söyler. */
+.cp-limit-banner{margin-top:8px;padding:10px 12px;background:rgba(240,173,78,.10);border:1px solid var(--orange);border-radius:var(--rs);display:flex;flex-wrap:wrap;align-items:center;gap:10px;justify-content:space-between}
+.cp-limit-text{font-size:12.5px;color:var(--tx)}
+.cp-limit-actions{display:flex;gap:8px;flex-wrap:wrap}
+.cp-limit-actions button{font-size:12px;padding:6px 12px}
+
+/* Kişi satırında görünür sebep — önceden yalnızca tooltip'teydi, dokunmatik
+   cihazda hiç okunamıyordu. */
+.cp-reason{font-size:10.5px;color:var(--txm);line-height:1.35;margin-top:3px;max-width:260px}
+
+/* Limit alanlarının altındaki yardım metni — limitin geri alınabilir olduğunu
+   baştan öğretir, böylece limite takılmak sürpriz olmaz. */
+.camp-help{display:block;font-size:10px;color:var(--txm);line-height:1.3;margin-top:3px;max-width:150px}
+/* Tekrar arama kuralı tek cümle olarak okunur — grid'de iki hücre kaplar, seçiciler
+   cümlenin içinde doğal genişlikte durur. */
+/* Sonuç paneli — randevu listesi */
+.cp-result-panel{margin-top:10px;padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:var(--rs)}
+.crp-title{font-size:12.5px;font-weight:700;color:var(--tx);margin-bottom:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.crp-sub{font-size:11px;font-weight:500;color:var(--txm)}
+.crp-list{display:flex;flex-direction:column;gap:4px;max-height:260px;overflow-y:auto}
+.crp-row{display:grid;grid-template-columns:minmax(120px,1.2fr) minmax(110px,.9fr) minmax(0,2.4fr) auto;gap:10px;align-items:center;padding:6px 8px;background:var(--s1);border:1px solid var(--border);border-radius:var(--rs);font-size:12px}
+.crp-name{font-weight:600;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.crp-phone{font-family:'JetBrains Mono',monospace;color:var(--txm);white-space:nowrap}
+.crp-note{color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.crp-actions{display:flex;gap:6px;white-space:nowrap}
+.crp-actions button,.crp-actions a{font-size:11px;padding:4px 8px;border-radius:var(--rs);border:1px solid var(--border);background:var(--s2);color:var(--tx);cursor:pointer;text-decoration:none}
+.crp-actions .crp-wa{border-color:#25D366;color:#128C7E}
+@media (max-width:760px){.crp-row{grid-template-columns:1fr auto}.crp-phone,.crp-note{grid-column:1 / -1}}
+.campaign-rerun{display:flex;align-items:center;gap:8px;margin-left:auto;font-size:12px;color:var(--tx)}
+.campaign-rerun-label{font-weight:600;white-space:nowrap}
+.campaign-rerun select{font-size:12px;padding:5px 8px}
+.camp-reattempt{grid-column:span 2}
+.camp-reattempt .camp-help{max-width:none}
+.camp-reattempt-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font-weight:500;font-size:12px;color:var(--tx)}
+.camp-reattempt-row select{width:auto;padding:4px 6px}
 
 /* ── TRANSCRIPT FULL VIEW ── */
 .tr-count{font-size:11px;color:var(--txm);font-weight:400;margin-left:4px}
@@ -654,6 +735,9 @@ audio{width:100%;height:32px;margin-top:4px;filter:invert(.85) hue-rotate(180deg
 .cp-row-click:hover td{background:rgba(0,200,150,.04)!important}
 .cp-ozet-icon{font-size:13px;cursor:default;opacity:.75}
 .cp-ozet-icon:hover{opacity:1}
+.cp-skip-icon{font-size:12px;cursor:default;opacity:.7}
+.cp-call-count{display:inline-block;font-size:10px;font-weight:700;padding:1px 6px;border-radius:999px;background:rgba(255,208,96,.15);color:var(--yellow);margin-left:5px;cursor:default}
+.cp-skip-icon:hover{opacity:1}
 
 /* ── CAMPAIGN COMPLETE BANNER ── */
 .campaign-complete-banner{display:flex;align-items:center;gap:12px;padding:8px 12px;background:var(--primary-dim);border:1px solid var(--border-a);border-radius:var(--rs);margin-top:10px;font-size:13px;font-weight:600;color:var(--primary);flex-wrap:wrap}
@@ -740,6 +824,8 @@ mark.tr-highlight{background:rgba(0,200,150,.3);color:var(--tx);border-radius:2p
 .camp-name-input:focus{border-color:var(--border-a)}
 .camp-name-input::placeholder{color:var(--txm)}
 .camp-name-input.invalid{border-color:var(--red)}
+.camp-focus-note{font-size:11px;color:var(--txm);margin-top:4px}
+.camp-focus-note a{color:var(--blue);text-decoration:underline;cursor:pointer}
 
 /* ── KAMPANYA GEÇMİŞİ TAB ── */
 .ch-toolbar{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--s1);border-bottom:1px solid var(--border);flex-shrink:0}
@@ -752,6 +838,7 @@ mark.tr-highlight{background:rgba(0,200,150,.3);color:var(--tx);border-radius:2p
 .ch-status-stopped{background:rgba(255,83,112,.15);color:var(--red)}
 .btn-ch-detail{padding:3px 10px;background:var(--s3);border:1px solid var(--border);border-radius:var(--rs);color:var(--tx2);font-size:11px;cursor:pointer;transition:all .2s;white-space:nowrap}
 .btn-ch-detail:hover{border-color:var(--primary);color:var(--primary)}
+.ch-smartplan-badge{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:4px;font-size:10px;font-weight:600;background:rgba(155,110,255,.15);color:#b592ff;white-space:nowrap;vertical-align:middle}
 
 /* ── KAMPANYA DETAY MODAL ── */
 #campaignDetailModal{width:720px}
@@ -787,6 +874,12 @@ mark.tr-highlight{background:rgba(0,200,150,.3);color:var(--tx);border-radius:2p
 .is-row{display:flex;gap:10px;font-size:11px;padding:3px 0;color:var(--tx2)}
 .is-row-num{width:28px;flex-shrink:0;color:var(--txm)}
 .is-row-name{width:140px;flex-shrink:0;color:var(--tx)}
+.is-warn-static{color:var(--orange);font-weight:600}
+.lead-import-bulk-row{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;color:var(--tx2)}
+.lead-import-conflict-list{display:flex;flex-direction:column;gap:8px;max-height:320px;overflow-y:auto}
+.lead-import-conflict-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px;background:var(--s2);border-radius:8px;flex-wrap:wrap}
+.lead-import-conflict-info{font-size:12px;color:var(--tx2);flex:1;min-width:200px}
+.lead-import-action-select{font-size:12px;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--s1);color:var(--tx)}
 .is-row-reason{color:var(--orange)}
 
 /* ── SENARYO TEST ÖNİZLEME ── */
@@ -882,6 +975,8 @@ mark.tr-highlight{background:rgba(0,200,150,.3);color:var(--tx);border-radius:2p
 .adm-btn{background:var(--primary);color:#000;border:none;border-radius:8px;padding:9px 18px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;transition:opacity .15s}
 .adm-btn:hover:not(:disabled){opacity:.85}
 .adm-btn:disabled{opacity:.4;cursor:not-allowed}
+.adm-btn-danger{background:rgba(255,83,112,.12);color:var(--red);border:1px solid rgba(255,83,112,.3);border-radius:7px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;transition:all .15s}
+.adm-btn-danger:hover{background:var(--red);color:#fff}
 .adm-form-err{font-size:12px;color:var(--red);display:none;margin-bottom:10px}
 .adm-form-err.show{display:block}
 .adm-form-ok{font-size:12px;color:var(--primary);display:none;margin-bottom:10px}
@@ -1007,6 +1102,102 @@ table.adm-table th.adm-num,table.adm-table td.adm-num{text-align:right;font-fami
 .lead-column-count{font-size:11px;color:var(--txm);font-family:'JetBrains Mono',monospace;background:var(--s2);border-radius:10px;padding:1px 8px}
 .lead-column-body{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px;min-height:60px}
 .lead-column-empty{font-size:11px;color:var(--txm);text-align:center;padding:16px 6px}
+
+.leads-view-toggle{display:flex;gap:4px;background:var(--s2);border-radius:8px;padding:3px}
+.leads-view-btn{background:none;border:none;color:var(--txm);font-size:12px;padding:5px 10px;border-radius:6px;cursor:pointer}
+.leads-view-btn.active{background:var(--s1);color:var(--tx);font-weight:600}
+
+.leads-list-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden;padding:14px 16px;gap:10px}
+.leads-list-filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.leads-list-filters select, .leads-list-filters input[type="text"]{font-size:12px;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--s1);color:var(--tx)}
+.leads-filter-checkbox{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2)}
+
+.leads-selection-bar{display:flex;align-items:center;gap:14px;background:var(--primary-dim);border:1px solid var(--primary);border-radius:8px;padding:8px 14px;font-size:12px;font-weight:600;color:var(--tx)}
+
+.leads-list-table{width:100%;border-collapse:collapse;font-size:12px;overflow-y:auto}
+.leads-list-table thead th{text-align:left;padding:8px 10px;color:var(--txm);font-weight:600;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg)}
+.leads-list-table tbody tr{border-bottom:1px solid var(--border)}
+.leads-list-table tbody tr.selected{background:var(--primary-dim)}
+.leads-list-table td{padding:8px 10px;color:var(--tx2)}
+.leads-list-name{color:var(--tx);cursor:pointer;font-weight:600}
+.leads-list-name:hover{text-decoration:underline}
+.lead-stage-tag{background:var(--s2);border-radius:6px;padding:2px 8px;font-size:11px;color:var(--tx2)}
+.lead-tag-chip{display:inline-block;background:rgba(74,158,255,.12);color:var(--blue);border-radius:5px;padding:2px 7px;font-size:11px;margin:2px 3px 2px 0;white-space:nowrap}
+.lead-tag-list{display:flex;flex-wrap:wrap;gap:2px}
+.lead-tag-chip.removable{display:inline-flex;align-items:center;gap:4px}
+.lead-tag-remove{background:none;border:none;color:inherit;cursor:pointer;padding:0;font-size:10px;opacity:.7;line-height:1}
+.lead-tag-remove:hover{opacity:1}
+
+/* ── PRATİK YAP (Roleplay) ── */
+.rp-scroll{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;min-height:0}
+.rp-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;margin-top:16px}
+.rp-card{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:20px;display:flex;flex-direction:column;gap:8px}
+.rp-card-badge{align-self:flex-start;font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;background:var(--s2);color:var(--tx2)}
+.rp-card-title{font-family:'Sora',sans-serif;font-size:16px;font-weight:700;color:var(--tx)}
+.rp-card-desc{font-size:12.5px;color:var(--tx2);line-height:1.5;flex:1}
+.rp-card-detail-link{font-size:11.5px;color:var(--blue);text-decoration:none;align-self:flex-start}
+.rp-card-detail-link:hover{text-decoration:underline}
+.rp-card-btn{margin-top:6px;width:100%}
+.rp-card-status{font-size:11.5px;color:var(--txm);min-height:14px}
+.rp-card-status.ok{color:var(--primary)}
+
+.rp-cards-family{grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+.rp-family-card{cursor:pointer;align-items:flex-start;transition:border-color .15s,transform .15s}
+.rp-family-card:hover{border-color:var(--primary);transform:translateY(-2px)}
+.rp-family-icon{font-size:28px;line-height:1}
+.rp-family-count{font-size:11.5px;color:var(--txm);margin-top:auto}
+.rp-back-btn{grid-column:1/-1;justify-self:start;background:none;border:1px solid var(--border);border-radius:var(--r);color:var(--tx2);font-size:13px;padding:6px 14px;cursor:pointer;width:max-content}
+.rp-back-btn:hover{border-color:var(--primary);color:var(--tx)}
+.rp-difficulty-heading{grid-column:1/-1;font-family:'Sora',sans-serif;font-size:18px;font-weight:700;color:var(--tx);margin-top:4px}
+
+.rp-briefing-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px}
+.rp-briefing-modal{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);width:480px;max-width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden}
+.rp-briefing-header{display:flex;align-items:flex-start;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--border)}
+.rp-briefing-title{font-family:'Sora',sans-serif;font-size:15px;font-weight:700;color:var(--tx)}
+.rp-briefing-sub{font-size:12px;color:var(--tx2);margin-top:2px}
+.rp-briefing-close{background:none;border:none;color:var(--txm);font-size:16px;cursor:pointer;padding:2px 6px}
+.rp-briefing-close:hover{color:var(--tx)}
+.rp-briefing-body{overflow-y:auto;padding:14px 18px;display:flex;flex-direction:column;gap:14px}
+.rp-briefing-row{display:flex;flex-direction:column;gap:3px}
+.rp-briefing-label{font-size:11px;font-weight:700;color:var(--tx2);text-transform:uppercase;letter-spacing:.3px}
+.rp-briefing-value{font-size:13px;color:var(--tx);line-height:1.5}
+.rp-briefing-hedef{background:var(--primary-dim);border-radius:8px;padding:10px 12px;margin:0 -2px}
+.rp-briefing-hedef .rp-briefing-label{color:var(--primary)}
+.rp-briefing-actions{padding:14px 18px;border-top:1px solid var(--border)}
+.rp-briefing-start{width:100%}
+
+/* Popup — briefing modalıyla aynı desen (position:fixed, tüm ekranı kaplar).
+   Eskiden .rp-scroll içinde gömülüydü, kullanıcı sayfayı aşağı kaydırmadan/
+   zoom-out yapmadan göremiyordu — artık scroll'dan bağımsız her zaman görünür. */
+.rp-transcript-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px}
+.rp-transcript-panel{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);width:560px;max-width:100%;max-height:80vh;display:flex;flex-direction:column;overflow:hidden}
+.rp-transcript-header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border);font-weight:700;font-size:14px;flex-shrink:0}
+.rp-transcript-body{flex:1;overflow-y:auto;padding:16px 18px;display:flex;flex-direction:column;gap:10px;min-height:200px}
+.rp-transcript-line{display:flex;flex-direction:column;gap:2px;max-width:80%}
+.rp-transcript-line.assistant{align-self:flex-start}
+.rp-transcript-line.user{align-self:flex-end;align-items:flex-end}
+.rp-transcript-bubble{padding:8px 12px;border-radius:12px;font-size:13px;line-height:1.4}
+.rp-transcript-line.assistant .rp-transcript-bubble{background:var(--s2);color:var(--tx);border-bottom-left-radius:3px}
+.rp-transcript-line.user .rp-transcript-bubble{background:var(--primary-dim);color:var(--primary);border-bottom-right-radius:3px}
+.rp-transcript-speaker{font-size:10px;color:var(--txm);text-transform:uppercase;letter-spacing:.4px;padding:0 4px}
+.rp-transcript-hint{align-self:center;font-size:12px;color:var(--txm);font-style:italic;padding:18px 8px;text-align:center}
+.rp-transcript-bubble.partial{opacity:.55;font-style:italic}
+
+/* ── AKILLI PLAN ── */
+.sp-days-picker{display:flex;gap:8px;flex-wrap:wrap}
+.sp-days-picker label{display:flex;align-items:center;gap:4px;font-size:12px;background:var(--s2);border-radius:6px;padding:5px 10px;cursor:pointer}
+.sp-hour-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.sp-hour-row label{font-size:11px;color:var(--txm)}
+.sp-hour-row input{width:100%}
+.sp-plan-card{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:14px;margin-bottom:10px}
+.sp-plan-header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px}
+.sp-plan-name{font-weight:700;font-size:13px;color:var(--tx)}
+.sp-plan-status{font-size:11px;padding:2px 8px;border-radius:10px;background:var(--s2);color:var(--tx2)}
+.sp-plan-status.active{background:var(--primary-dim);color:var(--primary)}
+.sp-plan-meta{font-size:11px;color:var(--txm);display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px}
+.sp-plan-actions{display:flex;gap:8px}
+.sp-rule-subfield{margin-top:8px}
+.sp-rule-inline{display:flex;align-items:center;gap:8px;font-size:12px}
 .lead-card{background:var(--s2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;cursor:grab;transition:border-color .15s}
 .lead-card:hover{border-color:var(--border-a)}
 .lead-card.dragging{opacity:.4}
@@ -1049,6 +1240,7 @@ table.adm-table th.adm-num,table.adm-table td.adm-num{text-align:right;font-fami
 .lead-msg.OUT{align-self:flex-end;background:var(--primary-dim);color:var(--tx)}
 .lead-msg.IN{align-self:flex-start;background:var(--s2);color:var(--tx2)}
 .lead-msg-time{font-size:9px;color:var(--txm);margin-top:2px}
+.wa-msg-media{display:inline-block;margin-bottom:4px;font-size:11px;text-decoration:underline;color:inherit}
 
 /* WhatsApp alt-sekmeler (Gelen Kutusu / Şablonlar) + gelen kutusu iki-panel layout */
 .wa-subview{display:none;flex:1;overflow:hidden;flex-direction:column}
@@ -1072,3 +1264,186 @@ table.adm-table th.adm-num,table.adm-table td.adm-num{text-align:right;font-fami
 .wa-channel-toggle{display:flex;gap:4px}
 .wa-channel-btn{padding:5px 10px;background:var(--s2);border:1px solid var(--border);border-radius:12px;font-size:10px;color:var(--tx2);cursor:pointer}
 .wa-channel-btn.active{background:var(--primary-dim);border-color:var(--border-a);color:var(--primary)}
+
+/* Kampanya detayı — "Aranmayan Kişiler" sebep kırılımı. Danışman geçmiş bir
+   kampanyayı açtığında kalan kişilerin NEDEN aranmadığını ve kurtarılabilir olup
+   olmadığını görmeli; önceden bu ekran skipKind modelinden tamamen habersizdi. */
+.cd-skip-row{display:flex;align-items:baseline;gap:10px;padding:6px 0;border-bottom:1px solid var(--border)}
+.cd-skip-row:last-child{border-bottom:none}
+.cd-skip-count{font-family:'Sora',sans-serif;font-size:15px;font-weight:700;color:var(--tx);min-width:44px}
+.cd-skip-label{font-size:12.5px;color:var(--tx);flex:1}
+.cd-skip-hint{font-size:11px;color:var(--txm);text-align:right}
+
+/* Kampanya Geçmişi — arama/filtre/sıralama kontrolleri ve satır aksiyonları.
+   Onlarca kampanya birikince düz tablo içinden çıkılmaz hale geliyordu. */
+.ch-search{background:var(--s2);border:1px solid var(--border);border-radius:var(--rs);color:var(--tx);font-family:inherit;font-size:12.5px;padding:6px 10px;min-width:200px}
+.ch-search:focus{outline:none;border-color:var(--primary)}
+.ch-select{background:var(--s2);border:1px solid var(--border);border-radius:var(--rs);color:var(--tx);font-family:inherit;font-size:12.5px;padding:6px 8px;cursor:pointer}
+.ch-select:focus{outline:none;border-color:var(--primary)}
+.ch-filter-note{font-size:11.5px;color:var(--tx2);padding:6px 16px}
+.ch-filter-note a{color:var(--blue)}
+.ch-actions{white-space:nowrap}
+.btn-ch-delete{background:none;border:1px solid transparent;border-radius:var(--rs);color:var(--txm);font-size:13px;line-height:1;padding:4px 7px;margin-left:6px;cursor:pointer;transition:all .15s}
+.btn-ch-delete:hover{border-color:var(--red);color:var(--red);background:rgba(217,58,58,.10)}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   TASARIM GEÇİŞİ (2026-10-01) — kontrol sistemi, hizalar, sekme çubuğu, mobil.
+   Dosyanın SONUNDA olduğu için eşit özgüllükte yukarıdaki kuralları ezer; tek
+   yerden yönetilsin diye bileşen bloklarına dağıtılmadı.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. Kontroller: tek yükseklik, tek yazı boyu ── */
+input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+select{min-height:var(--ctl-h);padding:0 var(--ctl-px);font-size:var(--ctl-fs);line-height:1.3}
+select{padding-right:28px}
+textarea{padding:8px var(--ctl-px);font-size:var(--ctl-fs)}
+input[type="date"]{font-family:'Sora',sans-serif}
+.camp-limit-input,.camp-name-input,.concurrency-group select,.camp-reattempt-row select,.campaign-rerun select,
+.ch-search,.ch-select,.fu-scenario-select,.leads-list-filters select,.leads-list-filters input[type="text"],
+.adm-input-row input,.adm-form-row input,#settingsView select,#settingsView input[type="text"],#settingsView input[type="number"],
+.mini-form-group input{min-height:var(--ctl-h);padding:0 var(--ctl-px);font-size:var(--ctl-fs);border-radius:var(--rs)}
+.camp-reattempt-row select,.campaign-rerun select{width:auto;padding-right:28px}
+.filter-group input,.filter-group select{min-height:var(--ctl-h-sm);padding:0 8px;font-size:12px}
+.filter-group select{padding-right:26px}
+.chip,.fu-subtab,.chip-refresh{min-height:var(--ctl-h-sm);display:inline-flex;align-items:center;padding:0 12px}
+.chip-search input,.followup-toolbar input{min-height:var(--ctl-h-sm);padding:0 12px}
+.btn-secondary,.btn-upload,.btn-campaign-start,.btn-campaign-pause,.btn-campaign-stop,.btn-export,.btn-filter,.btn-filter-clear,
+.adm-save-btn,.adm-btn,.adm-back,.adm-logout,.btn-sc-new,.btn-save-notes,.btn-modal-cancel,.btn-modal-confirm,.btn-delete-old
+{min-height:var(--ctl-h);display:inline-flex;align-items:center;justify-content:center;padding-top:0;padding-bottom:0;line-height:1.2}
+.btn-detail,.btn-ch-detail,.adm-mini-btn,.fu-detail-btn,.fu-call-btn,.fu-unfollow-btn,.btn-sc-edit,.btn-sc-del,.cp-limit-actions button,.crp-actions button,.crp-actions a
+{min-height:var(--ctl-h-sm);display:inline-flex;align-items:center;justify-content:center;padding-top:0;padding-bottom:0}
+.btn-icon,.btn-help-tour{width:var(--ctl-h);height:var(--ctl-h)}
+.scenario-row select{min-height:var(--ctl-h)}
+label{margin-bottom:5px}
+.form-group{margin-bottom:12px}
+
+/* ── 2. Kartlar: tek yarıçap, tek gölge ── */
+.stat-card,.chart-card,.rp-card,.sp-plan-card,.wa-tpl-card,.fu-section,.adm-card,.lead-column,.info-box,.cp-result-panel
+{border-radius:var(--r);box-shadow:var(--shadow-sm)}
+.adm-card{padding:22px}
+.lead-card{border-radius:var(--rs)}
+
+/* ── 3. Üst sekme çubuğu: 1440'ta 10 sekme sığar; dar ekranda kaydırma + kenar gölgesi ── */
+.tab-bar{gap:2px;padding:0 10px;scrollbar-width:none;
+  background:
+    linear-gradient(90deg,var(--s1) 40%,rgba(255,255,255,0)) left/36px 100% no-repeat local,
+    linear-gradient(270deg,var(--s1) 40%,rgba(255,255,255,0)) right/36px 100% no-repeat local,
+    linear-gradient(90deg,rgba(26,29,46,.10),rgba(26,29,46,0)) left/14px 100% no-repeat scroll,
+    linear-gradient(270deg,rgba(26,29,46,.10),rgba(26,29,46,0)) right/14px 100% no-repeat scroll,
+    var(--s1)}
+.tab-bar::-webkit-scrollbar{display:none}
+.tab-btn{padding:12px 12px;font-size:12.5px;gap:5px}
+@media (max-width:1440px){.tab-btn{padding:12px 10px;font-size:12px}}
+
+/* ── 4. Toplu Arama ayar grid'i: etiketler aynı hizada, tekrar arama kuralı tam satır ── */
+.campaign-fields-grid{align-items:start;row-gap:14px}
+.concurrency-group>label{min-height:14px;margin-bottom:5px}
+.concurrency-group{line-height:1.3}
+/* Yardım metinleri etiketin BÜYÜK HARF stilini miras alıyordu — okunmuyordu. */
+.camp-help,.camp-focus-note{max-width:none;text-transform:none;letter-spacing:0;font-weight:400;font-size:11px;color:var(--txm);line-height:1.4}
+.camp-reattempt{grid-column:1 / -1}
+/* Geniş ekranda tekrar arama kuralı dört alanın sağındaki boşluğa oturur — bir satır kazanılır */
+@media (min-width:1500px){.camp-reattempt{grid-column:5 / -1}}
+.camp-reattempt-row{gap:8px;font-size:12.5px}
+.camp-reattempt-row span{white-space:nowrap}
+.campaign-toolbar-row{row-gap:10px}
+.campaign-actions-group,.campaign-rerun{flex-wrap:wrap}
+
+/* ── 5. Takip: üstteki özet çipleri alt sekmelerle aynı bilgiyi tekrarlıyordu — kaldırıldı ── */
+.followup-summary{display:none}
+.followup-toolbar input{min-width:220px;max-width:420px}
+
+/* ── 6. Kampanya Geçmişi / Adaylar araç çubuğu: açıklama dar sütuna sıkışmasın ── */
+.ch-toolbar{flex-wrap:wrap;gap:10px}
+.ch-toolbar .ch-hint{flex:1 1 100%}
+/* Global input/select{width:100%} bu kontrolleri tam satıra yayıyordu */
+.ch-toolbar .ch-search{width:auto;flex:1 1 240px;max-width:420px}
+.ch-toolbar .ch-select{width:auto;flex:0 0 auto;min-width:150px}
+.ch-toolbar .btn-secondary,.ch-toolbar .btn-export{flex:0 0 auto}
+.sp-rate.sp-none{background:var(--s2);color:var(--txm)}
+
+/* ── 7. Admin / Ayarlar kabuğu ── */
+.adm-wrap{max-width:680px}
+.adm-wrap.wide{max-width:980px}
+.adm-tabs{gap:2px}
+.adm-tab{padding:10px 12px;font-size:12.5px}
+/* İşlemler 2x2 sarar, tablo kartın dışına taşmaz; e-posta satır sonunda kırılır, harf harf değil */
+.adm-row-actions{flex-wrap:wrap;gap:6px;max-width:250px}
+table.adm-table td{white-space:nowrap;vertical-align:top}
+table.adm-table td:first-child{white-space:normal;overflow-wrap:anywhere;min-width:170px}
+.adm-card{overflow-x:auto}
+
+/* ── 8. İstatistik kartları: 6 sütun yalnızca gerçekten sığınca ── */
+.stat-cards{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))!important}
+
+/* ── 9. Tablolar kendi kabında yatay kaydırır, gövde asla yana kaymaz ── */
+.table-wrapper,.campaign-table-wrap{overflow:auto;-webkit-overflow-scrolling:touch}
+.calls-table,.campaign-table{min-width:640px}
+
+/* ── 10. MOBİL / DAR EKRAN — sol panel çekmece olur, içerik tam genişlik ── */
+.btn-left-toggle{display:none}
+.left-panel-backdrop{display:none;position:fixed;inset:var(--header-h) 0 0 0;background:rgba(26,29,46,.35);z-index:24}
+/* 1fr = minmax(auto,1fr): başlığın kırılmayan içeriği kolonu viewport'tan geniş
+   zorlayıp tüm sayfayı yana kaydırıyordu. minmax(0,…) ile kolon asla taşmaz. */
+.app-layout{grid-template-columns:260px minmax(0,1fr)}
+.app-header,.header-actions{min-width:0}
+@media (max-width:900px){
+  .app-layout{grid-template-columns:minmax(0,1fr)}
+  .app-header{overflow:hidden}
+  .header-actions{flex-shrink:1;overflow:hidden;gap:6px}
+  .credits-widget{display:none}
+  .left-panel{position:fixed;top:var(--header-h);left:0;bottom:0;width:min(340px,90vw);z-index:25;
+    transform:translateX(-100%);transition:transform .25s ease;box-shadow:0 8px 32px rgba(26,29,46,.18)}
+  .left-panel.open{transform:none}
+  .left-panel-backdrop.open{display:block}
+  .btn-left-toggle{display:inline-flex}
+  .app-header{padding:0 12px;gap:8px}
+  .logo-text{white-space:nowrap}
+  .header-center{display:none}
+  .hdr-lbl{display:none}
+  .credits-widget{padding:3px 4px}
+  .credit-chip{padding:2px 6px}
+  .credit-el{display:none}
+  .tab-btn{padding:11px 9px;font-size:12px}
+  .campaign-toolbar{padding:12px}
+  .campaign-fields-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .camp-name-group,.camp-scenario-group,.camp-reattempt{grid-column:1 / -1 !important}
+  .quick-chips,.filter-bar,.followup-toolbar{padding:8px 12px}
+  .filter-group{flex:1 1 calc(50% - 10px)}
+  .filter-group input,.filter-group select{width:100%;min-width:0}
+  .filter-actions{margin-left:0;width:100%;justify-content:flex-end}
+  .stats-scroll{padding:12px}
+  .stat-cards{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .charts-grid{grid-template-columns:1fr}
+  .followup-layout{padding:10px 12px}
+  .followup-toolbar input{min-width:0;max-width:none;flex:1 1 100%}
+  .leads-board{padding:10px 12px;gap:10px}
+  .lead-column{flex:0 0 240px;width:240px}
+  .wa-inbox-list{flex:0 0 44%}
+  .rp-scroll{padding:12px}
+  .modal{width:100%;max-width:100vw;max-height:100vh;border-radius:0}
+  #campaignDetailModal{width:100%}
+  .cd-kpis{grid-template-columns:repeat(2,1fr)}
+  .drawer{width:100vw}
+  .toast{white-space:normal;max-width:calc(100vw - 24px);text-align:center}
+}
+@media (max-width:520px){
+  .credits-widget{display:none}
+  .tab-btn{padding:10px 8px;font-size:11.5px}
+  .campaign-fields-grid{grid-template-columns:1fr}
+  .campaign-actions-group .btn-campaign-start,.campaign-actions-group .btn-campaign-pause,.campaign-actions-group .btn-campaign-stop{flex:1 1 auto}
+  .stat-cards{grid-template-columns:1fr!important}
+}
+
+/* ── Toplu Arama boş durum: bırakma alanı ── */
+.table-empty-drop{padding:28px 16px!important}
+.camp-dropzone{max-width:520px;margin:0 auto;padding:28px 24px;border:2px dashed var(--border);border-radius:var(--r);background:var(--s1);display:flex;flex-direction:column;align-items:center;gap:8px;transition:border-color .15s,background .15s}
+.campaign-table-wrap.drag-over .camp-dropzone{border-color:var(--primary);background:var(--primary-dim)}
+.camp-dropzone-icon{font-size:30px;line-height:1}
+.camp-dropzone-title{font-size:14px;font-weight:600;color:var(--tx)}
+.camp-dropzone-or{font-size:11px;color:var(--txm);text-transform:uppercase;letter-spacing:.5px}
+.camp-dropzone-hint{font-size:11.5px;color:var(--txm);margin-top:6px;text-align:center}
+.camp-dropzone-hint b{color:var(--tx2);font-weight:600}
+
+/* Senaryo listesi: senaryo bazlı ses modeli rozeti */
+.sc-voice-badge{display:inline-block;margin-left:8px;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:600;background:var(--s2);color:var(--txm);vertical-align:middle}

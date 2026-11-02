@@ -25,8 +25,22 @@ function rowToMessage(r: any): WhatsappMessage {
   return {
     id: r.id, leadId: r.lead_id, twilioSid: r.twilio_sid, direction: r.direction,
     status: r.status, body: r.body, templateId: r.template_id, campaignId: r.campaign_id,
-    errorMessage: r.error_message, channel: r.channel, createdAt: r.created_at.toISOString(),
+    errorMessage: r.error_message, channel: r.channel, mediaUrl: r.media_url,
+    createdAt: r.created_at.toISOString(),
   };
+}
+
+// Twilio statusCallback webhook'undan çağrılır (server.ts) — twilio_sid ile mesajı
+// bulup teslimat durumunu günceller. WHERE user_id = $ tenant izolasyonunu korur;
+// yanlış/eski bir sid için hiçbir satır etkilenmez (sessizce no-op, hata fırlatmaz).
+export async function updateMessageDeliveryStatus(
+  userId: string, twilioSid: string, status: string, errorMessage: string | null,
+): Promise<void> {
+  await pool.query(
+    `UPDATE whatsapp_messages SET status = $1, error_message = COALESCE($2, error_message), updated_at = NOW()
+     WHERE user_id = $3 AND twilio_sid = $4`,
+    [status, errorMessage, userId, twilioSid],
+  );
 }
 
 // WhatsApp Web tarzı gelen kutusu — konuşması olan TÜM adayları en son mesaja göre
@@ -76,7 +90,7 @@ export async function getMessagesForLead(userId: string, leadId: string): Promis
 // kampanya motoru (sendCampaign, aşağıda) bu parametreyi hiç kullanmaz/kullanamaz,
 // her zaman 'TWILIO'dur. Bkz. whatsappPersonal.ts başındaki kısıt notu.
 export async function sendSingleMessage(
-  userId: string, leadId: string, body: string, channel: 'TWILIO' | 'PERSONAL' = 'TWILIO',
+  userId: string, leadId: string, body: string, channel: 'TWILIO' | 'PERSONAL' = 'TWILIO', mediaUrl?: string,
 ): Promise<WhatsappMessage> {
   const { rows: leadRows } = await pool.query(`SELECT data FROM leads WHERE id = $1 AND user_id = $2`, [leadId, userId]);
   const lead = leadRows[0]?.data as Lead | undefined;
@@ -91,13 +105,14 @@ export async function sendSingleMessage(
     } else {
       const config = await getUserWhatsappConfig(userId);
       if (!config) throw new Error('WhatsApp hesap bilgileriniz tanımlı değil — Ayarlarım sayfasından ekleyin.');
-      const sent = await sendWhatsAppMessage(config, lead.phone, body);
+      const statusCallbackUrl = process.env.APP_URL ? `${process.env.APP_URL}/webhook/whatsapp/status/${userId}` : undefined;
+      const sent = await sendWhatsAppMessage(config, lead.phone, body, { mediaUrl, statusCallbackUrl });
       twilioSid = sent.sid;
     }
     const { rows } = await pool.query(
-      `INSERT INTO whatsapp_messages (id, user_id, lead_id, twilio_sid, direction, status, body, channel)
-       VALUES ($1, $2, $3, $4, 'OUT', 'SENT', $5, $6) RETURNING *`,
-      [id, userId, leadId, twilioSid, body, channel],
+      `INSERT INTO whatsapp_messages (id, user_id, lead_id, twilio_sid, direction, status, body, channel, media_url)
+       VALUES ($1, $2, $3, $4, 'OUT', 'SENT', $5, $6, $7) RETURNING *`,
+      [id, userId, leadId, twilioSid, body, channel, mediaUrl || null],
     );
     await pool.query(
       `INSERT INTO lead_activities (id, lead_id, user_id, type, data) VALUES ($1, $2, $3, 'MESSAGE_SENT', $4)`,
@@ -180,14 +195,14 @@ export async function recordChannelMessage(userId: string, params: {
     [newId('act'), leadId, userId, direction === 'IN' ? 'MESSAGE_RECEIVED' : 'MESSAGE_SENT', JSON.stringify({ body, channel })],
   );
 
-  // Gelen mesajdan sonra CRM'e "gerçek fırsat" olarak yansısın mı diye AI analizi tetikle —
-  // aramalardaki upsertLeadFromCallOutcome ile aynı ilke (bkz. leads.ts). QUALIFIED ve
-  // üstündeki adaylar için tekrar analiz gerekmez (bu yoldan zaten en yüksek aşamaya
-  // ulaşmıştır). Ayrıca aynı kişiyle hızlı art arda mesajlaşmada her mesajda Anthropic'e
-  // gitmemek için 3 dakikalık bir debounce var — son WHATSAPP_ANALYZED aktivitesine bakar.
-  // whatsappIgnored=true ise (danışman elle "şahsi" işaretlemiş) hiç tetiklenmez — AI
-  // prompt'undaki is_business_related filtresine ek, kalıcı ve garantili bir muafiyet.
-  if (!whatsappIgnored && direction === 'IN' && leadStage !== 'QUALIFIED' && leadStage !== 'VIEWING' && leadStage !== 'OFFER' && leadStage !== 'WON') {
+  // WhatsApp yazışması → AI analizi → CRM aşama yükseltme akışı KASITLI OLARAK
+  // DEVRE DIŞI (2026-09-17, Mustafa'nın talebiyle) — "WHATSAPP_AI_ANALYSIS_ENABLED = false"
+  // ile tüm blok atlanıyor. Kodun geri kalanı (mesaj kaydı, aktivite geçmişi) olduğu
+  // gibi çalışmaya devam ediyor — sadece Anthropic'e gidip is_business_related/
+  // ilgi_seviyesi çıkarıp aşama yükseltme kısmı kapalı. Tekrar açmak için bu sabiti
+  // true yapmak yeterli.
+  const WHATSAPP_AI_ANALYSIS_ENABLED = false;
+  if (WHATSAPP_AI_ANALYSIS_ENABLED && !whatsappIgnored && direction === 'IN' && leadStage !== 'QUALIFIED' && leadStage !== 'VIEWING' && leadStage !== 'OFFER' && leadStage !== 'WON') {
     const { rows: lastAnalyzed } = await pool.query(
       `SELECT created_at FROM lead_activities WHERE lead_id = $1 AND type = 'WHATSAPP_ANALYZED' ORDER BY created_at DESC LIMIT 1`,
       [leadId],
@@ -214,6 +229,7 @@ function rowToCampaign(r: any): WhatsappCampaign {
   return {
     id: r.id, name: r.name, templateId: r.template_id, status: r.status,
     filter: r.filter || {}, variableMap: r.variable_map || {},
+    sentCount: r.sent_count ?? 0, failedCount: r.failed_count ?? 0,
     createdAt: r.created_at.toISOString(), completedAt: r.completed_at ? r.completed_at.toISOString() : null,
   };
 }
@@ -274,36 +290,51 @@ export async function sendCampaign(userId: string, campaignId: string): Promise<
 
   let sent = 0, failed = 0;
   const variableMap = campaign.variable_map || {};
-  for (const lead of leads) {
-    const vars: Record<string, string> = {};
-    for (const [k, v] of Object.entries(variableMap as Record<string, string>)) {
-      vars[k] = v === 'firstName' ? lead.firstName : v;
+  const statusCallbackUrl = process.env.APP_URL ? `${process.env.APP_URL}/webhook/whatsapp/status/${userId}` : undefined;
+  try {
+    for (const lead of leads) {
+      const vars: Record<string, string> = {};
+      for (const [k, v] of Object.entries(variableMap as Record<string, string>)) {
+        vars[k] = v === 'firstName' ? lead.firstName : v;
+      }
+      const body = renderTemplate(template.body, vars);
+      const recipientId = newId('wcr');
+      try {
+        const result = await sendWhatsAppMessage(config, lead.phone, body, { statusCallbackUrl });
+        await pool.query(
+          `INSERT INTO whatsapp_campaign_recipients (id, campaign_id, lead_id, status, sent_at) VALUES ($1, $2, $3, 'SENT', NOW())
+           ON CONFLICT (campaign_id, lead_id) DO NOTHING`,
+          [recipientId, campaignId, lead.id],
+        );
+        await pool.query(
+          `INSERT INTO whatsapp_messages (id, user_id, lead_id, twilio_sid, direction, status, body, template_id, campaign_id)
+           VALUES ($1, $2, $3, $4, 'OUT', 'SENT', $5, $6, $7)`,
+          [newId('wam'), userId, lead.id, result.sid, body, template.id, campaignId],
+        );
+        sent++;
+      } catch (err) {
+        await pool.query(
+          `INSERT INTO whatsapp_campaign_recipients (id, campaign_id, lead_id, status, error_msg) VALUES ($1, $2, $3, 'FAILED', $4)
+           ON CONFLICT (campaign_id, lead_id) DO NOTHING`,
+          [recipientId, campaignId, lead.id, String((err as Error).message || err)],
+        );
+        failed++;
+      }
     }
-    const body = renderTemplate(template.body, vars);
-    const recipientId = newId('wcr');
-    try {
-      const result = await sendWhatsAppMessage(config, lead.phone, body);
-      await pool.query(
-        `INSERT INTO whatsapp_campaign_recipients (id, campaign_id, lead_id, status, sent_at) VALUES ($1, $2, $3, 'SENT', NOW())
-         ON CONFLICT (campaign_id, lead_id) DO NOTHING`,
-        [recipientId, campaignId, lead.id],
-      );
-      await pool.query(
-        `INSERT INTO whatsapp_messages (id, user_id, lead_id, twilio_sid, direction, status, body, template_id, campaign_id)
-         VALUES ($1, $2, $3, $4, 'OUT', 'SENT', $5, $6, $7)`,
-        [newId('wam'), userId, lead.id, result.sid, body, template.id, campaignId],
-      );
-      sent++;
-    } catch (err) {
-      await pool.query(
-        `INSERT INTO whatsapp_campaign_recipients (id, campaign_id, lead_id, status, error_msg) VALUES ($1, $2, $3, 'FAILED', $4)
-         ON CONFLICT (campaign_id, lead_id) DO NOTHING`,
-        [recipientId, campaignId, lead.id, String((err as Error).message || err)],
-      );
-      failed++;
-    }
+  } catch (err) {
+    // Döngünün DIŞINDAKİ beklenmedik bir hata (örn. DB bağlantısı koptu) kampanyayı
+    // sonsuza dek 'RUNNING'de bırakıyordu: status !== 'DRAFT' kontrolü yüzünden bir
+    // daha gönderilemez ve kurtarma yolu da yoktu. Durumu kapat ve hatayı yukarı taşı.
+    await pool.query(
+      `UPDATE whatsapp_campaigns SET status = 'COMPLETED', completed_at = NOW(), sent_count = $2, failed_count = $3 WHERE id = $1`,
+      [campaignId, sent, failed],
+    ).catch(() => {});
+    throw err;
   }
 
-  await pool.query(`UPDATE whatsapp_campaigns SET status = 'COMPLETED', completed_at = NOW() WHERE id = $1`, [campaignId]);
+  await pool.query(
+    `UPDATE whatsapp_campaigns SET status = 'COMPLETED', completed_at = NOW(), sent_count = $2, failed_count = $3 WHERE id = $1`,
+    [campaignId, sent, failed],
+  );
   return { sent, failed, total: leads.length };
 }

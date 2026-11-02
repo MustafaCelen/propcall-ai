@@ -75,6 +75,7 @@ async function openInboxThread(leadId) {
         <button class="wa-channel-btn${waState.replyChannel === 'PERSONAL' ? ' active' : ''}" data-channel="PERSONAL">Şahsi</button>
       </div>` : ''}
       <input type="text" id="waInboxReplyInput" placeholder="Mesaj yazın..." />
+      ${waState.replyChannel === 'TWILIO' ? `<input type="text" id="waInboxReplyMediaUrl" placeholder="Medya URL (opsiyonel)" title="Görsel/PDF gibi bir dosyanın herkese açık URL'i" />` : ''}
       <button class="btn-save-notes" id="waInboxReplySend">Gönder</button>
     </div>
   `;
@@ -103,6 +104,17 @@ async function toggleWhatsappIgnore(leadId, whatsappIgnored) {
   }
 }
 
+const WA_STATUS_MARK = {
+  QUEUED: '🕒', SENT: '✓', DELIVERED: '✓✓', READ: '✓✓ (okundu)',
+  FAILED: '✗', UNDELIVERED: '✗',
+};
+
+function waStatusLabel(m) {
+  if (m.direction !== 'OUT') return '';
+  const mark = WA_STATUS_MARK[m.status];
+  return mark ? ` · ${mark}` : '';
+}
+
 async function loadInboxThreadMessages(leadId) {
   const body = $('waInboxThreadBody');
   try {
@@ -111,8 +123,9 @@ async function loadInboxThreadMessages(leadId) {
     if (!j.success) throw new Error(j.error);
     body.innerHTML = j.data.length ? j.data.map(m => `
       <div class="lead-msg ${m.direction}">
-        <div>${esc(m.body)}</div>
-        <div class="lead-msg-time">${leadRelativeTime(m.createdAt)} · ${m.channel}${m.status === 'FAILED' ? ' · ✗' : ''}</div>
+        ${m.mediaUrl ? `<a href="${esc(m.mediaUrl)}" target="_blank" rel="noopener" class="wa-msg-media">📎 Ek dosya</a>` : ''}
+        ${m.body ? `<div>${esc(m.body)}</div>` : ''}
+        <div class="lead-msg-time">${leadRelativeTime(m.createdAt)} · ${m.channel}${waStatusLabel(m)}</div>
       </div>
     `).join('') : '<div class="lead-column-empty">Henüz mesaj yok</div>';
     body.scrollTop = body.scrollHeight;
@@ -123,16 +136,19 @@ async function loadInboxThreadMessages(leadId) {
 
 async function sendInboxReply(leadId) {
   const input = $('waInboxReplyInput');
+  const mediaInput = $('waInboxReplyMediaUrl');
   const body = input.value.trim();
-  if (!body) return;
+  const mediaUrl = mediaInput ? mediaInput.value.trim() : '';
+  if (!body && !mediaUrl) return;
   try {
     const r = await fetch(`/api/leads/${leadId}/messages`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ body, channel: waState.replyChannel }),
+      body: JSON.stringify({ body, channel: waState.replyChannel, mediaUrl: mediaUrl || undefined }),
     });
     const j = await r.json();
     if (!j.success) throw new Error(j.error || 'Gönderilemedi');
     input.value = '';
+    if (mediaInput) mediaInput.value = '';
     loadInboxThreadMessages(leadId);
     loadInbox();
   } catch (err) {
@@ -291,7 +307,7 @@ async function loadCampaignHistoryWa() {
     if (!j.data.length) { box.innerHTML = '<div class="lead-column-empty">Henüz kampanya yok</div>'; return; }
     box.innerHTML = j.data.map(c => `
       <div class="wa-camp-history-item">
-        <b>${esc(c.name)}</b> — ${c.status}${c.completedAt ? ' — ' + new Date(c.completedAt).toLocaleString('tr-TR') : ''}
+        <b>${esc(c.name)}</b> — ${c.status}${c.status === 'COMPLETED' ? ` — ✓ ${c.sentCount} gönderildi, ✗ ${c.failedCount} başarısız` : ''}${c.completedAt ? ' — ' + new Date(c.completedAt).toLocaleString('tr-TR') : ''}
       </div>
     `).join('');
   } catch (err) {

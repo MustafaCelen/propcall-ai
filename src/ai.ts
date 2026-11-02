@@ -27,7 +27,7 @@ export interface CallSummaryResult {
 // olduğunda tavsiye_edilen_aksiyon'u zorla 'Uğraşma'ya ÇEKMİYORUZ — Claude'un kendi ayrıca
 // verdiği tavsiye (varsa) daha fazla bilgi taşıyabilir, onu ezmek riskli.
 function enforceSummaryConsistency(summary: CallSummary): CallSummary {
-  const fixed = { ...summary };
+  const fixed = { ...summary, beni_aramayin_talebi: summary.beni_aramayin_talebi === true };
   if (fixed.randevu_alindi) {
     fixed.ilgi_seviyesi = 'yüksek';
     fixed.ret_nedeni = null;
@@ -69,7 +69,11 @@ aramanın amacını transkriptin kendisinden anla, varsayım yapma.`;
 
   const response = await client.messages.create({
     model: 'claude-haiku-4-5-20251001',
-    max_tokens: 600,
+    // 600 yetmiyordu: uzun görüşmelerde model JSON'u TAMAMLAYAMADAN token limiti
+    // doluyor, yarım kalan çıktı JSON.parse'ta patlıyordu (prod: "Expected ',' or
+    // '}' after property value in JSON at position 338"). Türkçe karakterler token
+    // açısından pahalı (çoğu 2-3 token) ve şemada üç serbest metin alanı var.
+    max_tokens: 1200,
     system: `Sen bir soğuk arama CRM sistemi için görüşme analisti asistanısın.
 Sana verilen telefon görüşmesi transkriptini, aramanın amacını tanımlayan asistan sistem
 promptunu bağlam olarak kullanarak analiz edeceksin ve SADECE geçerli JSON döndüreceksin,
@@ -94,7 +98,8 @@ SADECE bu JSON formatında döndür:
   "mulk_tipi": "string veya null",
   "ozet": "1-2 cümle",
   "tavsiye_edilen_aksiyon": "Ara|Bekleme listesine al|Uğraşma",
-  "geri_donus_notu": "string veya null"
+  "geri_donus_notu": "string veya null",
+  "beni_aramayin_talebi": true|false
 }
 
 ALAN KRİTERLERİ:
@@ -146,7 +151,17 @@ geri_donus_notu:
 - Ara veya Bekleme için ZORUNLU: 1 cümle, somut ve kişiye özel.
   "Toplantıdaydı, akşam saatini tercih ediyor — yarın 18:00 sonrası dene"
   "Şu an başka bir yerde çalışıyor, 3 ay sonra tekrar değerlendirebilir"
-- Uğraşma veya olumlu sonuçlandıysa null`,
+- Uğraşma veya olumlu sonuçlandıysa null
+
+beni_aramayin_talebi — ÇOK DİKKATLİ ve DAR yorumla, YANLIŞ POZİTİF ağır bir sonuç
+doğurur (bu numara BİR DAHA HİÇBİR DANIŞMAN TARAFINDAN aranamaz hale gelir):
+- true: SADECE müşteri AÇIKÇA ve NET şekilde bir daha aranmak istemediğini belirttiyse
+  ("bir daha aramayın", "numaramı arama listenizden çıkarın", "beni rahatsız etmeyin",
+  "bu numarayı nereden buldunuz, silin", "tekrar ararsanız şikayet ederim" gibi)
+- false: Sadece "şu an ilgilenmiyorum", "müsait değilim", "teşekkürler istemiyorum"
+  gibi normal bir red — bunlar ret_nedeni'ne yansır ama beni_aramayin_talebi=false
+  kalır. Kalıcı arama yasağı talebi ile normal "ilgilenmiyorum" cevabı FARKLI şeyler,
+  ŞÜPHEDE KALDIĞINDA false seç.`,
       },
     ],
   });
@@ -155,7 +170,15 @@ geri_donus_notu:
   if (content.type !== 'text') throw new Error('Beklenmeyen yanıt tipi');
 
   const jsonText = content.text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-  const summary = enforceSummaryConsistency(JSON.parse(jsonText) as CallSummary);
+  // Model beklenen JSON yerine düz metin döndürebilir (nadir ama olur). Korumasız
+  // parse ham "Unexpected token …" hatasını SSE ile danışmanın ekranına taşıyordu.
+  let rawSummary: CallSummary;
+  try {
+    rawSummary = JSON.parse(jsonText) as CallSummary;
+  } catch {
+    throw new Error('Görüşme özeti okunamadı — yapay zeka beklenen biçimde yanıt vermedi.');
+  }
+  const summary = enforceSummaryConsistency(rawSummary);
 
   const inputTokens  = response.usage?.input_tokens  ?? 0;
   const outputTokens = response.usage?.output_tokens ?? 0;
@@ -245,7 +268,12 @@ ozet: Yazışmanın şu anki durumunu 1 cümleyle özetle.`,
   if (content.type !== 'text') throw new Error('Beklenmeyen yanıt tipi');
 
   const jsonText = content.text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-  const analysis = JSON.parse(jsonText) as WhatsappThreadAnalysis;
+  let analysis: WhatsappThreadAnalysis;
+  try {
+    analysis = JSON.parse(jsonText) as WhatsappThreadAnalysis;
+  } catch {
+    throw new Error('Yazışma analizi okunamadı — yapay zeka beklenen biçimde yanıt vermedi.');
+  }
   // Modele güvenmek yerine deterministik olarak zorla (enforceSummaryConsistency ile aynı
   // ilke) — is_business_related=false ise ne kadar "sıcak" bir yazışma olursa olsun CRM'e
   // asla yansımamalı, model bunu unutup ilgi_seviyesi'ni yanlış doldursa bile.

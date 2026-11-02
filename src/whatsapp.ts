@@ -11,6 +11,7 @@ function basicAuth(accountSid: string, authToken: string): string {
 
 export async function sendWhatsAppMessage(
   config: WhatsappConfig, to: string, body: string,
+  opts?: { mediaUrl?: string; statusCallbackUrl?: string },
 ): Promise<{ sid: string }> {
   const url = `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}/Messages.json`;
   const from = config.whatsappNumber.startsWith('whatsapp:') ? config.whatsappNumber : `whatsapp:${config.whatsappNumber}`;
@@ -20,6 +21,8 @@ export async function sendWhatsAppMessage(
   params.append('From', from);
   params.append('To', toFormatted);
   params.append('Body', body);
+  if (opts?.mediaUrl) params.append('MediaUrl', opts.mediaUrl);
+  if (opts?.statusCallbackUrl) params.append('StatusCallback', opts.statusCallbackUrl);
 
   const res = await fetch(url, {
     method: 'POST',

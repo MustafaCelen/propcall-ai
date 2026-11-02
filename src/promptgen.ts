@@ -7,11 +7,9 @@
 import Anthropic from '@anthropic-ai/sdk';
 
 export interface PromptGenInput {
-  companyName?: string;         // örn. "Keller Williams Gayrimenkul" — rawText modunda zorunlu değil
   callGoal?: string;            // örn. "Geçmişte ilgi göstermiş kişileri işe alım görüşmesine davet etmek"
   offerDetails?: string;        // örn. "Ücretsiz gayrimenkul değerleme" / "Kariyer fırsatı"
   tone?: string;                // örn. "Sıcak ama profesyonel, baskıcı değil"
-  contactPersonName?: string;   // detaylar için yönlendirilecek kişi, varsa
   maxDurationSeconds?: number;  // örn. 120
   additionalNotes?: string;     // serbest metin, ekstra kurallar
   // Doldurulursa, alan-alan girdiler yerine kullanıcının kendi taslağı/örnek
@@ -42,11 +40,9 @@ ${input.rawText.trim()}
 """`
     : `Aşağıdaki bilgilere göre bir Vapi sistem promptu oluştur:
 
-Şirket/Marka: ${input.companyName}
 Aramanın amacı: ${input.callGoal}
 ${input.offerDetails ? `Teklif edilen şey: ${input.offerDetails}` : ''}
 ${input.tone ? `Konuşma tonu: ${input.tone}` : 'Konuşma tonu: Sıcak, güven verici, baskıcı olmayan'}
-${input.contactPersonName ? `Detaylar için yönlendirilecek kişi: ${input.contactPersonName}` : ''}
 Maksimum görüşme süresi: ${maxDuration} saniye
 ${input.additionalNotes ? `Ek notlar/kurallar: ${input.additionalNotes}` : ''}`;
 
@@ -81,12 +77,14 @@ KURALLAR:
   modelin kendi kararıyla rastgele erken kapanış üretmesi YASAKTIR; (3) kapanış cümlesi söylendikten
   SONRA DERHAL konuşma bitirilir, ikinci bir kapanış cümlesi asla üretilmez, döngüye girilmez.
 - [Identity] bölümünde asistanın kendi adını sabit yazma — "Adın {{agentName}}." şeklinde değişken kullan
-  (bu, asistanın kendi konuşma kimliği, örn. "Deniz" — danışmanın GERÇEK adı DEĞİL); danışmanın gerçek
-  adı gerekiyorsa {{consultantName}} değişkenini kullan (örn. "{{companyName}}'dan {{consultantName}}'ın
-  asistanı {{agentName}}"); şirket/marka adı geçen her yerde de literal isim yerine {{companyName}}
-  değişkenini kullan (üçü de arama anında otomatik doldurulur)
+  (bu, asistanın kendi konuşma kimliği, örn. "Deniz" — arama anında otomatik doldurulur); danışmanın
+  gerçek adı gibi literal, değişmeyen bir isim YAZMA — sadece {{agentName}} kullan. Şirket adı olarak
+  HER ZAMAN "Keller Williams Platin Karma" yaz (sabit metin, değişken değil) — örn.
+  "Adın {{agentName}}, Keller Williams Platin Karma'nın yapay zeka asistanısın"
 - [Task & Goals] bölümünde NUMARALI adımlar yaz:
-  1) Açılış mesajı (tam metin, {{customerName}}, {{agentName}}, {{consultantName}}, {{companyName}} değişkenlerini kullan) + "< Kullanıcı yanıtını bekle >"
+  1) Açılış mesajı (tam metin, {{customerName}} ve {{agentName}} değişkenlerini kullan, şirket adı olarak
+     "Keller Williams Platin Karma" sabit metnini kullan — örn. "Merhaba {{customerName}}, ben
+     Keller Williams Platin Karma'dan {{agentName}}, yapay zeka asistanıyım.") + "< Kullanıcı yanıtını bekle >"
   2) Kullanıcı yanıtına göre EN AZ 3 dallanan akış: olumlu / olumsuz / kararsız-bilgi isteyen
      Her dal: söylenecek tam cümle + "< Anında konuşmayı sonlandır >" veya "< Yanıtı bekle >" gibi
      yönerge + "Sonuç: \\"kısa durum kodu\\"" (örn. "İlgileniyor", "Şu anda ilgilenmiyor")

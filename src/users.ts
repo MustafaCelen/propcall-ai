@@ -22,10 +22,10 @@ export interface UserRow {
   assistantName: string;
   elevenLabsCostPer1k: number | null;
   balanceTry: number;
-  companyName: string | null;
   fonzipUserId: number | null;
   lastLoginAt: string | null;
   createdAt: string;
+  termsAcceptedVersion: number | null;
 }
 
 export interface ResolvedVapiCredentials {
@@ -42,7 +42,7 @@ function newUserId(): string {
 const USER_COLUMNS =
   `id, email, name, role, is_active, vapi_phone_number_id, vapi_assistant_id, vapi_public_key, max_concurrent_calls,
    calling_hours_start, calling_hours_end, duplicate_call_protection_days, assistant_name, elevenlabs_cost_per_1k,
-   balance_try, company_name, fonzip_user_id, last_login_at, created_at`;
+   balance_try, fonzip_user_id, last_login_at, created_at, terms_accepted_version`;
 
 function rowToUser(r: any): UserRow {
   return {
@@ -61,10 +61,10 @@ function rowToUser(r: any): UserRow {
     assistantName: r.assistant_name || 'Deniz',
     elevenLabsCostPer1k: r.elevenlabs_cost_per_1k != null ? Number(r.elevenlabs_cost_per_1k) : null,
     balanceTry: Number(r.balance_try ?? 0),
-    companyName: r.company_name,
     fonzipUserId: r.fonzip_user_id != null ? Number(r.fonzip_user_id) : null,
     lastLoginAt: r.last_login_at,
     createdAt: r.created_at,
+    termsAcceptedVersion: r.terms_accepted_version != null ? Number(r.terms_accepted_version) : null,
   };
 }
 
@@ -91,25 +91,20 @@ export async function getAuthRecord(email: string): Promise<{ id: string; passwo
 }
 
 export async function createUser(params: {
-  email: string; passwordHash: string; name?: string; role?: UserRole; companyName?: string;
+  email: string; passwordHash: string; name?: string; role?: UserRole;
 }): Promise<UserRow> {
   const id = newUserId();
   const { rows } = await pool.query(
-    `INSERT INTO users (id, email, password_hash, name, role, company_name)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO users (id, email, password_hash, name, role)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING ${USER_COLUMNS}`,
-    [id, params.email.toLowerCase().trim(), params.passwordHash, params.name || null, params.role || 'agent', params.companyName || null],
+    [id, params.email.toLowerCase().trim(), params.passwordHash, params.name || null, params.role || 'agent'],
   );
   return rowToUser(rows[0]);
 }
 
-export async function setUserCompanyName(id: string, companyName: string | null): Promise<void> {
-  await pool.query(`UPDATE users SET company_name = $2 WHERE id = $1`, [id, companyName?.trim() || null]);
-}
-
-// Danışmanın gerçek adı — {{consultantName}} olarak scriptlerde kullanılır (bkz.
-// vapi.ts createVapiCall). Boş bırakılamaz: arama sırasında "{{consultantName}}'ın
-// asistanı" gibi bir cümlede boşluk bırakırdı.
+// Danışmanın gerçek adı — admin panelinde görüntüleme amaçlı (artık scriptlerde
+// bir template değişkeni olarak kullanılmıyor, sadece {{agentName}} kullanılıyor).
 export async function setUserName(id: string, name: string): Promise<void> {
   const trimmed = name.trim();
   if (!trimmed) throw new Error('Ad Soyad boş olamaz');
@@ -135,6 +130,16 @@ export async function setUserPassword(id: string, passwordHash: string): Promise
 
 export async function touchLastLogin(id: string): Promise<void> {
   await pool.query(`UPDATE users SET last_login_at = NOW() WHERE id = $1`, [id]);
+}
+
+// Danışman, aradığı/mesaj attığı numaraların İYS/KVKK uygunluğundan kendisinin
+// sorumlu olduğunu kabul ettiğinde çağrılır (bkz. auth.ts CURRENT_TERMS_VERSION,
+// server.ts /api/terms/accept). IP + zaman, "kabul etti" iddiasına karşı kanıt.
+export async function recordTermsAcceptance(id: string, version: number, ip: string | null): Promise<void> {
+  await pool.query(
+    `UPDATE users SET terms_accepted_version = $2, terms_accepted_at = NOW(), terms_accepted_ip = $3 WHERE id = $1`,
+    [id, version, ip],
+  );
 }
 
 export async function setUserMaxConcurrent(id: string, max: number): Promise<void> {
@@ -164,7 +169,7 @@ export async function setUserElevenLabsRate(id: string, costPer1k: number | null
 // tam ücretlendirilir (çağrı merkezi standardı), aramanın gerçek süresine göre
 // yukarı yuvarlanır. Her bakiye değişikliği credit_transactions'a kalıcı bir satır
 // olarak yazılır — balance_try sadece hızlı okunabilir güncel toplam.
-export const CALL_MINUTE_RATE_TRY = 20;
+export const CALL_MINUTE_RATE_TRY = 10;
 
 function newTxId(): string {
   return 'tx_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
@@ -191,6 +196,13 @@ export async function adjustUserBalance(
       `UPDATE users SET balance_try = balance_try + $2 WHERE id = $1 RETURNING balance_try`,
       [userId, amount],
     );
+    // Kullanıcı yoksa UPDATE 0 satır döner. Kontrol etmezsek rows[0] undefined olup
+    // COMMIT'ten SONRA çökerdi — yani credit_transactions'a sahipsiz bir hareket
+    // yazılmış, bakiye hiç güncellenmemiş olurdu (muhasebe tutarsızlığı).
+    if (!rows[0]) {
+      await client.query('ROLLBACK');
+      throw new Error('Kullanıcı bulunamadı');
+    }
     await client.query('COMMIT');
     return Number(rows[0].balance_try);
   } catch (err) {
@@ -355,6 +367,26 @@ export async function getUserVapiApiKey(userId: string): Promise<string | null> 
 // Asistan konfigürasyonu okuma/yazma (model/ses/prompt) için — phoneNumberId gerekmez,
 // sadece apiKey + assistantId. Aynı tavuk-yumurta sorununun ikinci yüzü: numara henüz
 // seçilmemişken bile danışman Model/Ses sekmesini düzenleyebilmeli.
+// Webhook doğrulaması için — SADECE assistantId + serverSecret gerekir, telefon
+// numarası GEREKMEZ. getUserVapiCredentials kullanılamaz: o phoneNumberId'yi de
+// zorunlu tutup yoksa null döner, bu da telefon numarası hiç seçmemiş (Roleplay
+// Pratik yapan) bir danışmanın TÜM webhook'larının "SPOOF ATTEMPT" olarak
+// reddedilmesine yol açıyordu — ücretlendirme, transkript ve özet hiç işlenmiyordu.
+export async function getUserWebhookVerification(
+  userId: string,
+): Promise<{ assistantId: string | null; serverSecret: string } | null> {
+  const { rows } = await pool.query(
+    `SELECT vapi_assistant_id, vapi_server_secret_enc FROM users WHERE id = $1`,
+    [userId],
+  );
+  const r = rows[0];
+  if (!r?.vapi_server_secret_enc) return null;
+  return {
+    assistantId: r.vapi_assistant_id ?? null,
+    serverSecret: decryptSecret(r.vapi_server_secret_enc),
+  };
+}
+
 export async function resolveVapiCredsForAssistant(userId: string): Promise<{ apiKey: string; assistantId: string }> {
   const { rows } = await pool.query(
     `SELECT vapi_api_key_enc, vapi_assistant_id FROM users WHERE id = $1`,
@@ -509,7 +541,6 @@ export interface UserSettingsView {
   vapiAssistantId: UserSettingField;
   elevenlabsApiKey: UserSettingField;
   anthropicApiKey: UserSettingField;
-  companyName: UserSettingField;
   assistantName: UserSettingField;
   name: UserSettingField;
 }
@@ -517,7 +548,7 @@ export interface UserSettingsView {
 export async function getSettingsForUser(userId: string): Promise<UserSettingsView> {
   const { rows } = await pool.query(
     `SELECT vapi_api_key_enc, vapi_public_key, vapi_phone_number_id, vapi_assistant_id,
-            elevenlabs_api_key_enc, anthropic_api_key_enc, company_name, assistant_name, name
+            elevenlabs_api_key_enc, anthropic_api_key_enc, assistant_name, name
      FROM users WHERE id = $1`,
     [userId],
   );
@@ -536,7 +567,6 @@ export async function getSettingsForUser(userId: string): Promise<UserSettingsVi
     vapiAssistantId: plainField(r.vapi_assistant_id),
     elevenlabsApiKey: secretField(r.elevenlabs_api_key_enc),
     anthropicApiKey: secretField(r.anthropic_api_key_enc),
-    companyName: plainField(r.company_name),
     assistantName: plainField(r.assistant_name || 'Deniz'),
     name: plainField(r.name),
   };

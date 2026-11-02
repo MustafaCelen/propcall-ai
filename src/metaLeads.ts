@@ -5,6 +5,7 @@
 
 import { getAllUsersWithMetaConfig, setUserMetaLastSync, MetaConfig } from './users';
 import { createLead } from './leads';
+import { normalizePhone } from './dncList';
 import pool from './db';
 
 async function getLeadByMetaLeadId(metaLeadId: string): Promise<boolean> {
@@ -52,7 +53,10 @@ async function syncForm(userId: string, config: MetaConfig, formId: string, form
         firstName,
         lastName,
         email: fields.email || null,
-        phone: fields.phone_number || fields.phone || null,
+        // Meta'nın gönderdiği biçim garanti değil (bazı formlarda "0555…", bazılarında
+        // "+90555…"). E.164'e normalize et — aramalar da bu biçimde kaydediliyor,
+        // böylece arama sonucu bu adaya doğrudan eşleşir.
+        phone: normalizePhone(fields.phone_number || fields.phone || '') || null,
         source: 'META_LEAD_AD',
         metaLeadId: String(leadData.id),
         adData: {

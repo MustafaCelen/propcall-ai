@@ -42,10 +42,6 @@
         <input type="text" id="newName" placeholder="Ahmet Yılmaz" />
       </div>
       <div class="adm-form-field">
-        <label class="adm-mini-label">Şirket/Takım Adı <span style="font-weight:400;color:var(--txm)">(opsiyonel)</span></label>
-        <input type="text" id="newCompanyName" placeholder="Keller Williams Platin&Karma" />
-      </div>
-      <div class="adm-form-field">
         <label class="adm-mini-label">Geçici Şifre</label>
         <input type="text" id="newPassword" placeholder="İlk giriş için" />
       </div>
@@ -98,6 +94,48 @@
     <div class="adm-field-status" id="statusScriptRules"></div>
   </details>
 
+  <details class="adm-card">
+    <summary class="adm-section-title">⛔ Ret Listesi (Beni Aramayın) <span style="font-weight:400;color:var(--txm);font-size:11px">(tüm danışmanları etkiler — global)</span></summary>
+    <div class="adm-field-hint" style="margin-bottom:14px">Bir müşteri görüşme sırasında açıkça "bir daha aramayın" dediğinde AI bunu otomatik tespit edip buraya ekler — bu numara artık HİÇBİR danışman tarafından aranamaz. Yanlış bir tespit görürsen aşağıdan kaldırabilirsin. Elle de numara ekleyebilirsin.</div>
+    <div class="adm-form-row">
+      <div class="adm-form-field">
+        <label class="adm-mini-label">Telefon</label>
+        <input type="text" id="dncPhone" placeholder="+905551234567" />
+      </div>
+      <div class="adm-form-field">
+        <label class="adm-mini-label">Gerekçe <span style="font-weight:400;color:var(--txm)">(opsiyonel)</span></label>
+        <input type="text" id="dncReason" placeholder="Manuel not..." />
+      </div>
+      <button class="adm-btn" id="btnDncAdd">Ekle</button>
+    </div>
+    <table class="adm-table">
+      <thead>
+        <tr><th>Telefon</th><th>Gerekçe</th><th>Kaynak</th><th>Eklenme</th><th>İşlem</th></tr>
+      </thead>
+      <tbody id="dncBody">
+        <tr><td colspan="5" class="adm-table-empty">Yükleniyor...</td></tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="adm-card">
+    <summary class="adm-section-title">🩺 Veri Sağlık Kontrolü <span style="font-weight:400;color:var(--txm);font-size:11px">(muhasebe ve özet tutarlılığı)</span></summary>
+    <div class="adm-field-hint" style="margin-bottom:14px">
+      Mantıksal olarak imkânsız kayıtları arar: aynı arama için iki kez ücret kesilmesi,
+      bir kullanıcının bakiyesinin hareket toplamıyla tutmaması, birbiriyle çelişen özet
+      alanları. Hepsi <strong>0</strong> olmalı — biri 0 değilse sessiz bir bozulma var demektir.
+    </div>
+    <button class="adm-btn" id="btnHealthCheck">Kontrolü Çalıştır</button>
+    <table class="adm-table" style="margin-top:14px">
+      <thead>
+        <tr><th>Kontrol</th><th>Sorunlu Kayıt</th><th>Açıklama</th></tr>
+      </thead>
+      <tbody id="healthBody">
+        <tr><td colspan="3" class="adm-table-empty">"Kontrolü Çalıştır"a basın</td></tr>
+      </tbody>
+    </table>
+  </details>
+
 </div>
 
 <script src="ui-kit.js"></script>
@@ -112,6 +150,7 @@ async function checkSession() {
   loadUsers();
   loadAdminStats();
   loadScriptRules();
+  loadDncList();
 }
 
 async function loadAdminStats() {
@@ -181,6 +220,111 @@ $('btnSaveScriptRules').addEventListener('click', async () => {
   }
 });
 
+const DNC_SOURCE_LABELS = { ai_detected: '🤖 AI tespit etti', manual: '✋ Elle eklendi' };
+
+// Veri saglik kontrolu — muhasebe/ozet mantiginin sessizce bozulup bozulmadigini
+// gosterir. Salt okunur, hicbir veri degistirmez.
+async function runHealthCheck() {
+  const btn = $('btnHealthCheck');
+  const tbody = $('healthBody');
+  btn.disabled = true;
+  tbody.innerHTML = '<tr><td colspan="3" class="adm-table-empty">Kontrol ediliyor...</td></tr>';
+  try {
+    const r = await fetch('/api/admin/health');
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+
+    const checks = j.data.checks || [];
+    tbody.innerHTML = checks.map(c => {
+      // 0 = temiz, >0 = sorunlu kayit var, -1 = kontrol calistirilamadi
+      const durum = c.sorunlu === 0
+        ? '<span style="color:var(--primary);font-weight:700">0 ✓</span>'
+        : c.sorunlu < 0
+          ? '<span style="color:var(--orange);font-weight:700">?</span>'
+          : '<span style="color:var(--red);font-weight:700">' + c.sorunlu + ' ⚠</span>';
+      return '<tr>' +
+        '<td style="font-family:monospace;font-size:11.5px">' + esc(c.ad) + '</td>' +
+        '<td>' + durum + '</td>' +
+        '<td style="font-size:11.5px;color:var(--tx2)">' + esc(c.aciklama) + '</td>' +
+      '</tr>';
+    }).join('');
+
+    if (j.data.saglikli) {
+      tbody.innerHTML += '<tr><td colspan="3" style="padding-top:10px;color:var(--primary)">' +
+        'Tum kontroller temiz — mantiksal olarak tutarsiz kayit yok.</td></tr>';
+    }
+  } catch (err) {
+    tbody.innerHTML = '<tr><td colspan="3" class="adm-table-empty">Hata: ' + esc(err.message) + '</td></tr>';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function loadDncList() {
+  try {
+    const r = await fetch('/api/admin/dnc-list');
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    renderDncList(j.data);
+  } catch (err) {
+    $('dncBody').innerHTML = '<tr><td colspan="5" class="adm-table-empty">Hata: ' + esc(err.message) + '</td></tr>';
+  }
+}
+
+function renderDncList(rows) {
+  const tbody = $('dncBody');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="adm-table-empty">Ret listesi boş</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td>${esc(r.phone)}</td>
+      <td>${esc(r.reason || '—')}</td>
+      <td>${DNC_SOURCE_LABELS[r.source] || r.source}</td>
+      <td>${fmtDate(r.createdAt)}</td>
+      <td><button class="adm-btn-danger" data-phone="${esc(r.phone)}">Kaldır</button></td>
+    </tr>
+  `).join('');
+  tbody.querySelectorAll('button[data-phone]').forEach(btn => {
+    btn.addEventListener('click', () => removeDnc(btn.dataset.phone));
+  });
+}
+
+async function removeDnc(phone) {
+  if (!confirm(`${phone} numarasını ret listesinden kaldırmak istediğinize emin misiniz? Bu numara tekrar aranabilir hale gelecek.`)) return;
+  try {
+    const r = await fetch('/api/admin/dnc-list/' + encodeURIComponent(phone), { method: 'DELETE' });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    loadDncList();
+    toast('✓ Kaldırıldı', 'success');
+  } catch (err) {
+    toast('✗ ' + err.message, 'error');
+  }
+}
+
+$('btnHealthCheck').addEventListener('click', runHealthCheck);
+
+$('btnDncAdd').addEventListener('click', async () => {
+  const phone = $('dncPhone').value.trim();
+  if (!phone) { toast('✗ Telefon zorunlu', 'error'); return; }
+  try {
+    const r = await fetch('/api/admin/dnc-list', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, reason: $('dncReason').value.trim() || null }),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    $('dncPhone').value = '';
+    $('dncReason').value = '';
+    renderDncList(j.data);
+    toast('✓ Ret listesine eklendi', 'success');
+  } catch (err) {
+    toast('✗ ' + err.message, 'error');
+  }
+});
+
 $('btnLogout').addEventListener('click', async () => {
   await fetch('/api/auth/logout', { method: 'POST' });
   location.href = '/login';
@@ -239,12 +383,12 @@ function renderUsers(users) {
   });
 }
 
-// Danışmanın Ad Soyad'ını sonradan düzeltmek için — bu alan {{consultantName}}
-// olarak canlı aramalarda kullanıldığından yanlış/eksik girilmişse etkisi büyük.
+// Danışmanın Ad Soyad'ını sonradan düzeltmek için — sadece admin panelinde
+// görüntüleme amaçlı (senaryolarda artık sadece {{agentName}} kullanılıyor).
 async function editUserName(id, btn) {
   const row = btn.closest('tr');
   const currentName = row.children[1].textContent.trim();
-  const newName = await uiPrompt('Danışmanın Ad Soyad\'ını girin — canlı aramalarda {{consultantName}} olarak kullanılır:', {
+  const newName = await uiPrompt('Danışmanın Ad Soyad\'ını girin:', {
     title: 'Adı Düzenle', placeholder: 'Ahmet Yılmaz', value: currentName === '—' ? '' : currentName,
   });
   if (!newName || !newName.trim()) return;
@@ -330,7 +474,6 @@ async function resetPassword(id) {
 $('btnCreate').addEventListener('click', async () => {
   const email = $('newEmail').value.trim();
   const name = $('newName').value.trim();
-  const companyName = $('newCompanyName').value.trim();
   const password = $('newPassword').value.trim();
   const errEl = $('createErr');
   const okEl = $('createOk');
@@ -346,7 +489,7 @@ $('btnCreate').addEventListener('click', async () => {
   $('btnCreate').disabled = true;
   const r = await fetch('/api/admin/users', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, name, companyName, password }),
+    body: JSON.stringify({ email, name, password }),
   });
   const j = await r.json();
   $('btnCreate').disabled = false;
@@ -361,7 +504,6 @@ $('btnCreate').addEventListener('click', async () => {
   okEl.classList.add('show');
   $('newEmail').value = '';
   $('newName').value = '';
-  $('newCompanyName').value = '';
   $('newPassword').value = '';
   loadUsers();
 });

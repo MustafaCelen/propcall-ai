@@ -26,6 +26,17 @@ async function loadTokenFromDB(): Promise<TokenCache | null> {
   }
 }
 
+// Geçersizliği KANITLANMIŞ (401 alınmış) token'ı DB'den siler. Kritik: aksi halde
+// bir sonraki getToken() aynı ölü token'ı tekrar çeker ve her istek 401 → 409 →
+// hata döngüsüne girer (üretimde yaşanan kilitlenme buydu).
+async function deleteTokenFromDB(): Promise<void> {
+  try {
+    await pool.query(`DELETE FROM fonzip_config WHERE key = 'token'`);
+  } catch (err) {
+    console.error("[Fonzip] Ölü token DB'den silinemedi:", err);
+  }
+}
+
 async function saveTokenToDB(token: string, expiresAt: number): Promise<void> {
   try {
     await pool.query(
@@ -53,15 +64,27 @@ async function createFreshToken(retryOn409 = true): Promise<string> {
 
   let res = await doCreate();
   let attempt = 0;
-  // 409: Fonzip'te aktif token var — 5 dk bekleyip tekrar dener (max 6 kez = 30 dk).
-  while (res.status === 409 && retryOn409 && attempt < 6) {
+  // 409 = "Token already created": Fonzip aynı anda tek aktif token'a izin veriyor.
+  // KISA aralıklarla birkaç kez dener (toplam ~9sn) — eskiden 5dk x 6 = 30dk bekliyordu,
+  // bu bir HTTP isteğinin içinde kabul edilemez (tarayıcı çoktan timeout olur) ve
+  // danışmanın "sayfa hiç açılmadı" şikayetinin sebebiydi. Fonzip'in eski token'ı
+  // düşmediyse burada hata fırlatmak doğrusu — çağıran anlamlı bir mesaj gösterir.
+  const RETRY_DELAYS_MS = [1000, 3000, 5000];
+  while (res.status === 409 && retryOn409 && attempt < RETRY_DELAYS_MS.length) {
+    const delay = RETRY_DELAYS_MS[attempt];
     attempt++;
-    console.log(`[Fonzip] 409 alındı, ${attempt}/6 — 5 dk bekleniyor...`);
-    await new Promise(r => setTimeout(r, 5 * 60 * 1000));
+    console.log(`[Fonzip] 409 alındı, ${attempt}/${RETRY_DELAYS_MS.length} — ${delay / 1000}sn bekleniyor...`);
+    await new Promise(r => setTimeout(r, delay));
     res = await doCreate();
   }
   if (!res.ok) {
     const text = await res.text();
+    if (res.status === 409) {
+      throw new Error(
+        'Fonzip ödeme sistemine şu an bağlanılamıyor (aktif oturum çakışması). ' +
+        'Lütfen birkaç dakika sonra tekrar deneyin.',
+      );
+    }
     throw new Error(`Fonzip token alınamadı: ${res.status} ${text.slice(0, 200)}`);
   }
   const data = await res.json() as { access_token: string };
@@ -74,8 +97,17 @@ async function createFreshToken(retryOn409 = true): Promise<string> {
 
 async function getToken(): Promise<string> {
   if (tokenCache && Date.now() < tokenCache.expiresAt) return tokenCache.token;
+  // expires_at sadece bizim TAHMİNİMİZ (token oluşturulurken +55dk) — Fonzip'in
+  // kendi taraftaki gerçek geçerlilik süresi bundan sapabilir (saat senkron sorunu,
+  // Fonzip'in kendi süresi bizimkinden uzun/kısa olabilir). "Süresi dolmuş görünen"
+  // bir DB token'ını hemen atıp yeni token istemek, Fonzip'in tarafında hâlâ aktifse
+  // 409 ("zaten aktif token var") ile reddedilir — bu da saatlerce süren bir kilitlenmeye
+  // yol açar (bkz. üretimde yaşanan olay: DB token süresi dolmuş görünüyordu ama Fonzip
+  // hâlâ eskisini aktif sayıp yeni istekleri 30dk boyunca 409'la reddetmişti).
+  // Çözüm: süresi dolmuş görünse bile DB'de bir token varsa ÖNCE onu dene — gerçekten
+  // geçersizse callFonzip zaten 401 alıp createFreshToken() ile tazeleyecek.
   const dbToken = await loadTokenFromDB();
-  if (dbToken && Date.now() < dbToken.expiresAt) { tokenCache = dbToken; return dbToken.token; }
+  if (dbToken) { tokenCache = dbToken; return dbToken.token; }
   return createFreshToken();
 }
 
@@ -90,7 +122,11 @@ async function callFonzip(method: 'GET' | 'POST' | 'DELETE', path: string, body?
   let res = await doRequest(token);
 
   if (res.status === 401) {
+    // Token'ın geçersizliği KANITLANDI (Fonzip 401 döndü). Hem bellek cache'ini hem
+    // DB kaydını temizle — DB'yi temizlemezsek bir sonraki getToken() aynı ölü token'ı
+    // tekrar çeker ve her istek 401 → 409 → hata döngüsüne girer (kalıcı kilitlenme).
     tokenCache = null;
+    await deleteTokenFromDB();
     token = await createFreshToken();
     res = await doRequest(token);
   }

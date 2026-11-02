@@ -4,10 +4,16 @@
 import crypto from 'crypto';
 import { Request, Response, NextFunction } from 'express';
 import pool from './db';
-import { getAuthRecord, getUserById, touchLastLogin, UserRow } from './users';
+import { getAuthRecord, getUserById, touchLastLogin, recordTermsAcceptance, UserRow } from './users';
 
 const COOKIE_NAME    = 'propcall_sid';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 gün
+
+// Kullanım Koşulları ve Sorumluluk Beyanı'nın mevcut versiyonu (bkz. public/terms.js
+// TERMS_TEXT ile birebir aynı içeriği temsil eder — metin ANLAMLI şekilde değişirse
+// burası artırılır, bu da terms_accepted_version'ı geçersiz kılıp danışmanı tekrar
+// onaya zorlar). Sadece yazım/kozmetik düzeltmeler için artırmaya gerek yok.
+export const CURRENT_TERMS_VERSION = 1;
 
 const SCRYPT_N = 16384, SCRYPT_R = 8, SCRYPT_P = 1, KEYLEN = 64;
 
@@ -65,6 +71,10 @@ export async function login(req: Request, res: Response): Promise<void> {
   res.cookie(COOKIE_NAME, sid, {
     httpOnly: true,
     sameSite: 'lax',
+    // Production (Railway) her zaman HTTPS — oturum çerezinin düz HTTP üzerinden
+    // gönderilmesine izin vermeye gerek yok. Yerel geliştirme http://localhost
+    // üzerinden çalıştığı için orada kapalı bırakılır, aksi halde hiç giriş yapılamaz.
+    secure: process.env.NODE_ENV === 'production',
     path: '/',
     maxAge: SESSION_TTL_MS,
   });
@@ -96,10 +106,20 @@ async function resolveSession(req: Request): Promise<UserRow | null> {
   return user;
 }
 
+// Terms'i henüz kabul etmemiş bir danışmanın YİNE DE çağırabilmesi gereken uçlar —
+// oturum bilgisini okumak, kabul etmek, çıkış yapmak. Bu kısa liste dışındaki HER
+// /api/* uç (arama başlatma, mesaj gönderme, aday/kampanya işlemleri...) 403 alır —
+// sadece frontend modalına güvenmek yeterli değil, sunucu tarafında da kilitli olmalı.
+const TERMS_EXEMPT_PATHS = new Set(['/api/auth/session', '/api/terms/accept', '/api/auth/logout']);
+
 export async function requireUserAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
   const user = await resolveSession(req);
   if (!user) {
     res.status(401).json({ success: false, error: 'not_authenticated' });
+    return;
+  }
+  if (user.termsAcceptedVersion !== CURRENT_TERMS_VERSION && !TERMS_EXEMPT_PATHS.has(req.path)) {
+    res.status(403).json({ success: false, error: 'terms_not_accepted' });
     return;
   }
   req.userId = user.id;
@@ -126,4 +146,13 @@ export async function getSessionUser(req: Request, res: Response): Promise<void>
   const user = await resolveSession(req);
   if (!user) { res.status(401).json({ success: false, error: 'not_authenticated' }); return; }
   res.json({ success: true, data: user });
+}
+
+// Süresi dolmuş oturumları toplu siler. resolveSession zaten süresi geçmiş bir
+// oturumu okurken siliyor — ama bu SADECE o kullanıcı tekrar uğrarsa olur. Bir
+// daha hiç giriş yapmayan birinin kaydı sonsuza dek kalırdı. Açılışta ve günde
+// bir çalıştırılır; silinen satır sayısını döner.
+export async function cleanupExpiredSessions(): Promise<number> {
+  const { rowCount } = await pool.query('DELETE FROM user_sessions WHERE expires_at < NOW()');
+  return rowCount ?? 0;
 }

@@ -3,6 +3,8 @@ import {
   CallRecord, CustomerInfo, CallSummary, CallCosts,
   VapiTranscriptEntry, CallFilters, StatsData,
 } from './types';
+import { translateEndedReason } from './campaignErrors';
+import { phoneVariants } from './dncList';
 
 // Webhook yolunda kullanılır — kayıt zaten var olduğu için düz UPDATE yeterli
 // (createCall'daki ilk INSERT dışında hiçbir çağıran yeni satır oluşturmaz).
@@ -56,8 +58,11 @@ export async function reconcileStaleCalls(olderThanMinutes = 30): Promise<number
 }
 
 export async function getAllCalls(userId: string, filters?: CallFilters): Promise<CallRecord[]> {
+  // is_practice = false — Roleplay Pratik görüşmeleri (bkz. src/personas.ts) gerçek
+  // Geçmiş Aramalar listesinde görünmesin, danışmanın gerçek performans geçmişini
+  // pratik oturumlarla karıştırmasın (v1'de ayrı bir "Pratik Geçmişi" görünümü yok).
   const { rows } = await pool.query(
-    'SELECT data FROM calls WHERE user_id = $1 ORDER BY start_time DESC NULLS LAST',
+    'SELECT data FROM calls WHERE user_id = $1 AND is_practice = false ORDER BY start_time DESC NULLS LAST',
     [userId],
   );
   let calls: CallRecord[] = rows.map(r => r.data as CallRecord);
@@ -85,6 +90,8 @@ export async function createCall(
   scenarioName?: string,
   campaignId?: string,
   leadSource?: string,
+  isPractice?: boolean,
+  personaId?: string,
 ): Promise<CallRecord> {
   const record: CallRecord = {
     callId:        `call_${Date.now()}`,
@@ -102,11 +109,13 @@ export async function createCall(
     scenarioName,
     campaignId,
     leadSource: leadSource || undefined,
+    isPractice: isPractice || undefined,
+    personaId,
   };
   await pool.query(
-    `INSERT INTO calls (vapi_call_id, data, start_time, status, user_id)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [record.vapiCallId, JSON.stringify(record), record.startTime, record.status, userId],
+    `INSERT INTO calls (vapi_call_id, data, start_time, status, user_id, is_practice)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [record.vapiCallId, JSON.stringify(record), record.startTime, record.status, userId, isPractice === true],
   );
   return record;
 }
@@ -136,12 +145,25 @@ export async function updateCallForUser(
   return updated;
 }
 
+// ElevenLabs v3/v4 ses etiketleri — "[brisk, warm] Merhaba…" gibi. LLM bunları
+// ton/tempo yönergesi olarak üretir, TTS sesli okumaz; ama Vapi transkriptine
+// asistan metni olarak düşer. Kayıt anında temizliyoruz ki ekran, özet (ai.ts)
+// ve dışa aktarım aynı temiz metni görsün. Yalnızca küçük harf İngilizce
+// kelime(ler) içeren köşeli parantezleri hedefler — Türkçe/büyük harfli
+// parantez içi metinlere dokunmaz.
+const AUDIO_TAG_RE = /\[(?:[a-z]+(?:[ ,'-]+[a-z]+)*)\]\s*/g;
+export function stripAudioTags(text: string): string {
+  return text.replace(AUDIO_TAG_RE, '').replace(/\s{2,}/g, ' ').trim();
+}
+
 export async function appendTranscript(
   vapiCallId: string,
   entry: VapiTranscriptEntry,
 ): Promise<void> {
   const record = await readCall(vapiCallId);
   if (!record) return;
+  if (entry.role === 'assistant') entry = { ...entry, text: stripAudioTags(entry.text) };
+  if (!entry.text) return; // sadece etiketten oluşan parça — boş balon ekleme
   record.transcript.push(entry);
   await writeCall(record);
 }
@@ -198,7 +220,14 @@ export async function getBestCallsByPhoneForCampaign(
     [userId, campaignId],
   );
   const map = new Map<string, BestCallInfo>();
-  for (const r of rows) map.set(r.phone, { vapiCallId: r.vapi_call_id, status: r.status, summary: r.summary });
+  for (const r of rows) {
+    const info = { vapiCallId: r.vapi_call_id, status: r.status, summary: r.summary };
+    // Her varyant altında da indeksle — çağıran (recordToEntry) kampanya kaydındaki
+    // numarayla arıyor ve o ham formatta olabilirken DB'deki satır E.164 olabilir
+    // (ya da tersi). Tek anahtarla saklarsak restart sonrası durum senkronizasyonu
+    // bu kişiyi bulamaz ve zaten tamamlanmış bir aramayı tekrar kuyruğa alır.
+    for (const variant of phoneVariants(r.phone)) map.set(variant, info);
+  }
   return map;
 }
 
@@ -217,19 +246,57 @@ export async function getBestCallsByPhoneForCampaign(
 export async function findRecentCallForPhone(
   userId: string, phone: string, sinceIso: string,
 ): Promise<BestCallInfo | null> {
+  // Numara iki formatta da aranır. Gerekçe: aramalar artık E.164 ("+90555…") olarak
+  // kaydediliyor, ama bu normalizasyon eklenmeden ÖNCE yazılmış satırlar ham
+  // ("0555…") formatta duruyor. Tek formatla sorgulamak bu kayıtları GÖREMEZ ve
+  // tekrar arama koruması sessizce delinir — aynı kişi ikinci kez aranır.
   const { rows } = await pool.query<{ vapi_call_id: string; status: string; summary: CallSummary | null }>(
     `SELECT vapi_call_id, status, data->'summary' AS summary
      FROM calls
-     WHERE user_id = $1 AND data->>'customerPhone' = $2 AND start_time >= $3 AND status = 'completed'
+     WHERE user_id = $1 AND data->>'customerPhone' = ANY($2::text[]) AND start_time >= $3 AND status = 'completed'
      ORDER BY
        (data->'summary'->>'randevu_alindi')::boolean DESC NULLS LAST,
        (data->'summary' IS NOT NULL) DESC,
        start_time DESC
      LIMIT 1`,
-    [userId, phone, sinceIso],
+    [userId, phoneVariants(phone), sinceIso],
   );
   const r = rows[0];
   return r ? { vapiCallId: r.vapi_call_id, status: r.status, summary: r.summary } : null;
+}
+
+// Kampanya-BAĞIMSIZ, tüm zamanlar — bir numara bu kullanıcı tarafından toplamda
+// kaç kez aranmış (is_practice hariç, gerçek aramalar). Toplu Arama tablosunda
+// "bu kişi daha önce kaç kez arandı" göstergesi için — danışman aynı numarayı
+// farklı kampanyalarda tekrar tekrar aramış olabilir, bunu tek bakışta görsün.
+// Tek seferde TÜM numaralar için toplu sorgu (N+1 önlemek için) — kampanya
+// tablosu render edilirken her satır için ayrı sorgu atmak yerine.
+export async function getCallCountsByPhone(userId: string, phones: string[]): Promise<Record<string, number>> {
+  if (!phones.length) return {};
+  // Sorguyu tüm yazım biçimleriyle yap, sonucu ÇAĞIRANIN gönderdiği anahtara geri
+  // topla — aksi halde eski (ham) ve yeni (E.164) kayıtlar iki ayrı satır sayılır
+  // ve danışman "×3" yerine "×1" görür.
+  const variantToInput = new Map<string, string>();
+  const allVariants: string[] = [];
+  for (const input of phones) {
+    for (const v of phoneVariants(input)) {
+      if (!variantToInput.has(v)) { variantToInput.set(v, input); allVariants.push(v); }
+    }
+  }
+
+  const { rows } = await pool.query<{ phone: string; count: string }>(
+    `SELECT data->>'customerPhone' AS phone, COUNT(*)::int AS count
+     FROM calls
+     WHERE user_id = $1 AND data->>'customerPhone' = ANY($2::text[]) AND is_practice = false
+     GROUP BY data->>'customerPhone'`,
+    [userId, allVariants],
+  );
+  const result: Record<string, number> = {};
+  for (const r of rows) {
+    const key = variantToInput.get(r.phone) ?? r.phone;
+    result[key] = (result[key] ?? 0) + Number(r.count);
+  }
+  return result;
 }
 
 // Kampanya ve tek arama arasında paylaşılan: İngilizce status → Türkçe UI etiketi
@@ -300,6 +367,7 @@ export interface CampaignStatsData {
   ilgiDistribution: Array<{ seviye: string; count: number }>;
   retNedeniDistribution: Array<{ neden: string; count: number }>;
   statusBreakdown: Array<{ status: string; count: number }>;
+  failureReasonBreakdown: Array<{ reason: string; count: number }>;
   hourlyPerformance: Array<{ hour: number; calls: number; randevu: number }>;
   regionPerformance: Array<{ region: string; calls: number; randevu: number; randevuRate: number }>;
   mulkTipiDistribution: Array<{ tip: string; count: number }>;
@@ -314,7 +382,7 @@ export interface CampaignStatsData {
 // kullanır ama tarih aralığı yerine campaignId ile filtreler.
 export async function getCampaignStats(userId: string, campaignId: string): Promise<CampaignStatsData> {
   const [
-    mainRow, ilgiRows, retRows, statusRows,
+    mainRow, ilgiRows, retRows, statusRows, failureReasonRows,
     hourRows, regionRows, mulkRows, retryRow,
   ] = await Promise.all([
     pool.query<{
@@ -349,6 +417,14 @@ export async function getCampaignStats(userId: string, campaignId: string): Prom
     ),
     pool.query<{ status: string; count: string }>(
       `SELECT status, COUNT(*)::int AS count FROM calls WHERE data->>'campaignId' = $1 AND user_id = $2 GROUP BY status`,
+      [campaignId, userId],
+    ),
+    // Başarısız aramaların gerçek teknik sebebi — "Hata: N" sayısının ardındaki
+    // dağılımı görmek için (bkz. campaignErrors.ts translateEndedReason).
+    pool.query<{ reason: string; count: string }>(
+      `SELECT COALESCE(data->>'endedReason', 'bilinmeyen') AS reason, COUNT(*)::int AS count
+       FROM calls WHERE data->>'campaignId' = $1 AND user_id = $2 AND status = 'failed'
+       GROUP BY reason ORDER BY count DESC LIMIT 6`,
       [campaignId, userId],
     ),
     // Saatlik performans — bu kampanyada hangi saatte arayınca daha çok randevu alınıyor
@@ -437,6 +513,10 @@ export async function getCampaignStats(userId: string, campaignId: string): Prom
     ilgiDistribution: ilgiOrder.map(s => ({ seviye: s, count: ilgiMap[s] || 0 })),
     retNedeniDistribution: retRows.rows.map(r => ({ neden: r.neden, count: Number(r.count) })),
     statusBreakdown: statusRows.rows.map(r => ({ status: r.status, count: Number(r.count) })),
+    failureReasonBreakdown: failureReasonRows.rows.map(r => ({
+      reason: r.reason === 'bilinmeyen' ? 'Bilinmeyen bir hata oluştu' : translateEndedReason(r.reason),
+      count: Number(r.count),
+    })),
     hourlyPerformance,
     regionPerformance,
     mulkTipiDistribution: mulkRows.rows.map(r => ({ tip: r.tip, count: Number(r.count) })),
@@ -471,11 +551,14 @@ export async function getStats(userId: string, filters?: StatsFilters): Promise<
   if (spanDays > 90) seriesStartDate = addDays(seriesEndDate, -90);
 
   // Tüm sorgularda paylaşılan filtre: tarih aralığı ($1/$3) + senaryo ($4, '__none__'
-  // senaryosuz aramalar demek). Tüm ağır hesaplamalar PostgreSQL'de paralel çalışır.
+  // senaryosuz aramalar demek) + is_practice=false (Roleplay Pratik görüşmeleri,
+  // bkz. src/personas.ts, gerçek performans istatistiklerini kirletmesin). Tüm ağır
+  // hesaplamalar PostgreSQL'de paralel çalışır.
   const RANGE = `
     AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
     AND ($3::timestamptz IS NULL OR start_time <= $3::timestamptz)
-    AND ($4::text IS NULL OR ($4 = '__none__' AND data->>'scenarioId' IS NULL) OR data->>'scenarioId' = $4)`;
+    AND ($4::text IS NULL OR ($4 = '__none__' AND data->>'scenarioId' IS NULL) OR data->>'scenarioId' = $4)
+    AND is_practice = false`;
   const baseParams = [fromTs, userId, toTs, scenarioId];
 
   const [
@@ -527,6 +610,7 @@ export async function getStats(userId: string, filters?: StatsFilters): Promise<
        LEFT JOIN calls c ON c.start_time::date = ds.d
          AND c.user_id = $1
          AND ($2::text IS NULL OR ($2 = '__none__' AND c.data->>'scenarioId' IS NULL) OR c.data->>'scenarioId' = $2)
+         AND c.is_practice = false
        GROUP BY ds.d ORDER BY ds.d`,
       [userId, scenarioId, seriesStartDate, seriesEndDate],
     ),
@@ -545,6 +629,7 @@ export async function getStats(userId: string, filters?: StatsFilters): Promise<
        LEFT JOIN calls c ON c.start_time::date = ds.d
          AND c.user_id = $1
          AND ($2::text IS NULL OR ($2 = '__none__' AND c.data->>'scenarioId' IS NULL) OR c.data->>'scenarioId' = $2)
+         AND c.is_practice = false
        GROUP BY ds.d ORDER BY ds.d`,
       [userId, scenarioId, seriesStartDate, seriesEndDate],
     ),
@@ -711,6 +796,7 @@ export async function getAdminUserComparison(dateFrom?: string, dateTo?: string)
      WHERE user_id IS NOT NULL
        AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
        AND ($2::timestamptz IS NULL OR start_time <= $2::timestamptz)
+       AND is_practice = false
      GROUP BY user_id
      ORDER BY total_calls DESC`,
     [fromTs, toTs],
@@ -752,4 +838,76 @@ export async function exportCSV(userId: string, filters?: CallFilters): Promise<
   ]);
   const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
   return [headers.map(esc).join(','), ...rows.map(r => r.map(esc).join(','))].join('\n');
+}
+
+// Veri tutarlilik kontrolleri — muhasebe ve ozet mantiginin sessizce bozulmasini
+// yakalar. Her biri SIFIR donmeli; sifir degilse mantiksal olarak imkansiz bir
+// kayit olusmus demektir (orn. ayni arama iki kez ucretlendirilmis, ya da bir
+// kullanicinin bakiyesi hareket toplamiyla tutmuyor).
+// Admin panelinden gorulebilsin diye API'ye baglanir (GET /api/admin/health).
+export interface DataHealthCheck {
+  ad: string;
+  sorunlu: number;
+  aciklama: string;
+}
+
+export async function getDataHealth(): Promise<DataHealthCheck[]> {
+  const sorgular: Array<{ ad: string; aciklama: string; sql: string }> = [
+    {
+      ad: 'celiskili_ozet_ilgi',
+      aciklama: 'Randevu alindi ama ilgi seviyesi "yok" — birbiriyle celisen ozet',
+      sql: `SELECT count(*)::int AS n FROM calls
+            WHERE (data->'summary'->>'randevu_alindi')::boolean = true
+              AND data->'summary'->>'ilgi_seviyesi' = 'yok'`,
+    },
+    {
+      ad: 'celiskili_ozet_ret',
+      aciklama: 'Randevu alindi ama ret nedeni dolu — birbiriyle celisen ozet',
+      sql: `SELECT count(*)::int AS n FROM calls
+            WHERE (data->'summary'->>'randevu_alindi')::boolean = true
+              AND data->'summary'->>'ret_nedeni' IS NOT NULL
+              AND data->'summary'->>'ret_nedeni' <> 'null'`,
+    },
+    {
+      ad: 'negatif_sure',
+      aciklama: 'Arama suresi negatif',
+      sql: `SELECT count(*)::int AS n FROM calls WHERE (data->>'duration')::float < 0`,
+    },
+    {
+      ad: 'cift_ucretlendirme',
+      aciklama: 'Ayni arama icin birden fazla ucret kesilmis — PARA KAYBI',
+      sql: `SELECT count(*)::int AS n FROM (
+              SELECT vapi_call_id FROM credit_transactions
+              WHERE type = 'call_charge' AND vapi_call_id IS NOT NULL
+              GROUP BY 1 HAVING count(*) > 1) x`,
+    },
+    {
+      ad: 'sahipsiz_hareket',
+      aciklama: 'Kredi hareketi var ama kullanicisi yok',
+      sql: `SELECT count(*)::int AS n FROM credit_transactions ct
+            LEFT JOIN users u ON u.id = ct.user_id WHERE u.id IS NULL`,
+    },
+    {
+      ad: 'bakiye_uyusmazligi',
+      aciklama: 'Kullanici bakiyesi hareket toplamiyla tutmuyor — MUHASEBE HATASI',
+      sql: `SELECT count(*)::int AS n FROM (
+              SELECT u.id FROM users u
+              LEFT JOIN credit_transactions ct ON ct.user_id = u.id
+              GROUP BY u.id, u.balance_try
+              HAVING round(u.balance_try::numeric, 2) <> round(COALESCE(sum(ct.amount), 0)::numeric, 2)) x`,
+    },
+  ];
+
+  const sonuc: DataHealthCheck[] = [];
+  for (const q of sorgular) {
+    try {
+      const { rows } = await pool.query(q.sql);
+      sonuc.push({ ad: q.ad, sorunlu: Number(rows[0]?.n ?? 0), aciklama: q.aciklama });
+    } catch (err) {
+      // Tek bir kontrolun patlamasi digerlerini engellemesin.
+      sonuc.push({ ad: q.ad, sorunlu: -1, aciklama: q.aciklama + ' (kontrol calistirilamadi)' });
+      console.error(`[DataHealth] "${q.ad}" kontrolu basarisiz:`, err);
+    }
+  }
+  return sonuc;
 }

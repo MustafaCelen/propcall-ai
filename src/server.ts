@@ -10,18 +10,27 @@ dotenv.config();
 import { initDb } from './db';
 import pool from './db';
 import { generateCallSummary } from './ai';
+import { isPhoneBlocked, addToDoNotCallList, listDoNotCallEntries, removeFromDoNotCallList, normalizePhone } from './dncList';
+import { ROLEPLAY_PERSONAS, getRoleplayPersona } from './personas';
 import {
   createVapiCall, endVapiCall, getVapiCredit, getAssistantSystemPrompt, updateAssistantSystemPrompt,
   getSignedRecordingUrl, verifyVapiApiKey, getAssistantConfig, updateAssistantConfig, updateAssistantServer,
   listAssistants, listPhoneNumbers, importAssistant, createDefaultAssistant, AssistantConfigPatch,
+  buildRoleplayAssistantOverrides,
 } from './vapi';
 import { getElevenLabsCredit, listElevenLabsVoices, estimateTtsCost, generateVoicePreview } from './elevenlabs';
 import { getAllAppointments, saveAppointment, deleteAppointment, setAppointmentOutcome } from './appointments';
 import {
   getAllLeads, getLead, createLead, updateLead, setLeadStage, deleteLead,
   getLeadActivities, addLeadActivity, upsertLeadFromCallOutcome,
+  previewImportConflicts, commitImportResolutions, leadsToCampaignContacts,
+  querySegment, ImportRow, ImportResolution, SegmentRule,
 } from './leads';
 import { startMetaSyncJob, syncUserMetaLeadsNow } from './metaLeads';
+import {
+  listSmartPlans, createSmartPlan, updateSmartPlanStatus, deleteSmartPlan,
+  startSmartPlanScheduler, CreateSmartPlanInput,
+} from './smartPlans';
 import {
   getAllTemplates, getTemplate, createTemplate, updateTemplate, deleteTemplate,
   submitTemplate, startTemplateSyncJob,
@@ -29,6 +38,7 @@ import {
 import {
   getMessagesForLead, sendSingleMessage, recordInboundMessage, getInbox,
   getAllCampaigns, previewCampaignRecipients, createCampaign, sendCampaign,
+  updateMessageDeliveryStatus,
 } from './whatsappCampaigns';
 import {
   connectPersonalWhatsapp, getPersonalStatus, disconnectPersonalWhatsapp, reconnectAllPersonalSessions,
@@ -37,33 +47,36 @@ import { getAllScenarios, getScenario, createScenario, updateScenario, deleteSce
 import { findUnsupportedVariables } from './templateVariables';
 import {
   getAllCalls, readCall, readCallForUser, createCall, updateCall, updateCallForUser,
-  appendTranscript, updateCosts, saveCallSummary, getCallOwnerUserId,
-  endedReasonToStatus, getStats, exportCSV, getCampaignStats, reconcileStaleCalls, getAdminUserComparison,
+  appendTranscript, stripAudioTags, updateCosts, saveCallSummary, getCallOwnerUserId, getCallCountsByPhone,
+  endedReasonToStatus, getStats, exportCSV, getCampaignStats, reconcileStaleCalls, getAdminUserComparison, getDataHealth,
 } from './calls';
-import { VapiCallRequest, VapiWebhookPayload, VapiCostItem, CallFilters, CallRecord, CallCosts, LEAD_STAGES } from './types';
+import { VapiCallRequest, VapiWebhookPayload, VapiCostItem, CallFilters, CallRecord, CallCosts, LEAD_STAGES, Lead, CustomerInfo, ScenarioVoiceModel, SCENARIO_VOICE_MODELS } from './types';
 import {
   initCampaignRunner, loadAllActiveCampaigns, getCampaignState,
   campaignLoad, campaignStart, campaignResume, campaignPause, campaignStop, campaignClear,
-  onCampaignCallEnded, onCampaignSummaryReady,
+  campaignRetryFailed, campaignDismissLimitNotice, onCampaignCallEnded, onCampaignSummaryReady,
+  resyncCampaignSummaries, campaignDiscardDraft, campaignRerun, RERUN_SCOPES, RerunScope,
 } from './campaign';
-import { listCampaigns, getCampaign } from './campaigns';
+import { listCampaigns, getCampaign, deleteCampaignRecord } from './campaigns';
+import { translateDialError, toClientError } from './campaignErrors';
 import {
   ensureBootstrapAdmin, backfillOwnerlessRows, getSettingsForUser, getAuthRecord,
   listUsers, createUser, setUserActive, setUserPassword, setUserMaxConcurrent, setUserCallingHours, setUserDuplicateCallProtection,
   setUserElevenLabsRate, setUserVapiCredentials, setUserElevenLabsKey, setUserAnthropicKey,
-  getUserVapiCredentials, getUserElevenLabsKey, getUserAnthropicKey, resolveVapiCreds, getUserById,
+  getUserVapiCredentials, getUserWebhookVerification, getUserElevenLabsKey, getUserAnthropicKey, resolveVapiCreds, getUserById,
   getUserVapiApiKey, resolveVapiCredsForAssistant,
   getUserBalance, adjustUserBalance, chargeForCall, listCreditTransactions, CALL_MINUTE_RATE_TRY,
-  setUserCompanyName, setUserAssistantName, setUserName, createPendingFonzipTopup, creditFonzipTopup,
+  setUserAssistantName, setUserName, createPendingFonzipTopup, creditFonzipTopup,
   setUserMetaConfig, clearUserMetaConfig, getUserMetaConfig, getUserIdByMetaPageId,
   setUserWhatsappConfig, clearUserWhatsappConfig, getUserWhatsappConfig,
+  recordTermsAcceptance,
 } from './users';
 import {
   isFonzipConfigured, resolveFonzipUserId, createTopupDebt, generateTopupLink,
   getDebtAmount, getDebtDetails, verifyWebhookAuthToken, ensureWebhookRegistered,
   findPendingTopup, cleanupStalePendingTopups,
 } from './fonzip';
-import { hashPassword, verifyPassword, login, logout, getSessionUser, requireUserAuth, requireAdmin } from './auth';
+import { hashPassword, verifyPassword, login, logout, getSessionUser, requireUserAuth, requireAdmin, CURRENT_TERMS_VERSION, cleanupExpiredSessions } from './auth';
 import rateLimit from 'express-rate-limit';
 import { generateVapiPrompt, PromptGenInput } from './promptgen';
 import { getScriptRules, setScriptRules, lintGeneratedPrompt, rulesToSystemPromptAddendum } from './scriptRules';
@@ -124,12 +137,27 @@ const loginLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: realClientIp,
+  // BAŞARILI girişler sayaca yazılmaz. Sayaç IP bazlı olduğu için, aynı ofisten
+  // (tek dış IP) çalışan bir ekipte normal günlük girişler on denemeyi doldurup
+  // herkesi 15 dakika dışarıda bırakıyordu — gerçek olay: iki hesap aynı anda
+  // kilitlendi. Kaba kuvvet koruması yalnızca başarısız denemeleri saymalı.
+  skipSuccessfulRequests: true,
   message: { success: false, error: 'Çok fazla başarısız giriş denemesi — 15 dakika sonra tekrar deneyin.' },
 });
 
 app.post('/api/auth/login',  loginLimiter, login);
 app.post('/api/auth/logout', logout);
 app.get('/api/auth/session', getSessionUser);
+
+// Danışman, aradığı/mesaj attığı numaraların İYS/KVKK uygunluğundan kendisinin
+// sorumlu olduğunu kabul eder — requireUserAuth bu onay CURRENT_TERMS_VERSION'la
+// eşleşmeden diğer tüm /api/* uçları 403 ile keser (bkz. auth.ts).
+app.post('/api/terms/accept', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    await recordTermsAcceptance(req.userId!, CURRENT_TERMS_VERSION, realClientIp(req));
+    return res.json({ success: true, data: await getUserById(req.userId!) });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
 
 // Danışman kendi şifresini değiştirir — önceden bu hiç yoktu, sadece admin'in
 // "Şifre Sıfırla" ile başka birinin şifresini ELLE değiştirmesi mümkündü. Gerçek
@@ -150,7 +178,7 @@ app.post('/api/auth/change-password', requireUserAuth, loginLimiter, async (req:
     }
     await setUserPassword(req.userId!, hashPassword(newPassword));
     return res.json({ success: true });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.get('/login', (_req: Request, res: Response) => {
@@ -164,7 +192,7 @@ app.get('/api/settings', requireUserAuth, async (req: Request, res: Response) =>
     const data = await getSettingsForUser(req.userId!);
     res.json({ success: true, data });
   } catch (err) {
-    res.status(500).json({ success: false, error: String(err) });
+    res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
@@ -173,8 +201,17 @@ app.get('/api/settings', requireUserAuth, async (req: Request, res: Response) =>
 // isteklerini doğrulayabiliriz (bkz. Faz 5 spoof kontrolü). Kaydetme akışını
 // bloklamasın diye çağıran yer bunu fire-and-forget kullanır.
 async function provisionWebhookIfReady(userId: string): Promise<void> {
-  const creds = await getUserVapiCredentials(userId);
-  if (!creds) return; // apiKey/phoneNumberId/assistantId üçlüsü henüz tam değil
+  // KASITLI olarak getUserVapiCredentials (apiKey+phoneNumberId+assistantId) DEĞİL,
+  // resolveVapiCredsForAssistant (sadece apiKey+assistantId) kullanılıyor — Roleplay
+  // Pratik (bkz. src/personas.ts) telefon numarası çevirmediği için phoneNumberId'si
+  // hiç olmayan bir kullanıcı için de webhook (transkript/özet/ücretlendirme) kurulmalı.
+  // Gerçek soğuk arama zaten ayrıca phoneNumberId'yi /api/call seviyesinde zorunlu tutuyor.
+  let creds: { apiKey: string; assistantId: string };
+  try {
+    creds = await resolveVapiCredsForAssistant(userId);
+  } catch {
+    return; // apiKey/assistantId henüz tam değil
+  }
   const appUrl = process.env.APP_URL;
   if (!appUrl) { console.warn('[Webhook] APP_URL tanımlı değil — otomatik webhook kurulumu atlandı'); return; }
 
@@ -201,7 +238,6 @@ app.put('/api/settings', requireUserAuth, async (req: Request, res: Response) =>
       case 'vapiAssistantId':     await setUserVapiCredentials(req.userId!, { assistantId: v }); break;
       case 'elevenlabsApiKey':    await setUserElevenLabsKey(req.userId!, v); break;
       case 'anthropicApiKey':     await setUserAnthropicKey(req.userId!, v); break;
-      case 'companyName':         await setUserCompanyName(req.userId!, v); break;
       case 'assistantName':       await setUserAssistantName(req.userId!, v); break;
       case 'name':                await setUserName(req.userId!, v); break;
       default: return res.status(400).json({ success: false, error: 'Geçersiz anahtar' });
@@ -211,7 +247,7 @@ app.put('/api/settings', requireUserAuth, async (req: Request, res: Response) =>
     }
     return res.json({ success: true });
   } catch (err) {
-    return res.status(500).json({ success: false, error: String(err) });
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
@@ -223,7 +259,7 @@ app.post('/api/settings/verify-vapi', requireUserAuth, async (req: Request, res:
     const result = await verifyVapiApiKey(value.trim());
     return res.json({ success: result.ok, error: result.error });
   } catch (err) {
-    return res.status(500).json({ success: false, error: String(err) });
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
@@ -243,7 +279,7 @@ app.post('/api/settings/vapi-assistants', requireUserAuth, async (req: Request, 
     const apiKey = await resolveApiKeyForListing(req);
     return res.json({ success: true, data: await listAssistants(apiKey) });
   } catch (err) {
-    return res.status(500).json({ success: false, error: String(err) });
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
@@ -252,7 +288,7 @@ app.post('/api/settings/vapi-phone-numbers', requireUserAuth, async (req: Reques
     const apiKey = await resolveApiKeyForListing(req);
     return res.json({ success: true, data: await listPhoneNumbers(apiKey) });
   } catch (err) {
-    return res.status(500).json({ success: false, error: String(err) });
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
@@ -278,7 +314,7 @@ app.post('/api/settings/import-assistant', requireUserAuth, async (req: Request,
 
     return res.json({ success: true, data: created });
   } catch (err) {
-    return res.status(500).json({ success: false, error: String(err) });
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
@@ -297,7 +333,7 @@ app.get('/api/settings/calling-limits', requireUserAuth, async (req: Request, re
         duplicateCallProtectionDays: user.duplicateCallProtectionDays,
       },
     });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.put('/api/settings/calling-limits', requireUserAuth, async (req: Request, res: Response) => {
@@ -320,7 +356,7 @@ app.put('/api/settings/calling-limits', requireUserAuth, async (req: Request, re
       await setUserDuplicateCallProtection(req.userId!, duplicateCallProtectionDays);
     }
     return res.json({ success: true });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 // ─── AYARLARIM — Maliyet takibi (ElevenLabs karakter başı ücret) ────────────
@@ -333,7 +369,7 @@ app.get('/api/settings/cost-config', requireUserAuth, async (req: Request, res: 
     const user = await getUserById(req.userId!);
     if (!user) return res.status(404).json({ success: false, error: 'Kullanıcı bulunamadı' });
     return res.json({ success: true, data: { elevenLabsCostPer1k: user.elevenLabsCostPer1k } });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.put('/api/settings/cost-config', requireUserAuth, async (req: Request, res: Response) => {
@@ -344,7 +380,7 @@ app.put('/api/settings/cost-config', requireUserAuth, async (req: Request, res: 
     }
     await setUserElevenLabsRate(req.userId!, elevenLabsCostPer1k ?? null);
     return res.json({ success: true });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 // ─── AYARLARIM — Asistan Ayarları (model/ses/transkripsiyon/davranış) ────────
@@ -355,7 +391,7 @@ app.get('/api/settings/assistant-config', requireUserAuth, async (req: Request, 
     const data = await getAssistantConfig(creds.apiKey, creds.assistantId);
     return res.json({ success: true, data });
   } catch (err) {
-    return res.status(500).json({ success: false, error: String(err) });
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
@@ -366,7 +402,7 @@ app.put('/api/settings/assistant-config', requireUserAuth, async (req: Request, 
     await updateAssistantConfig(creds.apiKey, creds.assistantId, patch);
     return res.json({ success: true });
   } catch (err) {
-    return res.status(500).json({ success: false, error: String(err) });
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
@@ -376,7 +412,7 @@ app.get('/api/settings/elevenlabs-voices', requireUserAuth, async (req: Request,
     const data = await listElevenLabsVoices(key);
     return res.json({ success: true, data });
   } catch (err) {
-    return res.status(500).json({ success: false, error: String(err) });
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
@@ -394,7 +430,7 @@ app.post('/api/settings/voice-preview', requireUserAuth, async (req: Request, re
     res.set('Content-Length', String(audio.length));
     return res.send(audio);
   } catch (err) {
-    return res.status(500).json({ success: false, error: String(err) });
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
@@ -407,11 +443,21 @@ app.get('/settings', requireUserAuth, (_req: Request, res: Response) => {
 app.get('/api/admin/users', requireAdmin, async (_req: Request, res: Response) => {
   try {
     return res.json({ success: true, data: await listUsers() });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 // Danışmanlar arası (cross-tenant) karşılaştırma — sadece admin görebilir, tek bir
 // danışmanın /api/stats'ından FARKLI: burada GROUP BY user_id, herkes bir arada.
+// Veri tutarlilik kontrolleri — muhasebe/ozet mantigi sessizce bozulursa burada
+// gorunur. Hepsi 0 donmeli; 0 degilse mantiksal olarak imkansiz bir kayit var.
+app.get('/api/admin/health', requireAdmin, async (_req: Request, res: Response) => {
+  try {
+    const checks = await getDataHealth();
+    const sorunlu = checks.filter(c => c.sorunlu !== 0);
+    return res.json({ success: true, data: { checks, saglikli: sorunlu.length === 0, sorunlu } });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
 app.get('/api/admin/stats', requireAdmin, async (req: Request, res: Response) => {
   try {
     const dateFrom = typeof req.query.dateFrom === 'string' ? req.query.dateFrom : undefined;
@@ -424,18 +470,15 @@ app.get('/api/admin/stats', requireAdmin, async (req: Request, res: Response) =>
       name: userMap.get(r.userId)?.name ?? null,
     }));
     return res.json({ success: true, data });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 // Yeni danışman oluşturulduğunda mümkün olan her yeri firma varsayılanıyla doldurur —
 // sadece telefon numarası danışmana özel kalır, o admin/danışman tarafından Ayarlarım'dan
 // elle atanır. Hiçbir DEFAULT_* env değişkeni tanımlı değilse (henüz kurulmamışsa) sessizce
 // atlanır — hesap oluşturmayı bloklamaz, alanlar mevcut akışta olduğu gibi boş kalır.
-async function provisionNewUserDefaults(userId: string, name?: string, companyNameInput?: string): Promise<void> {
+async function provisionNewUserDefaults(userId: string, name?: string): Promise<void> {
   try {
-    const companyName = companyNameInput?.trim() || process.env.DEFAULT_COMPANY_NAME?.trim() || '';
-    if (companyName) await setUserCompanyName(userId, companyName);
-
     const defVapiKey       = process.env.DEFAULT_VAPI_API_KEY?.trim();
     const defVapiPublicKey = process.env.DEFAULT_VAPI_PUBLIC_KEY?.trim();
     const defElevenKey     = process.env.DEFAULT_ELEVENLABS_API_KEY?.trim();
@@ -475,16 +518,16 @@ async function provisionNewUserDefaults(userId: string, name?: string, companyNa
 
 app.post('/api/admin/users', requireAdmin, async (req: Request, res: Response) => {
   try {
-    const { email, name, password, role, companyName } = req.body as {
-      email: string; name?: string; password: string; role?: 'agent' | 'admin'; companyName?: string;
+    const { email, name, password, role } = req.body as {
+      email: string; name?: string; password: string; role?: 'agent' | 'admin';
     };
     if (!email?.trim() || !password?.trim()) {
       return res.status(400).json({ success: false, error: 'E-posta ve geçici şifre zorunlu' });
     }
-    const user = await createUser({ email, name, passwordHash: hashPassword(password), role, companyName });
-    await provisionNewUserDefaults(user.id, user.name || undefined, companyName);
+    const user = await createUser({ email, name, passwordHash: hashPassword(password), role });
+    await provisionNewUserDefaults(user.id, user.name || undefined);
     return res.status(201).json({ success: true, data: await getUserById(user.id) });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.patch('/api/admin/users/:id', requireAdmin, async (req: Request, res: Response) => {
@@ -494,13 +537,22 @@ app.patch('/api/admin/users/:id', requireAdmin, async (req: Request, res: Respon
     };
     if (isActive !== undefined) await setUserActive(req.params.id, isActive);
     if (password?.trim())      await setUserPassword(req.params.id, hashPassword(password));
-    if (maxConcurrentCalls !== undefined) await setUserMaxConcurrent(req.params.id, maxConcurrentCalls);
+    if (maxConcurrentCalls !== undefined) {
+      // 0/negatif girilirse kampanya motoru hiç slot açamaz ve kampanya sessizce
+      // hiç ilerlemez; aşırı büyük değer Vapi hesap limitine çarpıp istekleri
+      // boşa reddettirir. Kabul edilebilir aralığa sıkıştır.
+      const n = Number(maxConcurrentCalls);
+      if (!Number.isFinite(n) || n < 1 || n > 10) {
+        return res.status(400).json({ success: false, error: 'Eşzamanlı arama sayısı 1 ile 10 arasında olmalı' });
+      }
+      await setUserMaxConcurrent(req.params.id, Math.round(n));
+    }
     if (name !== undefined) {
       if (!name.trim()) return res.status(400).json({ success: false, error: 'Ad Soyad boş olamaz' });
       await setUserName(req.params.id, name);
     }
     return res.json({ success: true });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 // Jeton (TL bakiyesi) yükleme/düzeltme — amount negatif de olabilir (hatalı
@@ -511,10 +563,15 @@ app.post('/api/admin/users/:id/balance', requireAdmin, async (req: Request, res:
     if (typeof amount !== 'number' || amount === 0 || !Number.isFinite(amount)) {
       return res.status(400).json({ success: false, error: 'Geçerli bir tutar girin (TL, 0 olamaz)' });
     }
+    // Üst sınır — elle girilen bir fazladan sıfırın ("100000" yerine "1000000")
+    // sessizce geçip muhasebeyi bozmasını engeller.
+    if (Math.abs(amount) > 1_000_000) {
+      return res.status(400).json({ success: false, error: 'Tek seferde en fazla 1.000.000 TL işlem yapılabilir' });
+    }
     const type = amount > 0 ? 'topup' : 'adjustment';
     const newBalance = await adjustUserBalance(req.params.id, amount, type, note);
     return res.json({ success: true, data: { balanceTry: newBalance } });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.get('/admin', requireAdmin, (_req: Request, res: Response) => {
@@ -557,6 +614,20 @@ app.post('/api/call', requireUserAuth, async (req: Request, res: Response) => {
     if (!customer?.name || !customer?.phone)
       return res.status(400).json({ success: false, error: 'Ad ve telefon zorunlu' });
 
+    // Vapi E.164 bekler. İstemci (public/app.js cleanPhone) zaten normalize ediyor
+    // ama sunucu buna güvenemez — API doğrudan çağrılırsa "0555..." gibi bir numara
+    // Vapi'ye gider ve anlamsız bir 400 ile döner. Burada tek noktada normalize et.
+    const normalizedPhone = normalizePhone(customer.phone);
+    const phoneDigits = normalizedPhone.replace(/\D/g, '');
+    if (!normalizedPhone.startsWith('+') || phoneDigits.length < 10 || phoneDigits.length > 15) {
+      return res.status(400).json({ success: false, error: 'Telefon numarası geçersiz — ülke koduyla birlikte girin (örn. 0555 123 45 67).' });
+    }
+    customer.phone = normalizedPhone;
+
+    if (await isPhoneBlocked(customer.phone)) {
+      return res.status(403).json({ success: false, error: 'Bu numara ret listesinde — daha önce "bir daha aramayın" talebinde bulunmuş, aranamaz.' });
+    }
+
     const balance = await getUserBalance(req.userId!);
     if (balance < CALL_MINUTE_RATE_TRY) {
       return res.status(402).json({ success: false, error: `Jeton bakiyeniz yetersiz (kalan: ${balance.toFixed(2)} TL) — en az ${CALL_MINUTE_RATE_TRY} TL gerekli` });
@@ -567,8 +638,7 @@ app.post('/api/call', requireUserAuth, async (req: Request, res: Response) => {
     const user     = await getUserById(req.userId!);
     const vapiCall = await createVapiCall(creds, customer, scenario?.systemPrompt, {
       agentName: user?.assistantName || undefined,
-      consultantName: user?.name || undefined,
-      companyName: user?.companyName || undefined,
+      voiceModel: scenario?.voiceModel,
     });
     const record   = await createCall(req.userId!, vapiCall.id, customer, scenario?.id, scenario?.name);
 
@@ -576,7 +646,89 @@ app.post('/api/call', requireUserAuth, async (req: Request, res: Response) => {
     return res.json({ success: true, data: { callId: vapiCall.id, recordId: record.callId } });
   } catch (err) {
     console.error('[API] /call hatası:', err);
-    return res.status(500).json({ success: false, error: String(err) });
+    // Ham String(err) danışmana Vapi'nin İngilizce/kod-benzeri hatasını (hatta stack'ini)
+    // gösteriyordu. Toplu aramada zaten kullanılan çeviriciden geçir — aynı hata aynı
+    // Türkçe cümleyle görünsün.
+    return res.status(500).json({ success: false, error: translateDialError(err) });
+  }
+});
+
+// ─── ROLEPLAY PRATİK ─────────────────────────────────────────────────────────
+// Danışmanın tarayıcıdan mikrofonla, telefon çevirmeden, AI'ın canlandırdığı bir
+// müşteri persona ile (v1: FSBO) canlı pratik yaptığı akış — bkz. src/personas.ts.
+// Gerçek arama gibi aynı jeton bakiyesinden ücretlendirilir (CALL_MINUTE_RATE_TRY).
+//
+// ROLEPLAY_FREE=true olan ortamlarda (staging) pratik görüşmeler ücretsizdir:
+// bakiye ön-kontrolü atlanır ve end-of-call-report'ta jeton düşülmez. Production'da
+// bu değişken TANIMSIZ bırakılır — orada pratik normal şekilde ücretlendirilir.
+const ROLEPLAY_FREE = process.env.ROLEPLAY_FREE === 'true';
+
+app.get('/api/roleplay/personas', requireUserAuth, async (_req: Request, res: Response) => {
+  // systemPrompt BİLEREK response'a dahil edilmez — persona sürprizi bozulmasın
+  // ve gerçek prompt sadece sunucu tarafında (assistant-overrides ucunda) kullanılsın.
+  // briefing ise TAM TERSİNE danışmanın görüşme ÖNCESİ görmesi gereken hazırlık
+  // bilgisi (mülk, fiyat, itirazlar) — bunu saklamanın hiçbir faydası yok.
+  const personas = ROLEPLAY_PERSONAS.map(({ id, family, difficulty, label, description, briefing }) =>
+    ({ id, family, difficulty, label, description, briefing }));
+  return res.json({ success: true, data: { personas, ratePerMinute: CALL_MINUTE_RATE_TRY } });
+});
+
+app.get('/api/roleplay/assistant-overrides/:personaId', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const persona = getRoleplayPersona(req.params.personaId);
+    if (!persona) return res.status(404).json({ success: false, error: 'Persona bulunamadı' });
+
+    if (!ROLEPLAY_FREE) {
+      const balance = await getUserBalance(req.userId!);
+      if (balance < CALL_MINUTE_RATE_TRY) {
+        return res.status(402).json({ success: false, error: `Jeton bakiyeniz yetersiz (kalan: ${balance.toFixed(2)} TL) — en az ${CALL_MINUTE_RATE_TRY} TL gerekli` });
+      }
+    }
+
+    // Roleplay telefon numarası çevirmiyor — resolveVapiCreds (phoneNumberId dahil
+    // TAM üçlü) DEĞİL, resolveVapiCredsForAssistant (sadece apiKey+assistantId)
+    // kullanılmalı. Aksi halde phoneNumberId'si henüz seçilmemiş (roleplay-only)
+    // bir danışman "Vapi hesap bilgileriniz tanımlı değil" hatası alır — webhook
+    // kurulumunda (provisionWebhookIfReady) düzeltilen aynı hata, burada da vardı.
+    const creds = await resolveVapiCredsForAssistant(req.userId!);
+    const user  = await getUserById(req.userId!);
+    const assistantOverrides = await buildRoleplayAssistantOverrides(creds, persona.systemPrompt, user?.assistantName || undefined, persona.gender);
+    return res.json({ success: true, data: { assistantId: creds.assistantId, assistantOverrides } });
+  } catch (err) {
+    console.error('[Roleplay] assistant-overrides hatası:', err);
+    return res.status(500).json({ success: false, error: toClientError(err) });
+  }
+});
+
+app.post('/api/roleplay/register-call', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const { vapiCallId, personaId } = req.body as { vapiCallId?: string; personaId?: string };
+    if (!vapiCallId || !personaId) return res.status(400).json({ success: false, error: 'vapiCallId ve personaId zorunlu' });
+
+    const persona = getRoleplayPersona(personaId);
+    if (!persona) return res.status(404).json({ success: false, error: 'Persona bulunamadı' });
+
+    // Aynı call id ikinci kez register edilmeye çalışılırsa (yeniden bağlanma/çift
+    // event) sessizce mevcut kaydı kabul et — hataya düşürmeye gerek yok.
+    const existingOwner = await getCallOwnerUserId(vapiCallId);
+    if (existingOwner) return res.json({ success: true, data: { alreadyRegistered: true } });
+
+    if (!ROLEPLAY_FREE) {
+      const balance = await getUserBalance(req.userId!);
+      if (balance < CALL_MINUTE_RATE_TRY) {
+        return res.status(402).json({ success: false, error: 'Jeton bakiyeniz yetersiz' });
+      }
+    }
+
+    const placeholderCustomer: CustomerInfo = {
+      name: `Pratik — ${persona.label}`, phone: 'roleplay', region: '', notes: '', reference: '',
+    };
+    await createCall(req.userId!, vapiCallId, placeholderCustomer, undefined, undefined, undefined, undefined, true, personaId);
+    console.log(`[Roleplay] Kayıt: ${vapiCallId} → user=${req.userId} persona=${personaId}`);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[Roleplay] register-call hatası:', err);
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
@@ -589,7 +741,7 @@ app.delete('/api/call/:vapiCallId', requireUserAuth, async (req: Request, res: R
     await updateCall(req.params.vapiCallId, { status: 'completed', endTime: new Date().toISOString() });
     return res.json({ success: true });
   } catch (err) {
-    return res.status(500).json({ success: false, error: String(err) });
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
@@ -604,52 +756,16 @@ app.get('/api/calls/:vapiCallId/recording', requireUserAuth, async (req: Request
     if (!url) return res.status(404).json({ success: false, error: 'Kayıt bulunamadı' });
     return res.redirect(302, url);
   } catch (err) {
-    return res.status(500).json({ success: false, error: String(err) });
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
 // ─── VAPI: Webhook ────────────────────────────────────────────────────────────
-// /webhook/:userId — birincil rota. Vapi'nin assistant.server ayarına
-// provisionWebhookIfReady() tarafından otomatik yazılır. İki katmanlı doğrulama:
-// (1) X-Vapi-Secret header, o kullanıcı için üretilmiş gizli anahtarla eşleşmeli
-// (2) payload'daki assistantId, o kullanıcının kayıtlı assistantId'siyle eşleşmeli
-// İkisi de tutmazsa istek sessizce (ama loglanarak) düşürülür — sahte istek başka
-// bir danışmanın verisine yazamaz.
-app.post('/webhook/:userId', async (req: Request, res: Response) => {
-  res.sendStatus(200);
-  const routeUserId = req.params.userId;
-  const payload = req.body as VapiWebhookPayload;
-
-  try {
-    const creds = await getUserVapiCredentials(routeUserId);
-    const secretHeader = req.get('X-Vapi-Secret') || '';
-    const assistantId = (payload?.message?.call as any)?.assistantId;
-
-    if (!creds || !creds.serverSecret || secretHeader !== creds.serverSecret) {
-      console.warn(`[Webhook] SPOOF ATTEMPT (secret uyuşmuyor): userId=${routeUserId}`);
-      return;
-    }
-    if (assistantId && assistantId !== creds.assistantId) {
-      console.warn(`[Webhook] SPOOF ATTEMPT (assistantId uyuşmuyor): userId=${routeUserId} assistantId=${assistantId}`);
-      return;
-    }
-  } catch (err) {
-    console.error('[Webhook] Doğrulama hatası:', err);
-    return;
-  }
-
-  trackWebhook(handleWebhook(payload).catch(console.error));
-});
-
-// Geriye dönük uyumluluk — henüz /webhook/:userId'ye taşınmamış eski assistant
-// ayarları için. assistantId'den sahibi bulmaya çalışır, doğrulama yapmaz (zayıf).
-// Her danışman Ayarlarım'dan Vapi bilgilerini kaydettiğinde otomatik olarak
-// /webhook/:userId'ye geçer — bu rota zamanla kullanılmaz hale gelmeli.
-app.post('/webhook', (req: Request, res: Response) => {
-  res.sendStatus(200);
-  trackWebhook(handleWebhook(req.body as VapiWebhookPayload).catch(console.error));
-});
-
+// NOT: Bu blok /webhook/:userId'den ONCE gelmeli. Express rotalari sirayla
+// eslestirir; ":userId" once tanimlanirsa "/webhook/fonzip" istegi
+// ":userId=fonzip" olarak ona duser, Vapi secret'i tutmadigi icin
+// "SPOOF ATTEMPT" diye reddedilir ve odeme bildirimi HIC islenmez
+// (kartla yuklenen jeton bakiyeye yansimaz). Gercek production hatasiydi.
 // Fonzip ödeme bildirimi — kart ile jeton yükleme tamamlandığında gelir. Vapi
 // webhook'undaki gibi hemen 200 dönülür (Fonzip'in retry etmemesi için) — hem
 // başarı hem hata/sahtekarlık durumunda, bilgi sızdırmamak için.
@@ -677,6 +793,82 @@ app.post('/webhook/fonzip', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('[Fonzip Webhook] Hata:', err);
   }
+});
+
+// /webhook/:userId — birincil rota. Vapi'nin assistant.server ayarına
+// provisionWebhookIfReady() tarafından otomatik yazılır. İki katmanlı doğrulama:
+// (1) X-Vapi-Secret header, o kullanıcı için üretilmiş gizli anahtarla eşleşmeli
+// (2) payload'daki assistantId, o kullanıcının kayıtlı assistantId'siyle eşleşmeli
+// İkisi de tutmazsa istek sessizce (ama loglanarak) düşürülür — sahte istek başka
+// bir danışmanın verisine yazamaz.
+app.post('/webhook/meta', async (req: Request, res: Response) => {
+  res.sendStatus(200);
+  try {
+    const entries = (req.body as any)?.entry as Array<{ id: string }> | undefined;
+    for (const entry of entries || []) {
+      const userId = await getUserIdByMetaPageId(entry.id);
+      if (!userId) continue;
+      const config = await getUserMetaConfig(userId);
+      if (!config) continue;
+      syncUserMetaLeadsNow(userId, config).catch(err => console.error('[Webhook] Meta anında senkron hatası:', err));
+    }
+  } catch (err) { console.error('[Webhook] Meta webhook hatası:', err); }
+});
+
+// '/webhook/<isim>' seklindeki OZEL rotalarin adlari. Bu rota ':userId' oldugu
+// icin her seyi yakalar; ozel bir rota yanlislikla BUNDAN SONRA tanimlanirsa
+// istegi sessizce bu blok yutar ve 'SPOOF ATTEMPT' diye reddeder.
+// Gercek production hatasi: /webhook/fonzip boyle golgelenmisti ve kartla
+// yuklenen jetonlar bakiyeye hic yansimiyordu. Liste, hatayi sessiz kalmak
+// yerine aciga cikarir.
+const RESERVED_WEBHOOK_NAMES = new Set(['fonzip', 'meta']);
+
+app.post('/webhook/:userId', async (req: Request, res: Response) => {
+  res.sendStatus(200);
+  const routeUserId = req.params.userId;
+  const payload = req.body as VapiWebhookPayload;
+
+  // Ozel bir webhook adi buraya dustuyse rota sirasi bozulmus demektir --
+  // sessizce 'SPOOF ATTEMPT' loglamak yerine sorunu adiyla soyle.
+  if (RESERVED_WEBHOOK_NAMES.has(routeUserId)) {
+    console.error(
+      `[Webhook] ROTA SIRASI HATASI: '/webhook/${routeUserId}' istegi ':userId' rotasina dustu. ` +
+      `'/webhook/${routeUserId}' tanimi '/webhook/:userId'den ONCE gelmeli (src/server.ts).`);
+    return;
+  }
+
+  try {
+    // getUserVapiCredentials DEĞİL: o phoneNumberId'yi de zorunlu tutup yoksa null
+    // döner. Telefon numarası seçmemiş (sadece Roleplay Pratik yapan) bir danışmanın
+    // TÜM webhook'ları bu yüzden "SPOOF ATTEMPT" olarak düşüyordu — ücretlendirme,
+    // transkript ve özetin hiç işlenmemesinin gerçek sebebi buydu.
+    const creds = await getUserWebhookVerification(routeUserId);
+    const secretHeader = req.get('X-Vapi-Secret') || '';
+    const assistantId = (payload?.message?.call as any)?.assistantId;
+
+    if (!creds || !creds.serverSecret || secretHeader !== creds.serverSecret) {
+      console.warn(`[Webhook] SPOOF ATTEMPT (secret uyuşmuyor): userId=${routeUserId}`);
+      return;
+    }
+    if (assistantId && creds.assistantId && assistantId !== creds.assistantId) {
+      console.warn(`[Webhook] SPOOF ATTEMPT (assistantId uyuşmuyor): userId=${routeUserId} assistantId=${assistantId}`);
+      return;
+    }
+  } catch (err) {
+    console.error('[Webhook] Doğrulama hatası:', err);
+    return;
+  }
+
+  trackWebhook(handleWebhook(payload).catch(console.error));
+});
+
+// Geriye dönük uyumluluk — henüz /webhook/:userId'ye taşınmamış eski assistant
+// ayarları için. assistantId'den sahibi bulmaya çalışır, doğrulama yapmaz (zayıf).
+// Her danışman Ayarlarım'dan Vapi bilgilerini kaydettiğinde otomatik olarak
+// /webhook/:userId'ye geçer — bu rota zamanla kullanılmaz hale gelmeli.
+app.post('/webhook', (req: Request, res: Response) => {
+  res.sendStatus(200);
+  trackWebhook(handleWebhook(req.body as VapiWebhookPayload).catch(console.error));
 });
 
 // ─── Graceful shutdown ───────────────────────────────────────────────────────
@@ -739,7 +931,11 @@ async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
 
     case 'transcript':
       if (!vapiCallId || msg.transcriptType !== 'final' || !msg.transcript || !msg.role) break;
-      const entry = { role: msg.role, text: msg.transcript, timestamp: new Date().toISOString() };
+      // Asistan metnindeki ses etiketlerini ([brisk, warm] …) canlı akışa da
+      // temizlenmiş gönder — appendTranscript kayıt tarafını zaten temizliyor.
+      const entryText = msg.role === 'assistant' ? stripAudioTags(msg.transcript) : msg.transcript;
+      if (!entryText) break;
+      const entry = { role: msg.role, text: entryText, timestamp: new Date().toISOString() };
       await appendTranscript(vapiCallId, entry);
       emit('transcript', { vapiCallId, ...entry });
       break;
@@ -843,7 +1039,8 @@ async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
       // (cevapsız/meşgul/hata durumlarında dakika ücreti alınmaz). chargeForCall
       // aynı vapiCallId için iki kez çağrılsa bile (webhook tekrarı) DB seviyesinde
       // korumalı, ikinci kez düşülmez.
-      if (ownerId && status === 'completed' && duration && duration > 0) {
+      if (ownerId && status === 'completed' && duration && duration > 0
+          && !(ROLEPLAY_FREE && existing?.isPractice)) {
         try {
           const charged = await chargeForCall(ownerId, vapiCallId, duration);
           if (charged) broadcast(ownerId, 'balance-update', { balanceTry: await getUserBalance(ownerId) });
@@ -1013,6 +1210,15 @@ async function generateSummaryForCall(vapiCallId: string, attempt = 1): Promise<
       return;
     }
     console.warn(`[AI] ${vapiCallId} transcript boş, özet oluşturulamadı`);
+    // Sessizce vazgeçmek danışmanı "özet neden hiç gelmedi?" sorusuyla baş başa
+    // bırakıyordu — sebebi (konuşma kaydı boş) açıkça bildir.
+    const emptyOwnerId = await getCallOwnerUserId(vapiCallId);
+    if (emptyOwnerId) {
+      broadcast(emptyOwnerId, 'summary-error', {
+        vapiCallId,
+        error: 'Görüşme metni alınamadığı için özet oluşturulamadı (görüşme çok kısa sürmüş ya da ses kaydı boş olabilir).',
+      });
+    }
     return;
   }
 
@@ -1028,6 +1234,14 @@ async function generateSummaryForCall(vapiCallId: string, attempt = 1): Promise<
     await applyDerivedCosts(vapiCallId, ownerId, record, usage);
     broadcast(ownerId, 'summary-ready', { vapiCallId, summary });
     onCampaignSummaryReady(vapiCallId, summary).catch(console.error);
+    if (summary.beni_aramayin_talebi) {
+      addToDoNotCallList(record.customerPhone, summary.ret_nedeni || summary.ozet, 'ai_detected', ownerId, vapiCallId)
+        .then(() => {
+          console.warn(`[DNC] ${record.customerPhone} global ret listesine eklendi (AI tespiti, arama: ${vapiCallId})`);
+          broadcast(ownerId, 'dnc-added', { phone: record.customerPhone, vapiCallId });
+        })
+        .catch(err => console.error('[DNC] Ret listesine ekleme hatası:', err));
+    }
     // RLM birleşimi Faz 5: arama sonucu → Aday (Lead) — bkz. leads.ts
     // upsertLeadFromCallOutcome'daki asimetrik-risk yorumu (sadece ileri taşır).
     upsertLeadFromCallOutcome(
@@ -1036,8 +1250,17 @@ async function generateSummaryForCall(vapiCallId: string, attempt = 1): Promise<
     ).catch(err => console.error('[Leads] Arama sonucu → aday birleşimi hatası:', err));
     console.log(`[AI] Özet hazır: ${vapiCallId} (Anthropic: $${usage.costUsd.toFixed(4)})`);
   } catch (err) {
-    console.error('[AI] Özet hatası:', err);
-    broadcast(ownerId, 'summary-error', { vapiCallId, error: String(err) });
+    console.error(`[AI] Özet hatası (deneme ${attempt}/3):`, err);
+    // Önceden tek denemede vazgeçiliyordu: geçici bir API hatası ya da modelin
+    // bozuk JSON döndürmesi özeti KALICI olarak kaybettiriyordu (prod'da 7 günde
+    // 9 arama böyle özetsiz kaldı). Transkript elimizde olduğu için tekrar
+    // denemek bedava sayılır — sadece Anthropic çağrısı tekrarlanır.
+    if (attempt < 3) {
+      const waitMs = attempt * 10_000; // 10s, 20s
+      setTimeout(() => generateSummaryForCall(vapiCallId, attempt + 1).catch(console.error), waitMs);
+      return;
+    }
+    broadcast(ownerId, 'summary-error', { vapiCallId, error: toClientError(err) });
   }
 }
 
@@ -1150,7 +1373,7 @@ app.get('/api/followup', requireUserAuth, async (req: Request, res: Response) =>
       },
     });
   } catch (err) {
-    return res.status(500).json({ success: false, error: String(err) });
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
@@ -1162,7 +1385,7 @@ app.get('/api/calls', requireUserAuth, async (req: Request, res: Response) => {
     const filters: CallFilters = { dateFrom, dateTo, randevu, ilgi, aksiyon, status, scenarioId };
     return res.json({ success: true, data: await getAllCalls(req.userId!, filters) });
   } catch (err) {
-    return res.status(500).json({ success: false, error: String(err) });
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
@@ -1182,7 +1405,7 @@ app.patch('/api/calls/:id', requireUserAuth, async (req: Request, res: Response)
     if (!record) return res.status(404).json({ success: false, error: 'Arama bulunamadı' });
     return res.json({ success: true, data: record });
   } catch (err) {
-    return res.status(500).json({ success: false, error: String(err) });
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
@@ -1199,7 +1422,7 @@ app.post('/api/generate-summary', requireUserAuth, async (req: Request, res: Res
     await applyDerivedCosts(vapiCallId, req.userId!, record, usage);
     return res.json({ success: true, data: summary });
   } catch (err) {
-    return res.status(500).json({ success: false, error: String(err) });
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
@@ -1212,7 +1435,7 @@ app.get('/api/stats', requireUserAuth, async (req: Request, res: Response) => {
     const scenarioId = typeof req.query.scenarioId === 'string' ? req.query.scenarioId : undefined;
     return res.json({ success: true, data: await getStats(req.userId!, { dateFrom, dateTo, scenarioId }) });
   } catch (err) {
-    return res.status(500).json({ success: false, error: String(err) });
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
@@ -1234,7 +1457,7 @@ app.get('/api/billing', requireUserAuth, async (req: Request, res: Response) => 
       listCreditTransactions(req.userId!, 50),
     ]);
     return res.json({ success: true, data: { balanceTry, ratePerMinute: CALL_MINUTE_RATE_TRY, transactions, fonzipEnabled: isFonzipConfigured() } });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 // Kredi kartıyla kendi kendine jeton yükleme — Fonzip'te bir borç açar, danışmanı
@@ -1279,7 +1502,7 @@ app.post('/api/billing/topup', requireUserAuth, async (req: Request, res: Respon
     return res.json({ success: true, data: { link } });
   } catch (err) {
     console.error('[Fonzip] Topup hatası:', err);
-    return res.status(500).json({ success: false, error: String(err) });
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
@@ -1293,7 +1516,7 @@ app.get('/api/export', requireUserAuth, async (req: Request, res: Response) => {
     res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="propcall-export.csv"' });
     return res.send('﻿' + csv);
   } catch (err) {
-    return res.status(500).json({ success: false, error: String(err) });
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
@@ -1301,7 +1524,7 @@ app.get('/api/export', requireUserAuth, async (req: Request, res: Response) => {
 
 app.get('/api/appointments', requireUserAuth, async (req: Request, res) => {
   try { return res.json({ success: true, data: await getAllAppointments(req.userId!) }); }
-  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.post('/api/appointments', requireUserAuth, async (req: Request, res) => {
@@ -1310,7 +1533,7 @@ app.post('/api/appointments', requireUserAuth, async (req: Request, res) => {
     if (!customerName || !date || !time)
       return res.status(400).json({ success: false, error: 'Ad, tarih ve saat zorunlu' });
     return res.status(201).json({ success: true, data: await saveAppointment(req.userId!, { customerName, customerPhone, date, time, address, notes }) });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.delete('/api/appointments/:id', requireUserAuth, async (req: Request, res) => {
@@ -1318,7 +1541,7 @@ app.delete('/api/appointments/:id', requireUserAuth, async (req: Request, res) =
     if (!await deleteAppointment(req.userId!, req.params.id))
       return res.status(404).json({ success: false, error: 'Randevu bulunamadı' });
     return res.json({ success: true });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.patch('/api/appointments/:id/outcome', requireUserAuth, async (req: Request, res) => {
@@ -1329,7 +1552,7 @@ app.patch('/api/appointments/:id/outcome', requireUserAuth, async (req: Request,
     const updated = await setAppointmentOutcome(req.userId!, req.params.id, outcome, outcomeNote);
     if (!updated) return res.status(404).json({ success: false, error: 'Randevu bulunamadı' });
     return res.json({ success: true, data: updated });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 // ─── ADAYLAR (LEADS) ─────────────────────────────────────────────────────────
@@ -1338,7 +1561,7 @@ app.patch('/api/appointments/:id/outcome', requireUserAuth, async (req: Request,
 
 app.get('/api/leads', requireUserAuth, async (req: Request, res: Response) => {
   try { return res.json({ success: true, data: await getAllLeads(req.userId!) }); }
-  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.get('/api/leads/:id', requireUserAuth, async (req: Request, res: Response) => {
@@ -1346,18 +1569,18 @@ app.get('/api/leads/:id', requireUserAuth, async (req: Request, res: Response) =
     const lead = await getLead(req.userId!, req.params.id);
     if (!lead) return res.status(404).json({ success: false, error: 'Aday bulunamadı' });
     return res.json({ success: true, data: lead });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.post('/api/leads', requireUserAuth, async (req: Request, res: Response) => {
   try {
-    const { firstName, lastName, email, phone, notes } = req.body as {
-      firstName?: string; lastName?: string; email?: string; phone?: string; notes?: string;
+    const { firstName, lastName, email, phone, notes, tags } = req.body as {
+      firstName?: string; lastName?: string; email?: string; phone?: string; notes?: string; tags?: string[];
     };
     if (!firstName?.trim()) return res.status(400).json({ success: false, error: 'Ad zorunlu' });
-    const lead = await createLead(req.userId!, { firstName, lastName, email, phone, notes, source: 'MANUAL' });
+    const lead = await createLead(req.userId!, { firstName, lastName, email, phone, notes, tags, source: 'MANUAL' });
     return res.status(201).json({ success: true, data: lead });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.patch('/api/leads/:id', requireUserAuth, async (req: Request, res: Response) => {
@@ -1369,7 +1592,7 @@ app.patch('/api/leads/:id', requireUserAuth, async (req: Request, res: Response)
     const lead = await updateLead(req.userId!, req.params.id, { firstName, lastName, email, phone, notes, tags, whatsappIgnored });
     if (!lead) return res.status(404).json({ success: false, error: 'Aday bulunamadı' });
     return res.json({ success: true, data: lead });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.patch('/api/leads/:id/stage', requireUserAuth, async (req: Request, res: Response) => {
@@ -1381,7 +1604,7 @@ app.patch('/api/leads/:id/stage', requireUserAuth, async (req: Request, res: Res
     const lead = await setLeadStage(req.userId!, req.params.id, stage as any);
     if (!lead) return res.status(404).json({ success: false, error: 'Aday bulunamadı' });
     return res.json({ success: true, data: lead });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.delete('/api/leads/:id', requireUserAuth, async (req: Request, res: Response) => {
@@ -1389,12 +1612,101 @@ app.delete('/api/leads/:id', requireUserAuth, async (req: Request, res: Response
     if (!await deleteLead(req.userId!, req.params.id))
       return res.status(404).json({ success: false, error: 'Aday bulunamadı' });
     return res.json({ success: true });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.get('/api/leads/:id/activities', requireUserAuth, async (req: Request, res: Response) => {
   try { return res.json({ success: true, data: await getLeadActivities(req.userId!, req.params.id) }); }
-  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+// CSV/Excel içe aktarma — hiçbir şey yazmaz, sadece hangi satırların yeni,
+// hangilerinin mevcut bir adayla (telefon numarasıyla) çakıştığını hesaplar.
+app.post('/api/leads/import/preview', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const { rows } = req.body as { rows?: ImportRow[] };
+    if (!Array.isArray(rows) || !rows.length)
+      return res.status(400).json({ success: false, error: 'İçe aktarılacak satır listesi zorunlu' });
+    return res.json({ success: true, data: await previewImportConflicts(req.userId!, rows) });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+// Danışmanın çakışma çözümlerini (güncelle/atla/yeni-oluştur) uygulayıp gerçekten yazar.
+app.post('/api/leads/import/commit', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const { newRows, resolutions, importSource, tags } = req.body as {
+      newRows?: ImportRow[]; resolutions?: ImportResolution[]; importSource?: string | null; tags?: string[];
+    };
+    const result = await commitImportResolutions(
+      req.userId!, newRows || [], resolutions || [], importSource?.trim() || null, tags || [],
+    );
+    return res.json({ success: true, data: result });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+// Seçilen adayları Toplu Arama'nın kampanya motoruna beslenebilecek şekle çevirir —
+// leadId'yi de taşır ki arama sonucu AYNI lead'e yazılabilsin (bkz. campaign.ts).
+app.post('/api/leads/to-campaign-contacts', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const { leadIds } = req.body as { leadIds?: string[] };
+    if (!Array.isArray(leadIds) || !leadIds.length)
+      return res.status(400).json({ success: false, error: 'Aday seçimi zorunlu' });
+    const leads = (await Promise.all(leadIds.map(id => getLead(req.userId!, id)))).filter((l): l is Lead => !!l);
+    return res.json({ success: true, data: leadsToCampaignContacts(leads) });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+// ─── AKILLI PLAN — belirli gün/saat penceresinde otomatik kampanya açıp kapatan
+// zamanlayıcı (bkz. smartPlans.ts). Kendi dialer'ı yok — mevcut kampanya motorunu
+// arka planda tetikler, danışman elle her gün "Başlat"a basmak zorunda kalmaz. ───
+
+app.get('/api/smart-plans', requireUserAuth, async (req: Request, res: Response) => {
+  try { return res.json({ success: true, data: await listSmartPlans(req.userId!) }); }
+  catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+// Plan kaydetmeden önce "bu kural şu an kaç kişiye denk geliyor" önizlemesi —
+// hiçbir şey yazmaz, sadece querySegment'ı çalıştırıp sayıyı döner.
+app.post('/api/smart-plans/preview-segment', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const { segmentRule } = req.body as { segmentRule?: SegmentRule };
+    if (!segmentRule?.type) return res.status(400).json({ success: false, error: 'Hedef kitle kuralı zorunlu' });
+    const leads = await querySegment(req.userId!, segmentRule);
+    return res.json({ success: true, data: { count: leads.length } });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+app.post('/api/smart-plans', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const input = req.body as CreateSmartPlanInput;
+    if (!input.name?.trim()) return res.status(400).json({ success: false, error: 'Plan adı zorunlu' });
+    if (!Array.isArray(input.daysOfWeek) || !input.daysOfWeek.length)
+      return res.status(400).json({ success: false, error: 'En az bir gün seçilmeli' });
+    if (input.windowStartHour == null || input.windowEndHour == null)
+      return res.status(400).json({ success: false, error: 'Saat aralığı zorunlu' });
+    if (!input.segmentRule?.type)
+      return res.status(400).json({ success: false, error: 'Hedef kitle (segment) seçimi zorunlu' });
+    return res.status(201).json({ success: true, data: await createSmartPlan(req.userId!, input) });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+app.patch('/api/smart-plans/:id/status', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const { status } = req.body as { status?: 'active' | 'paused' | 'archived' };
+    if (!status || !['active', 'paused', 'archived'].includes(status))
+      return res.status(400).json({ success: false, error: 'Geçersiz durum' });
+    const plan = await updateSmartPlanStatus(req.userId!, req.params.id, status);
+    if (!plan) return res.status(404).json({ success: false, error: 'Plan bulunamadı' });
+    return res.json({ success: true, data: plan });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+app.delete('/api/smart-plans/:id', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    if (!await deleteSmartPlan(req.userId!, req.params.id))
+      return res.status(404).json({ success: false, error: 'Plan bulunamadı' });
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.post('/api/leads/:id/notes', requireUserAuth, async (req: Request, res: Response) => {
@@ -1404,7 +1716,7 @@ app.post('/api/leads/:id/notes', requireUserAuth, async (req: Request, res: Resp
     const activity = await addLeadActivity(req.userId!, req.params.id, 'NOTE', { note: note.trim() });
     if (!activity) return res.status(404).json({ success: false, error: 'Aday bulunamadı' });
     return res.status(201).json({ success: true, data: activity });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 // ─── META LEAD ADS ───────────────────────────────────────────────────────────
@@ -1415,7 +1727,7 @@ app.get('/api/settings/meta', requireUserAuth, async (req: Request, res: Respons
   try {
     const config = await getUserMetaConfig(req.userId!);
     return res.json({ success: true, data: config ? { pageId: config.pageId, pageName: config.pageName, lastSyncAt: config.lastSyncAt, connected: true } : { connected: false } });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.post('/api/settings/meta', requireUserAuth, async (req: Request, res: Response) => {
@@ -1433,12 +1745,12 @@ app.post('/api/settings/meta', requireUserAuth, async (req: Request, res: Respon
 
     await setUserMetaConfig(req.userId!, pageId.trim(), verifyData.name || '', pageAccessToken.trim());
     return res.json({ success: true, data: { pageId: pageId.trim(), pageName: verifyData.name || '' } });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.delete('/api/settings/meta', requireUserAuth, async (req: Request, res: Response) => {
   try { await clearUserMetaConfig(req.userId!); return res.json({ success: true }); }
-  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.post('/api/meta/sync', requireUserAuth, async (req: Request, res: Response) => {
@@ -1447,7 +1759,7 @@ app.post('/api/meta/sync', requireUserAuth, async (req: Request, res: Response) 
     if (!config) return res.status(400).json({ success: false, error: 'Meta hesabınız bağlı değil' });
     await syncUserMetaLeadsNow(req.userId!, config);
     return res.json({ success: true });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 // ─── WHATSAPP (TWILIO) ───────────────────────────────────────────────────────
@@ -1457,7 +1769,7 @@ app.get('/api/settings/whatsapp', requireUserAuth, async (req: Request, res: Res
   try {
     const config = await getUserWhatsappConfig(req.userId!);
     return res.json({ success: true, data: config ? { accountSid: config.accountSid, whatsappNumber: config.whatsappNumber, connected: true } : { connected: false } });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.post('/api/settings/whatsapp', requireUserAuth, async (req: Request, res: Response) => {
@@ -1467,17 +1779,17 @@ app.post('/api/settings/whatsapp', requireUserAuth, async (req: Request, res: Re
       return res.status(400).json({ success: false, error: 'Account SID, Auth Token ve WhatsApp numarası zorunlu' });
     await setUserWhatsappConfig(req.userId!, accountSid.trim(), authToken.trim(), whatsappNumber.trim());
     return res.json({ success: true });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.delete('/api/settings/whatsapp', requireUserAuth, async (req: Request, res: Response) => {
   try { await clearUserWhatsappConfig(req.userId!); return res.json({ success: true }); }
-  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.get('/api/whatsapp/templates', requireUserAuth, async (req: Request, res: Response) => {
   try { return res.json({ success: true, data: await getAllTemplates(req.userId!) }); }
-  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.post('/api/whatsapp/templates', requireUserAuth, async (req: Request, res: Response) => {
@@ -1486,7 +1798,7 @@ app.post('/api/whatsapp/templates', requireUserAuth, async (req: Request, res: R
     if (!name?.trim() || !body?.trim()) return res.status(400).json({ success: false, error: 'Ad ve metin zorunlu' });
     const template = await createTemplate(req.userId!, name, (category as any) || 'MARKETING', body, variables || []);
     return res.status(201).json({ success: true, data: template });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.patch('/api/whatsapp/templates/:id', requireUserAuth, async (req: Request, res: Response) => {
@@ -1495,33 +1807,33 @@ app.patch('/api/whatsapp/templates/:id', requireUserAuth, async (req: Request, r
     const template = await updateTemplate(req.userId!, req.params.id, { name, body, variables });
     if (!template) return res.status(404).json({ success: false, error: 'Şablon bulunamadı' });
     return res.json({ success: true, data: template });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.delete('/api/whatsapp/templates/:id', requireUserAuth, async (req: Request, res: Response) => {
   try {
     if (!await deleteTemplate(req.userId!, req.params.id)) return res.status(404).json({ success: false, error: 'Şablon bulunamadı' });
     return res.json({ success: true });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.post('/api/whatsapp/templates/:id/submit', requireUserAuth, async (req: Request, res: Response) => {
   try { return res.json({ success: true, data: await submitTemplate(req.userId!, req.params.id) }); }
-  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.get('/api/leads/:id/messages', requireUserAuth, async (req: Request, res: Response) => {
   try { return res.json({ success: true, data: await getMessagesForLead(req.userId!, req.params.id) }); }
-  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.post('/api/leads/:id/messages', requireUserAuth, async (req: Request, res: Response) => {
   try {
-    const { body, channel } = req.body as { body?: string; channel?: 'TWILIO' | 'PERSONAL' };
-    if (!body?.trim()) return res.status(400).json({ success: false, error: 'Mesaj boş olamaz' });
-    const message = await sendSingleMessage(req.userId!, req.params.id, body.trim(), channel || 'TWILIO');
+    const { body, channel, mediaUrl } = req.body as { body?: string; channel?: 'TWILIO' | 'PERSONAL'; mediaUrl?: string };
+    if (!body?.trim() && !mediaUrl?.trim()) return res.status(400).json({ success: false, error: 'Mesaj boş olamaz' });
+    const message = await sendSingleMessage(req.userId!, req.params.id, body?.trim() || '', channel || 'TWILIO', mediaUrl?.trim() || undefined);
     return res.status(201).json({ success: true, data: message });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 // ─── ŞAHSİ WHATSAPP (Baileys/WhatsApp Web) — SADECE bire-bir kullanım ───────
@@ -1531,7 +1843,7 @@ app.post('/api/whatsapp/personal/connect', requireUserAuth, async (req: Request,
   try {
     connectPersonalWhatsapp(req.userId!).catch(err => console.error('[whatsapp-personal] Bağlantı hatası:', err));
     return res.json({ success: true });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.get('/api/whatsapp/personal/status', requireUserAuth, (req: Request, res: Response) => {
@@ -1540,24 +1852,24 @@ app.get('/api/whatsapp/personal/status', requireUserAuth, (req: Request, res: Re
 
 app.post('/api/whatsapp/personal/disconnect', requireUserAuth, async (req: Request, res: Response) => {
   try { await disconnectPersonalWhatsapp(req.userId!); return res.json({ success: true }); }
-  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.get('/api/whatsapp/inbox', requireUserAuth, async (req: Request, res: Response) => {
   try { return res.json({ success: true, data: await getInbox(req.userId!) }); }
-  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.get('/api/whatsapp/campaigns', requireUserAuth, async (req: Request, res: Response) => {
   try { return res.json({ success: true, data: await getAllCampaigns(req.userId!) }); }
-  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.post('/api/whatsapp/campaigns/preview', requireUserAuth, async (req: Request, res: Response) => {
   try {
     const { filter } = req.body as { filter?: { stages?: string[]; sources?: string[] } };
     return res.json({ success: true, data: { count: await previewCampaignRecipients(req.userId!, filter || {}) } });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.post('/api/whatsapp/campaigns', requireUserAuth, async (req: Request, res: Response) => {
@@ -1568,12 +1880,12 @@ app.post('/api/whatsapp/campaigns', requireUserAuth, async (req: Request, res: R
     if (!name?.trim() || !templateId) return res.status(400).json({ success: false, error: 'Ad ve şablon zorunlu' });
     const campaign = await createCampaign(req.userId!, name, templateId, filter || {}, variableMap || {});
     return res.status(201).json({ success: true, data: campaign });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.post('/api/whatsapp/campaigns/:id/send', requireUserAuth, async (req: Request, res: Response) => {
   try { return res.json({ success: true, data: await sendCampaign(req.userId!, req.params.id) }); }
-  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 // Twilio inbound webhook — Twilio WhatsApp Sender ayarında bu URL kayıtlı olmalı.
@@ -1586,6 +1898,21 @@ app.post('/webhook/whatsapp/:userId', async (req: Request, res: Response) => {
     if (!From || !MessageSid) return;
     await recordInboundMessage(req.params.userId, From, Body || '', MessageSid);
   } catch (err) { console.error('[Webhook] WhatsApp inbound hatası:', err); }
+});
+
+// Twilio teslimat/okundu durumu — sendWhatsAppMessage() gönderirken StatusCallback
+// olarak bu URL'i veriyor (bkz. whatsapp.ts). MessageStatus: queued/sent/delivered/
+// read/undelivered/failed — büyük harfe çevrilip whatsapp_messages.status'a yazılır.
+// userId gövdede değil URL'de olduğu için tenant izolasyonu WHERE user_id = $ ile korunur.
+app.post('/webhook/whatsapp/status/:userId', async (req: Request, res: Response) => {
+  res.sendStatus(200);
+  try {
+    const { MessageSid, MessageStatus, ErrorMessage } = req.body as {
+      MessageSid?: string; MessageStatus?: string; ErrorMessage?: string;
+    };
+    if (!MessageSid || !MessageStatus) return;
+    await updateMessageDeliveryStatus(req.params.userId, MessageSid, MessageStatus.toUpperCase(), ErrorMessage || null);
+  } catch (err) { console.error('[Webhook] WhatsApp status hatası:', err); }
 });
 
 // Meta webhook — tek global endpoint (Fonzip'teki gibi, Meta uygulama başına tek
@@ -1602,57 +1929,54 @@ app.get('/webhook/meta', (req: Request, res: Response) => {
   return res.sendStatus(403);
 });
 
-app.post('/webhook/meta', async (req: Request, res: Response) => {
-  res.sendStatus(200);
-  try {
-    const entries = (req.body as any)?.entry as Array<{ id: string }> | undefined;
-    for (const entry of entries || []) {
-      const userId = await getUserIdByMetaPageId(entry.id);
-      if (!userId) continue;
-      const config = await getUserMetaConfig(userId);
-      if (!config) continue;
-      syncUserMetaLeadsNow(userId, config).catch(err => console.error('[Webhook] Meta anında senkron hatası:', err));
-    }
-  } catch (err) { console.error('[Webhook] Meta webhook hatası:', err); }
-});
-
 // ─── SENARYOLAR ──────────────────────────────────────────────────────────────
+
+// Senaryo ses modeli alanı: undefined/null/'' → geçerli ama boş (null), bilinen
+// değer → o değer, başka her şey → false (400).
+function parseScenarioVoiceModel(v: unknown): ScenarioVoiceModel | null | false {
+  if (v === undefined || v === null || v === '') return null;
+  return (SCENARIO_VOICE_MODELS as readonly string[]).includes(String(v)) ? v as ScenarioVoiceModel : false;
+}
 
 app.get('/api/scenarios', requireUserAuth, async (req: Request, res) => {
   try { return res.json({ success: true, data: await getAllScenarios(req.userId!) }); }
-  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.post('/api/scenarios', requireUserAuth, async (req: Request, res) => {
   try {
-    const { name, systemPrompt } = req.body as { name: string; systemPrompt: string };
+    const { name, systemPrompt, voiceModel } = req.body as { name: string; systemPrompt: string; voiceModel?: string };
     if (!name || !systemPrompt)
       return res.status(400).json({ success: false, error: 'Ad ve prompt zorunlu' });
+    const vm = parseScenarioVoiceModel(voiceModel);
+    if (vm === false) return res.status(400).json({ success: false, error: 'Geçersiz ses modeli' });
     const unknown = findUnsupportedVariables(systemPrompt);
     if (unknown.length) {
       return res.status(400).json({
         success: false,
-        error: `Tanınmayan değişken(ler): ${unknown.map(v => '{{' + v + '}}').join(', ')} — Vapi bunları olduğu gibi (literal metin olarak) okur, doldurmaz. Kullanılabilir değişkenler: {{customerName}}, {{customerRegion}}, {{customerNotes}}, {{customerReference}}, {{agentName}}, {{consultantName}}, {{companyName}}`,
+        error: `Tanınmayan değişken(ler): ${unknown.map(v => '{{' + v + '}}').join(', ')} — Vapi bunları olduğu gibi (literal metin olarak) okur, doldurmaz. Kullanılabilir değişkenler: {{customerName}}, {{customerRegion}}, {{customerNotes}}, {{customerReference}}, {{agentName}}`,
       });
     }
-    return res.status(201).json({ success: true, data: await createScenario(req.userId!, name, systemPrompt) });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+    return res.status(201).json({ success: true, data: await createScenario(req.userId!, name, systemPrompt, vm || undefined) });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.put('/api/scenarios/:id', requireUserAuth, async (req: Request, res) => {
   try {
-    const { name, systemPrompt } = req.body as { name: string; systemPrompt: string };
+    const { name, systemPrompt, voiceModel } = req.body as { name: string; systemPrompt: string; voiceModel?: string | null };
+    const vm = parseScenarioVoiceModel(voiceModel);
+    if (vm === false) return res.status(400).json({ success: false, error: 'Geçersiz ses modeli' });
     const unknown = findUnsupportedVariables(systemPrompt || '');
     if (unknown.length) {
       return res.status(400).json({
         success: false,
-        error: `Tanınmayan değişken(ler): ${unknown.map(v => '{{' + v + '}}').join(', ')} — Vapi bunları olduğu gibi (literal metin olarak) okur, doldurmaz. Kullanılabilir değişkenler: {{customerName}}, {{customerRegion}}, {{customerNotes}}, {{customerReference}}, {{agentName}}, {{consultantName}}, {{companyName}}`,
+        error: `Tanınmayan değişken(ler): ${unknown.map(v => '{{' + v + '}}').join(', ')} — Vapi bunları olduğu gibi (literal metin olarak) okur, doldurmaz. Kullanılabilir değişkenler: {{customerName}}, {{customerRegion}}, {{customerNotes}}, {{customerReference}}, {{agentName}}`,
       });
     }
-    const updated = await updateScenario(req.userId!, req.params.id, name, systemPrompt);
+    const updated = await updateScenario(req.userId!, req.params.id, name, systemPrompt, voiceModel === undefined ? undefined : (vm || null));
     if (!updated) return res.status(404).json({ success: false, error: 'Senaryo bulunamadı' });
     return res.json({ success: true, data: updated });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.delete('/api/scenarios/:id', requireUserAuth, async (req: Request, res) => {
@@ -1660,7 +1984,7 @@ app.delete('/api/scenarios/:id', requireUserAuth, async (req: Request, res) => {
     if (!await deleteScenario(req.userId!, req.params.id))
       return res.status(404).json({ success: false, error: 'Senaryo bulunamadı' });
     return res.json({ success: true });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 // Vapi'deki canlı (base) asistan promptu — tüm senaryosuz aramalarda kullanılan varsayılan prompt
@@ -1669,7 +1993,7 @@ app.get('/api/vapi/assistant-prompt', requireUserAuth, async (req: Request, res)
     const creds = await resolveVapiCredsForAssistant(req.userId!);
     return res.json({ success: true, data: await getAssistantSystemPrompt(creds.apiKey, creds.assistantId) });
   }
-  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.put('/api/vapi/assistant-prompt', requireUserAuth, async (req: Request, res) => {
@@ -1681,13 +2005,13 @@ app.put('/api/vapi/assistant-prompt', requireUserAuth, async (req: Request, res)
     if (unknown.length) {
       return res.status(400).json({
         success: false,
-        error: `Tanınmayan değişken(ler): ${unknown.map(v => '{{' + v + '}}').join(', ')} — Vapi bunları olduğu gibi (literal metin olarak) okur, doldurmaz. Kullanılabilir değişkenler: {{customerName}}, {{customerRegion}}, {{customerNotes}}, {{customerReference}}, {{agentName}}, {{consultantName}}, {{companyName}}`,
+        error: `Tanınmayan değişken(ler): ${unknown.map(v => '{{' + v + '}}').join(', ')} — Vapi bunları olduğu gibi (literal metin olarak) okur, doldurmaz. Kullanılabilir değişkenler: {{customerName}}, {{customerRegion}}, {{customerNotes}}, {{customerReference}}, {{agentName}}`,
       });
     }
     const creds = await resolveVapiCredsForAssistant(req.userId!);
     await updateAssistantSystemPrompt(creds.apiKey, creds.assistantId, systemPrompt.trim());
     return res.json({ success: true });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 // AI ile Vapi sistem promptu üret — Vapi'nin public API'sinde bu özellik
@@ -1696,8 +2020,8 @@ app.post('/api/prompt/generate', requireUserAuth, async (req: Request, res: Resp
   try {
     const input = req.body as PromptGenInput;
     const hasRaw = !!input.rawText?.trim();
-    if (!hasRaw && (!input.companyName?.trim() || !input.callGoal?.trim())) {
-      return res.status(400).json({ success: false, error: 'Şirket/marka adı ve aramanın amacı zorunlu (veya serbest metin girin)' });
+    if (!hasRaw && !input.callGoal?.trim()) {
+      return res.status(400).json({ success: false, error: 'Aramanın amacı zorunlu (veya serbest metin girin)' });
     }
     const anthropicKey = await getUserAnthropicKey(req.userId!);
     const rules = await getScriptRules();
@@ -1716,14 +2040,39 @@ app.post('/api/prompt/generate', requireUserAuth, async (req: Request, res: Resp
       },
     });
   } catch (err) {
-    return res.status(500).json({ success: false, error: String(err) });
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
 // ─── ADMİN — Şirket geneli AI script kısıtlamaları ──────────────────────────
+// Global ret listesi (bkz. src/dncList.ts) — sadece admin görebilir/çıkarabilir.
+// Danışmanların kendi başına listeden çıkarabilmesi riskli olurdu (yanlış AI tespiti
+// olsa bile, herkesi etkileyen bir kararı tek bir danışman geri alabilirdi).
+app.get('/api/admin/dnc-list', requireAdmin, async (_req: Request, res: Response) => {
+  try { return res.json({ success: true, data: await listDoNotCallEntries() }); }
+  catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+app.post('/api/admin/dnc-list', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const { phone, reason } = req.body as { phone?: string; reason?: string };
+    if (!phone?.trim()) return res.status(400).json({ success: false, error: 'Telefon zorunlu' });
+    await addToDoNotCallList(phone, reason?.trim() || null, 'manual', req.userId!, null);
+    return res.status(201).json({ success: true, data: await listDoNotCallEntries() });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+app.delete('/api/admin/dnc-list/:phone', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const removed = await removeFromDoNotCallList(decodeURIComponent(req.params.phone));
+    if (!removed) return res.status(404).json({ success: false, error: 'Numara ret listesinde bulunamadı' });
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
 app.get('/api/admin/script-rules', requireAdmin, async (_req: Request, res: Response) => {
   try { return res.json({ success: true, data: await getScriptRules() }); }
-  catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.put('/api/admin/script-rules', requireAdmin, async (req: Request, res: Response) => {
@@ -1737,7 +2086,7 @@ app.put('/api/admin/script-rules', requireAdmin, async (req: Request, res: Respo
       forbidPriceCommitment: forbidPriceCommitment !== false,
     });
     return res.json({ success: true, data: await getScriptRules() });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 // Bir sistem promptunu gerçek para harcamadan (Vapi araması yapmadan) test et —
@@ -1750,10 +2099,10 @@ app.post('/api/prompt/simulate', requireUserAuth, async (req: Request, res: Resp
     }
     const anthropicKey = await getUserAnthropicKey(req.userId!);
     const user = await getUserById(req.userId!);
-    const scenarios = await simulateScenario(anthropicKey, systemPrompt, customerName, user?.assistantName || undefined, user?.companyName || undefined, user?.name || undefined);
+    const scenarios = await simulateScenario(anthropicKey, systemPrompt, customerName, user?.assistantName || undefined);
     return res.json({ success: true, data: { scenarios } });
   } catch (err) {
-    return res.status(500).json({ success: false, error: String(err) });
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
@@ -1762,7 +2111,28 @@ app.post('/api/prompt/simulate', requireUserAuth, async (req: Request, res: Resp
 app.get('/api/campaigns', requireUserAuth, async (req: Request, res: Response) => {
   try {
     return res.json({ success: true, data: await listCampaigns(req.userId!) });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+app.delete('/api/campaigns/:id', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const result = await deleteCampaignRecord(req.userId!, req.params.id);
+    if (!result.deleted) {
+      if (result.reason === 'not-found') {
+        return res.status(404).json({ success: false, error: 'Kampanya bulunamadi' });
+      }
+      return res.status(400).json({
+        success: false,
+        error: 'Calisan veya duraklatilmis bir kampanya silinemez - once durdurun.',
+      });
+    }
+    // Motor hafizasindan da cikar: DB satiri silinmisken motor onu tutmaya devam
+    // ederse persistContacts her tick'te sessizce 0 satir gunceller ve kampanya
+    // "hayalet" olarak arama yapmayi surdururdu.
+    campaignClear(req.userId!, req.params.id).catch(err =>
+      console.warn('[Campaign] Silinen kampanya motordan cikarilamadi:', err));
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.get('/api/campaigns/:id', requireUserAuth, async (req: Request, res: Response) => {
@@ -1771,7 +2141,7 @@ app.get('/api/campaigns/:id', requireUserAuth, async (req: Request, res: Respons
     if (!campaign) return res.status(404).json({ success: false, error: 'Kampanya bulunamadı' });
     const stats = await getCampaignStats(req.userId!, req.params.id);
     return res.json({ success: true, data: { campaign, stats } });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 // ─── KAMPANYA — Sunucu taraflı çalışır (canlı dialer) ────────────────────────
@@ -1784,44 +2154,132 @@ app.get('/api/campaigns/:id', requireUserAuth, async (req: Request, res: Respons
 // campaign.ts:resolveEntry). Arka uç birden fazla eşzamanlı kampanyayı tam destekler;
 // bu sadece bugünkü tek-odaklı arayüzle geriye dönük uyumluluk için.
 
+// Admin-only: bir kampanyanin canli motor belleğindeki (engines Map) contacts
+// listesini "calls" tablosuyla yeniden uzlaştırır. Anthropic kredisi tükendiği gibi
+// bir dönemde özetler bir backfill script'iyle DOĞRUDAN DB'ye yazıldığında, hâlâ
+// çalışan/duraklamış bir kampanyanın canlı ekranı bunu göstermez — bellekteki entry
+// sunucu restart olmadan güncellenmez. Bu uç, restart'a gerek kalmadan o senkronu
+// tetikler (bkz. resyncCampaignSummaries, campaign.ts).
+app.post('/api/admin/campaign/resync-summaries', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const { userId, campaignId } = req.body || {};
+    if (!userId) return res.status(400).json({ success: false, error: 'userId zorunlu' });
+    const updated = await resyncCampaignSummaries(userId, campaignId);
+    return res.json({ success: true, data: { updated } });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
 app.get('/api/campaign', requireUserAuth, (req: Request, res: Response) => {
   try {
     const campaignId = typeof req.query.campaignId === 'string' ? req.query.campaignId : undefined;
     return res.json({ success: true, data: getCampaignState(req.userId!, campaignId) });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 // Kişi listesini yükle (henüz başlatma) — mevcut çalışan kampanyaları etkilemez, yenisini ekler.
+// Kampanya sayısal ayarlarını güvenli aralığa sıkıştırır. Bu değerler doğrudan
+// istemciden geliyor; doğrulanmazsa NaN (tüm karşılaştırmalar false → limit hiç
+// uygulanmaz), negatif (slot hesabı ters döner) veya aşırı büyük (motor Vapi hesap
+// tavanına çarpana kadar boşuna istek üretir) değerler motora sızar.
+function clampCampaignNumber(value: unknown, min: number, max: number, fallback: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(n)));
+}
+
+// Telefonu çevrilemeyecek kişileri kampanya BAŞLAMADAN eler. Aksi halde bu kişiler
+// listeye girip sırası gelince tek tek Vapi'ye gönderilir, her biri ayrı bir dial
+// hatasıyla "⚠️ Hata" olarak yanar — danışman kampanya bitince onlarca sahte arıza
+// görür ve gerçek sebebin "numara eksik/bozuk" olduğunu anlayamaz.
+function splitValidContacts(contacts: any[]): { valid: any[]; invalid: string[] } {
+  const valid: any[] = [];
+  const invalid: string[] = [];
+  for (const c of contacts) {
+    const normalized = normalizePhone(String(c?.phone ?? ''));
+    const digits = normalized.replace(/\D/g, '');
+    // GERCEK PROD HATASI: +90 ile baslayan bir numara TAM 12 rakam olmali
+    // (90 + 10 haneli Turkiye numarasi). Eski kontrol 10-15 genel araligi
+    // kullaniyordu -- 11 haneli (bir eksik) numaralar 'gecerli' sayilip geciyordu,
+    // Vapi'ye gonderilince '400 - E.164 format' hatasiyla ARANAMADAN basarisiz
+    // oluyordu (prod'da 82 kisi boyle kilitlenmisti, hicbiri 'Tekrar Dene' ile
+    // kurtarilamiyordu cunku hata her seferinde aynen tekrarlaniyordu).
+    const isTurkish = normalized.startsWith('+90');
+    const gecersiz = !normalized.startsWith('+')
+      || (isTurkish && digits.length !== 12)
+      || (!isTurkish && (digits.length < 10 || digits.length > 15));
+    if (gecersiz) {
+      invalid.push(String(c?.name || c?.phone || '(isimsiz)'));
+      continue;
+    }
+    valid.push({ ...c, phone: normalized });
+  }
+  return { valid, invalid };
+}
+
+// YÜKLE = KAYDET. Excel okunur okunmaz liste buraya gelir ve sunucuda 'draft'
+// kampanya olur — tarayıcı artık "kaydedilmemiş liste" tutmaz. F5, deploy, sekme
+// kapatma, başka sekmeden gelen SSE: hiçbiri listeyi kaybettiremez, çünkü tek
+// gerçek sunucudadır. (Önceden liste "Başlat"a kadar tarayıcıda yaşıyor, localStorage
+// taslağıyla yamanıyordu — aylarca süren "liste gitti / eski kampanya geldi"
+// şikayetlerinin kökü buydu.)
 app.post('/api/campaign/load', requireUserAuth, async (req: Request, res: Response) => {
   try {
-    const { contacts, maxConcurrent, scenarioId, name, retryMaxAttempts, retryDelayMinutes } = req.body;
+    const { contacts, maxConcurrent, scenarioId, name, retryMaxAttempts, retryDelayMinutes, replaceDraftId } = req.body;
     if (!Array.isArray(contacts) || !contacts.length)
       return res.status(400).json({ success: false, error: 'Kişi listesi zorunlu' });
+
+    const { valid, invalid } = splitValidContacts(contacts);
+    if (!valid.length) {
+      return res.status(400).json({
+        success: false,
+        error: `Listedeki ${invalid.length} kişinin hiçbirinde geçerli bir telefon numarası yok — numaraları kontrol edip tekrar yükleyin.`,
+      });
+    }
+
+    // Ekranda zaten başlatılmamış bir taslak varken yeni dosya atıldıysa eskisi
+    // çöpe gider — her yükleme geçmişte ayrı bir "taslak" bırakmasın.
+    if (typeof replaceDraftId === 'string' && replaceDraftId) {
+      await campaignDiscardDraft(req.userId!, replaceDraftId);
+    }
+
     const campaignId = await campaignLoad(
-      req.userId!, contacts, maxConcurrent || 1, scenarioId, undefined, undefined, undefined, name,
-      retryMaxAttempts, retryDelayMinutes,
+      req.userId!, valid,
+      clampCampaignNumber(maxConcurrent, 1, 10, 1),
+      scenarioId, undefined, undefined, undefined, name,
+      clampCampaignNumber(retryMaxAttempts, 1, 5, 2),
+      clampCampaignNumber(retryDelayMinutes, 1, 1440, 120),
     );
-    return res.json({ success: true, data: { campaignId } });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+    // Snapshot'ı da dön: istemci normalize edilmiş numaraları ve kampanya durumunu
+    // sunucudan alır, kendi kopyasını "gerçek" sanmaz.
+    return res.json({
+      success: true,
+      data: { campaignId, skippedInvalid: invalid, ...getCampaignState(req.userId!, campaignId) },
+    });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
+// Var olan draft'ı son ayarlarıyla başlatır. Liste artık burada gelmez — o
+// /api/campaign/load ile çoktan sunucuda. Ad burada zorunlu (geçmişte tanımak için).
 app.post('/api/campaign/start', requireUserAuth, async (req: Request, res: Response) => {
   try {
-    const { contacts, maxConcurrent, scenarioId, startFromIndex, callLimit, answeredLimit, name, retryMaxAttempts, retryDelayMinutes } = req.body;
-    let campaignId: string | undefined = req.body.campaignId;
-    if (contacts?.length) {
-      if (!name?.trim())
-        return res.status(400).json({ success: false, error: 'Kampanya adı zorunlu' });
-      campaignId = await campaignLoad(
-        req.userId!, contacts, maxConcurrent || 1, scenarioId,
-        startFromIndex || 0, callLimit || 0, answeredLimit || 0, name,
-        retryMaxAttempts, retryDelayMinutes,
-      );
-    }
-    if (!campaignId) return res.status(400).json({ success: false, error: 'contacts veya campaignId gerekli' });
-    await campaignStart(req.userId!, campaignId);
+    const { campaignId, maxConcurrent, scenarioId, startFromIndex, callLimit, answeredLimit, name, retryMaxAttempts, retryDelayMinutes } = req.body;
+    if (typeof campaignId !== 'string' || !campaignId)
+      return res.status(400).json({ success: false, error: 'campaignId zorunlu — önce listeyi yükleyin' });
+    if (typeof name !== 'string' || !name.trim())
+      return res.status(400).json({ success: false, error: 'Kampanya adı zorunlu' });
+
+    await campaignStart(req.userId!, campaignId, {
+      name: name.trim(),
+      scenarioId: typeof scenarioId === 'string' ? scenarioId : '',
+      maxConcurrent:     maxConcurrent     === undefined ? undefined : clampCampaignNumber(maxConcurrent, 1, 10, 1),
+      startFromIndex:    startFromIndex    === undefined ? undefined : clampCampaignNumber(startFromIndex, 0, 100000, 0),
+      callLimit:         callLimit         === undefined ? undefined : clampCampaignNumber(callLimit, 0, 100000, 0),
+      answeredLimit:     answeredLimit     === undefined ? undefined : clampCampaignNumber(answeredLimit, 0, 100000, 0),
+      retryMaxAttempts:  retryMaxAttempts  === undefined ? undefined : clampCampaignNumber(retryMaxAttempts, 1, 5, 2),
+      retryDelayMinutes: retryDelayMinutes === undefined ? undefined : clampCampaignNumber(retryDelayMinutes, 1, 1440, 120),
+    });
     return res.json({ success: true, data: getCampaignState(req.userId!, campaignId) });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(400).json({ success: false, error: toClientError(err) }); }
 });
 
 app.delete('/api/calls/before-today', requireUserAuth, async (req: Request, res: Response) => {
@@ -1832,7 +2290,7 @@ app.delete('/api/calls/before-today', requireUserAuth, async (req: Request, res:
     );
     return res.json({ success: true, deleted: result.rowCount ?? 0 });
   } catch (err) {
-    return res.status(500).json({ success: false, error: String(err) });
+    return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
@@ -1842,35 +2300,117 @@ app.post('/api/campaign/resume', requireUserAuth, async (req: Request, res: Resp
       campaignId?: string; startFromIndex?: number; maxConcurrent?: number; callLimit?: number; answeredLimit?: number;
       retryMaxAttempts?: number; retryDelayMinutes?: number;
     };
-    const overrides = { startFromIndex, maxConcurrent, callLimit, answeredLimit, retryMaxAttempts, retryDelayMinutes };
+    // undefined olanlar "değiştirme" anlamına gelir, o yüzden sadece GELEN alanlar
+    // sıkıştırılır — clamp'i koşulsuz uygulamak, gönderilmemiş bir alana varsayılan
+    // yazıp kullanıcının mevcut ayarını sessizce ezerdi.
+    const overrides = {
+      startFromIndex:   startFromIndex   === undefined ? undefined : clampCampaignNumber(startFromIndex, 0, 100000, 0),
+      maxConcurrent:    maxConcurrent    === undefined ? undefined : clampCampaignNumber(maxConcurrent, 1, 10, 1),
+      callLimit:        callLimit        === undefined ? undefined : clampCampaignNumber(callLimit, 0, 100000, 0),
+      answeredLimit:    answeredLimit    === undefined ? undefined : clampCampaignNumber(answeredLimit, 0, 100000, 0),
+      retryMaxAttempts: retryMaxAttempts === undefined ? undefined : clampCampaignNumber(retryMaxAttempts, 1, 5, 2),
+      retryDelayMinutes: retryDelayMinutes === undefined ? undefined : clampCampaignNumber(retryDelayMinutes, 1, 1440, 120),
+    };
     const hasOverrides = Object.values(overrides).some(v => v !== undefined);
     await campaignResume(req.userId!, campaignId, hasOverrides ? overrides : undefined);
     return res.json({ success: true, data: getCampaignState(req.userId!, campaignId) });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(400).json({ success: false, error: toClientError(err) }); }
+});
+
+// Toplu Arama tablosunda "bu kişi kampanya-bağımsız toplam kaç kez arandı" göstergesi
+// için — tek seferde tüm numaraların sayısını döner (N+1 sorgu önlemek için toplu).
+app.post('/api/calls/counts-by-phone', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const { phones } = req.body as { phones?: string[] };
+    if (!Array.isArray(phones) || !phones.length) return res.json({ success: true, data: {} });
+    const counts = await getCallCountsByPhone(req.userId!, phones);
+    return res.json({ success: true, data: counts });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+// Kampanyayi DEGISTIREN islemlerde campaignId ZORUNLU. Gonderilmezse resolveEntry
+// "en son guncellenen kampanya"ya duser (bkz. src/campaign.ts) — yani eski bir
+// sekme ya da hatali bir istek YANLIS kampanyayi durdurabilir/degistirebilir.
+// campaignStop bekleyen HERKESI 'basarisiz' isaretledigi icin bunun bedeli binlerce
+// kisinin kilitlenmesi olur. Okuma islemlerinde (GET /api/campaign) fallback hala
+// dogru: ekran bosken son kampanyayi geri yukler.
+function requireCampaignId(req: Request, res: Response): string | null {
+  // Hem gövde (POST) hem query string (DELETE) desteklenir.
+  const raw = typeof req.body?.campaignId === 'string' ? req.body.campaignId
+            : typeof req.query?.campaignId === 'string' ? req.query.campaignId
+            : '';
+  const id = raw.trim();
+  if (!id) {
+    res.status(400).json({
+      success: false,
+      error: 'Hangi kampanya oldugu belirtilmedi — sayfayi yenileyip tekrar deneyin.',
+    });
+    return null;
+  }
+  return id;
+}
+
+// Biten/durdurulan kampanyayı seçilen kesimle AYNI kampanya olarak sürdürür.
+// scope: unreachable (cevapsız+meşgul) | unanswered | busy | failed | all
+app.post('/api/campaign/rerun', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const campaignId = requireCampaignId(req, res);
+    if (!campaignId) return;
+    const scope = req.body?.scope;
+    if (!RERUN_SCOPES.includes(scope)) {
+      return res.status(400).json({ success: false, error: 'Geçersiz kapsam — unreachable, unanswered, busy, failed veya all olmalı' });
+    }
+    const result = await campaignRerun(req.userId!, campaignId, scope as RerunScope);
+    return res.json({ success: true, ...result, data: getCampaignState(req.userId!, campaignId) });
+  } catch (err) { return res.status(400).json({ success: false, error: toClientError(err) }); }
+});
+
+app.post('/api/campaign/retry-failed', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const campaignId = requireCampaignId(req, res);
+    if (!campaignId) return;
+    const result = await campaignRetryFailed(req.userId!, campaignId);
+    return res.json({ success: true, ...result });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.post('/api/campaign/pause', requireUserAuth, async (req: Request, res: Response) => {
   try {
-    const campaignId = typeof req.body?.campaignId === 'string' ? req.body.campaignId : undefined;
+    const campaignId = requireCampaignId(req, res);
+    if (!campaignId) return;
     const result = await campaignPause(req.userId!, campaignId);
     return res.json({ success: true, ...result });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.post('/api/campaign/stop', requireUserAuth, async (req: Request, res: Response) => {
   try {
-    const campaignId = typeof req.body?.campaignId === 'string' ? req.body.campaignId : undefined;
+    const campaignId = requireCampaignId(req, res);
+    if (!campaignId) return;
     await campaignStop(req.userId!, campaignId);
     return res.json({ success: true });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+// Limit uyarısını kapat — kampanyaya dokunmaz, sadece "limite takıldı" bayrağını
+// temizler (bkz. campaignDismissLimitNotice).
+app.post('/api/campaign/dismiss-limit', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const campaignId = typeof req.body?.campaignId === 'string' ? req.body.campaignId : undefined;
+    campaignDismissLimitNotice(req.userId!, campaignId);
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.delete('/api/campaign', requireUserAuth, async (req: Request, res: Response) => {
   try {
-    const campaignId = typeof req.query.campaignId === 'string' ? req.query.campaignId : undefined;
+    // campaignClear icerde campaignStop cagiriyor (calisan kampanyayi durdurur)
+    // — kimlik zorunlu, aksi halde YANLIS kampanya durdurulabilir.
+    const campaignId = requireCampaignId(req, res);
+    if (!campaignId) return;
     await campaignClear(req.userId!, campaignId);
     return res.json({ success: true });
-  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 // ─── CATCH-ALL ───────────────────────────────────────────────────────────────
@@ -1891,7 +2431,19 @@ initDb()
     await loadAllActiveCampaigns();
     startMetaSyncJob();
     startTemplateSyncJob();
+    startSmartPlanScheduler();
     reconnectAllPersonalSessions().catch(err => console.error('[whatsapp-personal] Boot yeniden bağlanma hatası:', err));
+    // Süresi dolmuş oturumları temizle — resolveSession sadece o kullanıcı tekrar
+    // uğrarsa siliyor; bir daha hiç giriş yapmayanın kaydı sonsuza dek kalırdı.
+    cleanupExpiredSessions()
+      .then(n => { if (n > 0) console.log(`[Auth] ${n} süresi dolmuş oturum temizlendi`); })
+      .catch(err => console.warn('[Auth] Oturum temizliği başarısız:', err));
+    setInterval(() => {
+      cleanupExpiredSessions()
+        .then(n => { if (n > 0) console.log(`[Auth] Periyodik: ${n} süresi dolmuş oturum temizlendi`); })
+        .catch(err => console.warn('[Auth] Periyodik oturum temizliği başarısız:', err));
+    }, 24 * 60 * 60_000).unref();
+
     const staleCount = await reconcileStaleCalls();
     if (staleCount > 0) {
       console.log(`[Reconcile] ${staleCount} eski "in-progress" arama "failed" olarak kapatıldı (webhook gelmemişti)`);
@@ -1909,9 +2461,14 @@ initDb()
 
     // Vapi bilgileri tam ama henüz webhook secret'ı üretilmemiş kullanıcılar için
     // (örn. eski global ayarlardan taşınan bootstrap admin) otomatik kurulum tamamla.
+    // getUserVapiCredentials DEĞİL: o phoneNumberId'yi de zorunlu tutup yoksa null
+    // döner, yani telefon numarası seçmemiş (sadece Roleplay Pratik yapan) bir
+    // danışmana webhook HİÇ kurulmazdı — ücretlendirme/transkript/özet hiç işlemezdi.
+    // provisionWebhookIfReady zaten kendi içinde apiKey+assistantId yeterliliğini
+    // kontrol ediyor; burada sadece "secret'ı var mı" sorusunu sormamız gerekiyor.
     for (const u of await listUsers()) {
-      const creds = await getUserVapiCredentials(u.id);
-      if (creds && !creds.serverSecret) {
+      const verification = await getUserWebhookVerification(u.id);
+      if (!verification?.serverSecret) {
         await provisionWebhookIfReady(u.id).catch(err => console.warn(`[Webhook] ${u.email} otomatik kurulum hatası:`, err));
       }
     }

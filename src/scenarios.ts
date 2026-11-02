@@ -1,15 +1,19 @@
 import pool from './db';
-import { Scenario } from './types';
+import { Scenario, ScenarioVoiceModel } from './types';
 
 // Her yeni danışman hesabında otomatik oluşturulan varsayılan senaryo — {{agentName}}
-// (asistanın kendi konuşma kimliği, örn. "Deniz" — users.assistant_name),
-// {{consultantName}} (danışmanın GERÇEK adı, örn. "İbrahim Erokyar" — users.name) ve
-// {{companyName}} Vapi'nin variableValues mekanizmasıyla ({{customerName}} ile aynı
-// yöntem, bkz. vapi.ts createVapiCall) her arama anında doldurulur, script metnini
-// elle düzenlemeye gerek kalmaz.
+// (asistanın kendi konuşma kimliği, örn. "Deniz" — users.assistant_name) Vapi'nin
+// variableValues mekanizmasıyla ({{customerName}} ile aynı yöntem, bkz. vapi.ts
+// createVapiCall) her arama anında doldurulur, script metnini elle düzenlemeye gerek kalmaz.
+// Şirket adı ("Keller Williams Platin Karma") kasıtlı olarak SABİT metin — bir
+// değişken değil, çünkü bu varsayılan senaryo doğrudan bu şirketin danışmanları için.
+// NOT: "&" işareti YAZILMAZ — ElevenLabs (özellikle v4) bunu "and" diye okuyor
+// ("Platinand Carma"); konuşma metninde "Platin Karma" kullanılır.
+// --- eski açıklama: bir
+// değişken değil, çünkü bu varsayılan senaryo doğrudan bu şirketin danışmanları için.
 export const DEFAULT_SCENARIO_NAME = 'Standart Satılık Kiralık Var mı Sorgusu';
 export const DEFAULT_SCENARIO_TEMPLATE = `[Identity]
-Adın {{agentName}}. {{companyName}}'dan {{consultantName}}'ın asistanısın,
+Adın {{agentName}}, Keller Williams Platin Karma'nın yapay zeka asistanısın —
 güven veren, sakin, açık ve bilgi odaklı bir asistansın.
 Satış ya da baskı amacı taşımazsın.
 
@@ -39,7 +43,7 @@ Satış ya da baskı amacı taşımazsın.
 [Task & Goals]
 
 1. AÇILIŞ:
-"Merhaba {{customerName}}, {{companyName}}'dan {{consultantName}}'ın asistanı {{agentName}}.
+"Merhaba {{customerName}}, ben Keller Williams Platin Karma'dan {{agentName}}, yapay zeka asistanıyım.
 Sizi gayrimenkul ile ilgili ihtiyaçlarınız için aradık. Şu sıralar satmayı veya kiralamayı planladığınız mülkünüz bulunmakta mıdır?"
 <Yanıtı bekle>
 
@@ -98,11 +102,14 @@ export async function getScenario(userId: string, id: string): Promise<Scenario 
   return rows[0]?.data ?? null;
 }
 
-export async function createScenario(userId: string, name: string, systemPrompt: string): Promise<Scenario> {
+export async function createScenario(
+  userId: string, name: string, systemPrompt: string, voiceModel?: ScenarioVoiceModel,
+): Promise<Scenario> {
   const scenario: Scenario = {
     id:           `sc_${Date.now()}`,
     name:         name.trim(),
     systemPrompt,
+    ...(voiceModel ? { voiceModel } : {}),
     createdAt:    new Date().toISOString(),
   };
   await pool.query(
@@ -117,6 +124,7 @@ export async function updateScenario(
   id: string,
   name: string,
   systemPrompt: string,
+  voiceModel?: ScenarioVoiceModel | null,
 ): Promise<Scenario | null> {
   const { rows } = await pool.query('SELECT data FROM scenarios WHERE id = $1 AND user_id = $2', [id, userId]);
   if (!rows[0]) return null;
@@ -126,6 +134,10 @@ export async function updateScenario(
     systemPrompt,
     updatedAt: new Date().toISOString(),
   };
+  // undefined = alana dokunma (eski istemciler); null = asistan varsayılanına dön.
+  if (voiceModel !== undefined) {
+    if (voiceModel) updated.voiceModel = voiceModel; else delete updated.voiceModel;
+  }
   await pool.query(
     'UPDATE scenarios SET data = $1 WHERE id = $2 AND user_id = $3',
     [JSON.stringify(updated), id, userId],
