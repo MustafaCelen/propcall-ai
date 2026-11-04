@@ -105,6 +105,11 @@ export interface Scenario {
   systemPrompt: string;
   voiceModel?: ScenarioVoiceModel;
   openingVariants?: OpeningVariant[];
+  // İsim kullanımı — ikisi de varsayılan KAPALI (undefined = false). Kapalıyken arama
+  // anında prompt/açılıştaki {{customerName}} / {{agentName}} temizlenir ve modele
+  // "isim söyleme" kuralı eklenir (bkz. src/opening.ts applyNameRules).
+  useCustomerName?: boolean;
+  useAgentName?: boolean;
   createdAt: string;
   updatedAt?: string;
 }

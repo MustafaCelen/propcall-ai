@@ -20,7 +20,7 @@ import {
   getBestCallsByPhoneForCampaign, findRecentCallForPhone, BestCallInfo,
 } from './calls';
 import { getScenario } from './scenarios';
-import { pickOpeningVariant, applyOpeningVariant } from './opening';
+import { pickOpeningVariant, buildCallPrompt, nameVariableValues } from './opening';
 import { resolveVapiCreds, getUserById, getUserElevenLabsKey, CALL_MINUTE_RATE_TRY } from './users';
 import { CustomerInfo, CallSummary } from './types';
 import {
@@ -1254,12 +1254,12 @@ async function callContact(entry: CampaignEngineEntry, idx: number): Promise<voi
     // Açılış A/B: senaryoda aktif varyant varsa biri seçilir ve prompt'un başına
     // eklenir; hangi varyantın kullanıldığı arama kaydına yazılır (bkz. src/opening.ts).
     const opening = pickOpeningVariant(scenario);
-    const systemPrompt = scenario?.systemPrompt && opening
-      ? applyOpeningVariant(scenario.systemPrompt, opening) : scenario?.systemPrompt;
-    const vapiCall = await createVapiCall(creds, customer, systemPrompt, {
-      agentName: user?.assistantName || undefined,
+    const agentName = user?.assistantName || 'Asistan';
+    const vapiCall = await createVapiCall(creds, customer, buildCallPrompt(scenario, opening), {
+      agentName,
       voiceModel: scenario?.voiceModel,
       waitForGreeting: opening?.waitForGreeting,
+      variableOverrides: nameVariableValues(scenario, customer.name, agentName),
     });
     c.vapiCallId   = vapiCall.id;
 

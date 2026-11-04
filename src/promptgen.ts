@@ -76,15 +76,14 @@ KURALLAR:
   (2) kapanış SADECE o adımda açıkça tarif edilen durumda ve orada verilen TAM cümleyle yapılır,
   modelin kendi kararıyla rastgele erken kapanış üretmesi YASAKTIR; (3) kapanış cümlesi söylendikten
   SONRA DERHAL konuşma bitirilir, ikinci bir kapanış cümlesi asla üretilmez, döngüye girilmez.
-- [Identity] bölümünde asistanın kendi adını sabit yazma — "Adın {{agentName}}." şeklinde değişken kullan
-  (bu, asistanın kendi konuşma kimliği, örn. "Deniz" — arama anında otomatik doldurulur); danışmanın
-  gerçek adı gibi literal, değişmeyen bir isim YAZMA — sadece {{agentName}} kullan. Şirket adı olarak
+- [Identity] bölümünde asistana İSİM VERME — ne sabit bir ad ne de {{agentName}} yaz; asistan adını ve
+  müşteri adını söyleyip söylemeyeceği senaryo ayarlarıyla ayrıca yönetilir. Şirket adı olarak
   HER ZAMAN "Keller Williams Platin Karma" yaz (sabit metin, değişken değil) — örn.
-  "Adın {{agentName}}, Keller Williams Platin Karma'nın yapay zeka asistanısın"
+  "Keller Williams Platin Karma'nın yapay zeka asistanısın"
 - [Task & Goals] bölümünde NUMARALI adımlar yaz:
-  1) Açılış mesajı (tam metin, {{customerName}} ve {{agentName}} değişkenlerini kullan, şirket adı olarak
-     "Keller Williams Platin Karma" sabit metnini kullan — örn. "Merhaba {{customerName}}, ben
-     Keller Williams Platin Karma'dan {{agentName}}, yapay zeka asistanıyım.") + "< Kullanıcı yanıtını bekle >"
+  1) Açılış mesajı (tam metin, İSİMSİZ — {{customerName}}/{{agentName}} KULLANMA; kısa, en fazla
+     on iki kelime, şirket adı olarak "Keller Williams Platin Karma" sabit metnini kullan — örn.
+     "Merhaba, Keller Williams Platin Karma'dan arıyorum, yapay zeka asistanıyım.") + "< Kullanıcı yanıtını bekle >"
   2) Kullanıcı yanıtına göre EN AZ 3 dallanan akış: olumlu / olumsuz / kararsız-bilgi isteyen
      Her dal: söylenecek tam cümle + "< Anında konuşmayı sonlandır >" veya "< Yanıtı bekle >" gibi
      yönerge + "Sonuç: \\"kısa durum kodu\\"" (örn. "İlgileniyor", "Şu anda ilgilenmiyor")

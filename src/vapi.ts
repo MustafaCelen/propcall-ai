@@ -115,6 +115,9 @@ export async function createVapiCall(
     // Açılış varyantı "Alo'yu bekle" istiyorsa (bkz. src/opening.ts) asistanın
     // varsayılan "önce asistan konuşur" modu bu arama için geçersiz kılınır.
     waitForGreeting?: boolean;
+    // İsim bayrakları kapalı senaryolarda boş gönderilir (bkz. src/opening.ts
+    // nameVariableValues) — undefined ise eski davranış (gerçek değerler).
+    variableOverrides?: { customerName?: string; agentName?: string };
   },
 ): Promise<VapiCallResponse> {
   const { apiKey, phoneNumberId, assistantId } = creds;
@@ -129,6 +132,7 @@ export async function createVapiCall(
       // konuşma kimliği (örn. "Deniz"), script'i elle düzenlemeye gerek kalmadan
       // kişiselleştirilmiş bir arama deneyimi sağlar.
       agentName: personalization?.agentName?.trim() || 'Asistan',
+      ...(personalization?.variableOverrides || {}),
     },
   };
 

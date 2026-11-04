@@ -1,10 +1,10 @@
 import pool from './db';
 import { Scenario, ScenarioVoiceModel, OpeningVariant } from './types';
 
-// Her yeni danışman hesabında otomatik oluşturulan varsayılan senaryo — {{agentName}}
-// (asistanın kendi konuşma kimliği, örn. "Deniz" — users.assistant_name) Vapi'nin
-// variableValues mekanizmasıyla ({{customerName}} ile aynı yöntem, bkz. vapi.ts
-// createVapiCall) her arama anında doldurulur, script metnini elle düzenlemeye gerek kalmaz.
+// Her yeni danışman hesabında otomatik oluşturulan varsayılan senaryo. İsimsiz yazılır:
+// müşteri ve asistan adı yalnızca senaryoda "Müşteri adını söyle / Asistan adını söyle"
+// açıksa kullanılır (bkz. src/opening.ts applyNameRules) — o durumda {{customerName}}
+// / {{agentName}} değişkenleri Vapi variableValues ile arama anında doldurulur.
 // Şirket adı ("Keller Williams Platin Karma") kasıtlı olarak SABİT metin — bir
 // değişken değil, çünkü bu varsayılan senaryo doğrudan bu şirketin danışmanları için.
 // NOT: "&" işareti YAZILMAZ — ElevenLabs (özellikle v4) bunu "and" diye okuyor
@@ -13,7 +13,7 @@ import { Scenario, ScenarioVoiceModel, OpeningVariant } from './types';
 // değişken değil, çünkü bu varsayılan senaryo doğrudan bu şirketin danışmanları için.
 export const DEFAULT_SCENARIO_NAME = 'Standart Satılık Kiralık Var mı Sorgusu';
 export const DEFAULT_SCENARIO_TEMPLATE = `[Identity]
-Adın {{agentName}}, Keller Williams Platin Karma'nın yapay zeka asistanısın —
+Keller Williams Platin Karma'nın yapay zeka asistanısın —
 güven veren, sakin, açık ve bilgi odaklı bir asistansın.
 Satış ya da baskı amacı taşımazsın.
 
@@ -43,7 +43,7 @@ Satış ya da baskı amacı taşımazsın.
 [Task & Goals]
 
 1. AÇILIŞ:
-"Merhaba {{customerName}}, ben Keller Williams Platin Karma'dan {{agentName}}, yapay zeka asistanıyım.
+"Merhaba, Keller Williams Platin Karma'dan arıyorum, yapay zeka asistanıyım.
 Sizi gayrimenkul ile ilgili ihtiyaçlarınız için aradık. Şu sıralar satmayı veya kiralamayı planladığınız mülkünüz bulunmakta mıdır?"
 <Yanıtı bekle>
 
@@ -105,6 +105,7 @@ export async function getScenario(userId: string, id: string): Promise<Scenario 
 export async function createScenario(
   userId: string, name: string, systemPrompt: string, voiceModel?: ScenarioVoiceModel,
   openingVariants?: OpeningVariant[],
+  nameFlags?: { useCustomerName: boolean; useAgentName: boolean },
 ): Promise<Scenario> {
   const scenario: Scenario = {
     id:           `sc_${Date.now()}`,
@@ -112,6 +113,8 @@ export async function createScenario(
     systemPrompt,
     ...(voiceModel ? { voiceModel } : {}),
     ...(openingVariants?.length ? { openingVariants } : {}),
+    ...(nameFlags?.useCustomerName ? { useCustomerName: true } : {}),
+    ...(nameFlags?.useAgentName ? { useAgentName: true } : {}),
     createdAt:    new Date().toISOString(),
   };
   await pool.query(
@@ -128,6 +131,7 @@ export async function updateScenario(
   systemPrompt: string,
   voiceModel?: ScenarioVoiceModel | null,
   openingVariants?: OpeningVariant[],
+  nameFlags?: { useCustomerName: boolean; useAgentName: boolean },
 ): Promise<Scenario | null> {
   const { rows } = await pool.query('SELECT data FROM scenarios WHERE id = $1 AND user_id = $2', [id, userId]);
   if (!rows[0]) return null;
@@ -144,6 +148,11 @@ export async function updateScenario(
   // undefined = dokunma; boş liste = varyantları kaldır.
   if (openingVariants !== undefined) {
     if (openingVariants.length) updated.openingVariants = openingVariants; else delete updated.openingVariants;
+  }
+  // Kapalı bayrak kayıtta tutulmaz (undefined = kapalı) — JSON sade kalsın.
+  if (nameFlags !== undefined) {
+    if (nameFlags.useCustomerName) updated.useCustomerName = true; else delete updated.useCustomerName;
+    if (nameFlags.useAgentName) updated.useAgentName = true; else delete updated.useAgentName;
   }
   await pool.query(
     'UPDATE scenarios SET data = $1 WHERE id = $2 AND user_id = $3',

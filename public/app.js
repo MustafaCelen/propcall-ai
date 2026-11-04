@@ -4362,6 +4362,8 @@ function showNewScenarioForm() {
   $('scenarioName').value   = '';
   $('scenarioPrompt').value = '';
   $('scenarioVoiceModel').value = '';
+  $('scenarioUseCustomerName').checked = false;
+  $('scenarioUseAgentName').checked = false;
   ovDraft = [];
   renderOpeningVariants();
   $('ovStats').innerHTML = '';
@@ -4376,6 +4378,8 @@ function showEditScenarioForm(id) {
   $('scenarioName').value   = s.name;
   $('scenarioPrompt').value = s.systemPrompt;
   $('scenarioVoiceModel').value = s.voiceModel || '';
+  $('scenarioUseCustomerName').checked = s.useCustomerName === true;
+  $('scenarioUseAgentName').checked = s.useAgentName === true;
   ovDraft = (s.openingVariants || []).map(v => ({ ...v }));
   renderOpeningVariants();
   loadOpeningStats(s.id);
@@ -4386,7 +4390,7 @@ function showEditScenarioForm(id) {
 // ─── Açılış varyantları (A/B) — form içi taslak ───────────────────────────
 // Sunucudaki karşılığı src/opening.ts. Taslak formda tutulur, Kaydet ile senaryoyla
 // birlikte gider; id'ler korunur (eski aramaların istatistiği id'ye bağlı).
-const OV_GOLDEN_TEXT = 'Merhaba {{customerName}}, Platin Karma\'dan {{agentName}}. Kısa bir sorum var, satmayı düşündüğünüz bir mülkünüz var mı?';
+const OV_GOLDEN_TEXT = 'Merhaba, Platin Karma\'dan arıyorum. Kısa bir sorum var, satmayı düşündüğünüz bir mülkünüz var mı?';
 const OV_MAX = 4;
 let ovDraft = [];
 
@@ -4486,7 +4490,11 @@ async function saveScenario() {
     const r = await fetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, systemPrompt: prompt, voiceModel, openingVariants }),
+      body: JSON.stringify({
+        name, systemPrompt: prompt, voiceModel, openingVariants,
+        useCustomerName: $('scenarioUseCustomerName').checked,
+        useAgentName: $('scenarioUseAgentName').checked,
+      }),
     });
     const j = await r.json();
     if (!j.success) throw new Error(j.error);

@@ -11,11 +11,57 @@
 import { OpeningVariant, Scenario, CallRecord, MAX_OPENING_VARIANTS } from './types';
 import { findUnsupportedVariables } from './templateVariables';
 
-// Analizden çıkan "altın açılış" şablonu: ≤12 kelime, isim + kısa marka + tek soru.
+// Analizden çıkan "altın açılış" şablonu: ≤12 kelime, kısa marka + tek soru, isimsiz
+// (isimler senaryoda açıkça açılmadıkça söylenmez — bkz. applyNameRules).
 // Marka olarak "Platin Karma" — "Keller Williams" transkriptlerin %93'ünde bozuk
 // okunuyordu, "&" ise "and" diye seslendiriliyor.
 export const GOLDEN_OPENING_TEXT =
-  'Merhaba {{customerName}}, Platin Karma\'dan {{agentName}}. Kısa bir sorum var, satmayı düşündüğünüz bir mülkünüz var mı?';
+  'Merhaba, Platin Karma\'dan arıyorum. Kısa bir sorum var, satmayı düşündüğünüz bir mülkünüz var mı?';
+
+// ─── İsim kuralları ──────────────────────────────────────────────────────────
+// Senaryo bayrakları kapalıyken (varsayılan) metindeki isim değişkenleri silinir ve
+// kalan noktalama toparlanır: "Merhaba {{customerName}}, Platin Karma'dan {{agentName}}."
+// → "Merhaba, Platin Karma'dan." Model ayrıca açık kuralla uyarılır; küçük pürüzleri
+// kendisi düzeltir. Kalan tek bir değişken bile okunmasın diye variableValues'ta da
+// ilgili alan BOŞ gönderilir (bkz. nameVariableValues).
+export function stripNameVariables(text: string, opts: { customer: boolean; agent: boolean }): string {
+  let t = text;
+  if (!opts.customer) t = t.replace(/\{\{\s*customerName\s*\}\}/g, '');
+  if (!opts.agent) {
+    t = t.replace(/Adın\s*\{\{\s*agentName\s*\}\}\s*,\s*/g, '');   // "Adın {{agentName}}, Keller…" → "Keller…"
+    t = t.replace(/(['’]dan|['’]den)\s*\{\{\s*agentName\s*\}\}/g, '$1 arıyorum'); // "Karma'dan {{agentName}}" → "Karma'dan arıyorum"
+    t = t.replace(/\{\{\s*agentName\s*\}\}/g, '');
+  }
+  if (t === text) return text;
+  return t
+    .replace(/[ \t]+,/g, ',')          // "Merhaba ," → "Merhaba,"
+    .replace(/,\s*,/g, ',')            // ", ," → ","
+    .replace(/[ \t]+\./g, '.')         // "dan ." → "dan."
+    .replace(/[ \t]{2,}/g, ' ');
+}
+
+const NAME_RULE_HEADER = '[İsim Kuralı — ZORUNLU]';
+export function applyNameRules(systemPrompt: string, scenario: Scenario): string {
+  const customer = scenario.useCustomerName === true;
+  const agent = scenario.useAgentName === true;
+  if (customer && agent) return systemPrompt;
+  const lines: string[] = [];
+  if (!customer) lines.push('- Müşterinin adını veya soyadını ASLA söyleme, isimle hitap etme; "Merhaba" ile başla.');
+  if (!agent) lines.push('- Kendi adını söyleme. Kim olduğun sorulursa "Platin Karma\'nın yapay zeka asistanıyım" de.');
+  return `${NAME_RULE_HEADER}\n${lines.join('\n')}\n\n${stripNameVariables(systemPrompt, { customer, agent })}`;
+}
+
+// Vapi variableValues için: bayrak kapalıysa alan boş gider — prompt'ta gözden kaçan
+// bir {{customerName}} bile olsa model boş metin görür, isim okumaz.
+export function nameVariableValues(
+  scenario: Scenario | null | undefined, customerName: string, agentName: string,
+): { customerName: string; agentName: string } {
+  if (!scenario) return { customerName, agentName }; // senaryosuz arama: Vapi baz promptu, eski davranış
+  return {
+    customerName: scenario.useCustomerName ? customerName : '',
+    agentName: scenario.useAgentName ? agentName : '',
+  };
+}
 
 export const OPENING_TEXT_MAX_CHARS = 300;
 
@@ -53,15 +99,26 @@ export function pickOpeningVariant(scenario: Scenario | null | undefined): Openi
   return active[Math.floor(Math.random() * active.length)];
 }
 
+// Arama anında modele gidecek nihai prompt: açılış varyantı (varsa) + isim kuralları.
+// Tek giriş noktası — kampanya ve tekil arama aynı yolu kullanır.
+export function buildCallPrompt(scenario: Scenario | null | undefined, opening: OpeningVariant | null): string | undefined {
+  if (!scenario?.systemPrompt) return undefined;
+  const withOpening = opening ? applyOpeningVariant(scenario.systemPrompt, opening, scenario) : scenario.systemPrompt;
+  return applyNameRules(withOpening, scenario);
+}
+
 // Prompt'un BAŞINA eklenir — modeller prompt'un başını ortasından daha güçlü
 // ağırlıklandırır ve bu blok senaryodaki adım 1 metnini geçersiz kılmalı.
-export function applyOpeningVariant(systemPrompt: string, variant: OpeningVariant): string {
+export function applyOpeningVariant(systemPrompt: string, variant: OpeningVariant, scenario?: Scenario): string {
   const timing = variant.waitForGreeting
     ? 'Müşteri "Alo", "Efendim", "Buyrun" gibi bir şey deyince konuşmaya başla; o konuşmadan önce hiçbir şey söyleme.'
     : 'Hat açılır açılmaz konuş. Müşteri aynı anda "Alo" derse açılışı yarıda kesip baştan alma, cümleyi tamamla.';
+  const text = scenario
+    ? stripNameVariables(variant.text.trim(), { customer: scenario.useCustomerName === true, agent: scenario.useAgentName === true })
+    : variant.text.trim();
   return `[AÇILIŞ — ZORUNLU, aşağıdaki [Task & Goals] adım 1'deki açılış metninin YERİNE geçer]
 İlk cümlen kelimesi kelimesine, ekleme ve çıkarma yapmadan AYNEN şu olacak:
-"${variant.text.trim()}"
+"${text}"
 ${timing}
 Açılışı söyledikten sonra müşterinin yanıtını bekle ve [Task & Goals] adım 2'den itibaren senaryoyu aynen izle; adım 1'i tekrar söyleme.
 

@@ -1449,6 +1449,10 @@ table.adm-table td:first-child{white-space:normal;overflow-wrap:anywhere;min-wid
 .sc-voice-badge{display:inline-block;margin-left:8px;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:600;background:var(--s2);color:var(--txm);vertical-align:middle}
 .sc-ab-badge{display:inline-block;margin-left:6px;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:600;background:var(--primary-soft,var(--s2));color:var(--primary);vertical-align:middle}
 
+.sc-name-flags{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+.sc-name-flags label{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:500;color:var(--tx);text-transform:none;letter-spacing:0;cursor:pointer;margin:0;flex-wrap:wrap}
+.sc-name-flags .camp-help{margin:0;max-width:none}
+
 /* ── Açılış varyantları (A/B) ── */
 .ov-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .ov-head label{margin:0}
