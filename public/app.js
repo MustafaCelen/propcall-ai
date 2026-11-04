@@ -4007,6 +4007,8 @@ function initScenarios() {
   });
   $('btnVlpReload').addEventListener('click', loadVapiLivePrompt);
   $('btnVlpSave').addEventListener('click', saveVapiLivePrompt);
+  $('btnOvAdd').addEventListener('click', () => { ovDraft.push(ovNew('')); renderOpeningVariants(); });
+  $('btnOvAddGolden').addEventListener('click', () => { ovDraft.push(ovNew(OV_GOLDEN_TEXT)); renderOpeningVariants(); });
   initPromptGenerator();
   initScenarioTest();
   loadScenarios();
@@ -4337,6 +4339,7 @@ function renderScenarioList() {
       '<div class="sc-item" data-id="' + s.id + '">' +
         '<div class="sc-item-name">' + esc(s.name) +
           (s.voiceModel === 'eleven_v4_turbo' ? ' <span class="sc-voice-badge" title="Bu senaryo ElevenLabs v4 Turbo ile seslendirilir">🔊 v4 Turbo</span>' : '') +
+          ((s.openingVariants || []).some(v => v.enabled) ? ' <span class="sc-ab-badge" title="Açılış A/B testi aktif">A/B ' + (s.openingVariants || []).filter(v => v.enabled).length + '</span>' : '') +
         '</div>' +
         '<div class="sc-item-actions">' +
           '<button class="btn-sc-edit" data-id="' + s.id + '">Düzenle</button>' +
@@ -4359,6 +4362,9 @@ function showNewScenarioForm() {
   $('scenarioName').value   = '';
   $('scenarioPrompt').value = '';
   $('scenarioVoiceModel').value = '';
+  ovDraft = [];
+  renderOpeningVariants();
+  $('ovStats').innerHTML = '';
   $('scenarioForm').style.display = 'block';
   $('scenarioName').focus();
 }
@@ -4370,8 +4376,99 @@ function showEditScenarioForm(id) {
   $('scenarioName').value   = s.name;
   $('scenarioPrompt').value = s.systemPrompt;
   $('scenarioVoiceModel').value = s.voiceModel || '';
+  ovDraft = (s.openingVariants || []).map(v => ({ ...v }));
+  renderOpeningVariants();
+  loadOpeningStats(s.id);
   $('scenarioForm').style.display = 'block';
   $('scenarioName').focus();
+}
+
+// ─── Açılış varyantları (A/B) — form içi taslak ───────────────────────────
+// Sunucudaki karşılığı src/opening.ts. Taslak formda tutulur, Kaydet ile senaryoyla
+// birlikte gider; id'ler korunur (eski aramaların istatistiği id'ye bağlı).
+const OV_GOLDEN_TEXT = 'Merhaba {{customerName}}, Platin Karma\'dan {{agentName}}. Kısa bir sorum var, satmayı düşündüğünüz bir mülkünüz var mı?';
+const OV_MAX = 4;
+let ovDraft = [];
+
+function ovNew(text) {
+  return { id: 'ov_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6), label: '', text, waitForGreeting: false, enabled: true };
+}
+
+function ovWordCount(t) { return (t || '').trim().split(/\s+/).filter(Boolean).length; }
+
+function renderOpeningVariants() {
+  const list = $('ovList');
+  $('btnOvAdd').disabled = ovDraft.length >= OV_MAX;
+  $('btnOvAddGolden').disabled = ovDraft.length >= OV_MAX;
+  if (!ovDraft.length) {
+    list.innerHTML = '<div class="ov-empty">Varyant yok — senaryo kendi açılışıyla çalışıyor. "Altın açılışı ekle" ile başlayın, ikinci bir varyant ekleyip yarıştırın.</div>';
+    return;
+  }
+  list.innerHTML = ovDraft.map((v, i) => {
+    const words = ovWordCount(v.text);
+    return '<div class="ov-item' + (v.enabled ? '' : ' ov-off') + '" data-i="' + i + '">' +
+      '<input class="ov-label" maxlength="30" placeholder="' + String.fromCharCode(65 + i) + '" value="' + esc(v.label || '') + '" title="Kısa ad"/>' +
+      '<div>' +
+        '<textarea class="ov-text" maxlength="300" placeholder="Merhaba {{customerName}}, …">' + esc(v.text || '') + '</textarea>' +
+        '<div class="ov-meta">' +
+          '<span class="ov-words' + (words > 16 ? ' warn' : '') + '">' + words + ' kelime' + (words > 16 ? ' — uzun, kısaltın' : '') + '</span>' +
+          '<label><input type="checkbox" class="ov-wait"' + (v.waitForGreeting ? ' checked' : '') + '/> Müşteri "Alo" deyince konuş</label>' +
+          '<label><input type="checkbox" class="ov-on"' + (v.enabled ? ' checked' : '') + '/> Aktif</label>' +
+        '</div>' +
+      '</div>' +
+      '<div class="ov-side"><button type="button" class="btn-sc-del ov-del">Sil</button></div>' +
+    '</div>';
+  }).join('');
+
+  list.querySelectorAll('.ov-item').forEach(el => {
+    const i = Number(el.dataset.i);
+    el.querySelector('.ov-label').addEventListener('input', e => { ovDraft[i].label = e.target.value; });
+    el.querySelector('.ov-text').addEventListener('input', e => {
+      ovDraft[i].text = e.target.value;
+      const w = ovWordCount(e.target.value); const span = el.querySelector('.ov-words');
+      span.textContent = w + ' kelime' + (w > 16 ? ' — uzun, kısaltın' : '');
+      span.classList.toggle('warn', w > 16);
+    });
+    el.querySelector('.ov-wait').addEventListener('change', e => { ovDraft[i].waitForGreeting = e.target.checked; });
+    el.querySelector('.ov-on').addEventListener('change', e => { ovDraft[i].enabled = e.target.checked; el.classList.toggle('ov-off', !e.target.checked); });
+    el.querySelector('.ov-del').addEventListener('click', () => { ovDraft.splice(i, 1); renderOpeningVariants(); });
+  });
+}
+
+async function loadOpeningStats(scenarioId) {
+  const box = $('ovStats');
+  box.innerHTML = '';
+  try {
+    const r = await fetch('/api/scenarios/' + scenarioId + '/opening-stats');
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    const rows = j.data.stats || [];
+    if (!rows.length) { box.innerHTML = '<div class="ov-stats-note">Bu senaryoyla henüz konuşma gerçekleşen arama yok.</div>'; return; }
+    const nameOf = id => {
+      if (!id) return 'Senaryonun kendi açılışı';
+      const v = ovDraft.find(x => x.id === id); return v ? (v.label || ('Varyant ' + (ovDraft.indexOf(v) + 1))) : 'Silinmiş varyant';
+    };
+    const fmt = p => p === null || p === undefined ? '–' : p + '%';
+    // "en iyi" vurgusu: en düşük erken kapanma, en yüksek soruya ulaşma/randevu (≥20 aramada)
+    const eligible = rows.filter(r => r.calls >= 20);
+    const minEarly = Math.min(...eligible.map(r => r.earlyHangupPct ?? 999));
+    const maxReach = Math.max(...eligible.map(r => r.reachedQuestionPct ?? -1));
+    const maxAppt  = Math.max(...eligible.map(r => r.appointmentPct ?? -1));
+    box.innerHTML =
+      '<table><thead><tr><th>Açılış</th><th>Arama</th><th>İlk cümlede kapattı</th><th>Soruya ulaştı</th><th>İlgi orta/yüksek</th><th>Randevu</th><th>Medyan süre</th></tr></thead><tbody>' +
+      rows.map(r =>
+        '<tr><td>' + esc(nameOf(r.variantId)) + '</td><td>' + r.calls + '</td>' +
+        '<td' + (eligible.length > 1 && r.calls >= 20 && r.earlyHangupPct === minEarly ? ' class="best"' : '') + '>' + fmt(r.earlyHangupPct) + '</td>' +
+        '<td' + (eligible.length > 1 && r.calls >= 20 && r.reachedQuestionPct === maxReach ? ' class="best"' : '') + '>' + fmt(r.reachedQuestionPct) + '</td>' +
+        '<td>' + fmt(r.interestPct) + '</td>' +
+        '<td' + (eligible.length > 1 && r.calls >= 20 && r.appointmentPct === maxAppt ? ' class="best"' : '') + '>' + fmt(r.appointmentPct) + '</td>' +
+        '<td>' + (r.medianDurationSec == null ? '–' : r.medianDurationSec + ' sn') + '</td></tr>'
+      ).join('') +
+      '</tbody></table>' +
+      '<div class="ov-stats-note">Yalnızca konuşma gerçekleşen aramalar sayılır. Karar için varyant başına en az 50-100 arama bekleyin; 20 aramanın altındaki satırlar vurgulanmaz.</div>';
+  } catch (err) {
+    box.innerHTML = '<div class="ov-stats-note">Sonuçlar yüklenemedi: ' + esc(err.message) + '</div>';
+  }
 }
 
 async function saveScenario() {
@@ -4380,6 +4477,8 @@ async function saveScenario() {
   const prompt = $('scenarioPrompt').value.trim();
   const voiceModel = $('scenarioVoiceModel').value || null;
   if (!name || !prompt) { toast('Ad ve prompt zorunlu', 'error'); return; }
+  const openingVariants = ovDraft.map(v => ({ ...v, label: (v.label || '').trim(), text: (v.text || '').trim() }));
+  if (openingVariants.some(v => !v.text)) { toast('Boş açılış varyantı var — metni girin veya silin', 'error'); return; }
 
   try {
     const method = id ? 'PUT' : 'POST';
@@ -4387,7 +4486,7 @@ async function saveScenario() {
     const r = await fetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, systemPrompt: prompt, voiceModel }),
+      body: JSON.stringify({ name, systemPrompt: prompt, voiceModel, openingVariants }),
     });
     const j = await r.json();
     if (!j.success) throw new Error(j.error);

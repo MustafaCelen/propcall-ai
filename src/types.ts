@@ -62,6 +62,7 @@ export interface CallRecord {
   leadSource?: string; // hangi ilan/reklam/liste — raporlamada kaynak bazlı dönüşüm için
   isPractice?: boolean; // Roleplay Pratik görüşmesi mi — bkz. src/personas.ts
   personaId?: string;   // pratikse hangi persona ile (örn. 'fsbo-orta')
+  openingVariantId?: string; // bu aramada hangi açılış varyantı kullanıldı — bkz. src/opening.ts
 }
 
 export interface Appointment {
@@ -85,11 +86,25 @@ export interface Appointment {
 export type ScenarioVoiceModel = 'eleven_v3' | 'eleven_v4_turbo';
 export const SCENARIO_VOICE_MODELS: readonly ScenarioVoiceModel[] = ['eleven_v3', 'eleven_v4_turbo'];
 
+// Açılış varyantı (A/B) — senaryonun [Task & Goals] adım 1'indeki açılış metninin
+// yerine geçen, arama anında rastgele seçilen kısa açılış cümlesi. Aramaların %56'sı
+// ilk cümleden sonra kapanıyor; açılışı prompt'u elden geçirmeden yarıştırmak için
+// (bkz. src/opening.ts). text {{customerName}}/{{agentName}} değişkenlerini kullanabilir.
+export interface OpeningVariant {
+  id: string;
+  label: string;             // ekranda görünen kısa ad ("A", "Kısa soru" …)
+  text: string;              // asistanın kelimesi kelimesine söyleyeceği açılış cümlesi
+  waitForGreeting: boolean;  // true: müşteri "Alo" deyince konuş (Vapi assistant-waits-for-user)
+  enabled: boolean;          // false: kayıtlı kalır ama seçime girmez (istatistiği görünür)
+}
+export const MAX_OPENING_VARIANTS = 4;
+
 export interface Scenario {
   id: string;
   name: string;
   systemPrompt: string;
   voiceModel?: ScenarioVoiceModel;
+  openingVariants?: OpeningVariant[];
   createdAt: string;
   updatedAt?: string;
 }

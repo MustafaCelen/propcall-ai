@@ -1119,6 +1119,20 @@
         </select>
         <div class="camp-help">Yalnızca bu senaryoyla yapılan aramaları etkiler. v4 Turbo'da metin içi ses etiketleri ([warm], [calm] gibi) uygulanır.</div>
       </div>
+      <div class="form-group ov-section">
+        <div class="ov-head">
+          <label>Açılış Varyantları (A/B testi)</label>
+          <div class="ov-head-actions">
+            <button type="button" class="btn-secondary" id="btnOvAddGolden">★ Altın açılışı ekle</button>
+            <button type="button" class="btn-secondary" id="btnOvAdd">+ Varyant</button>
+          </div>
+        </div>
+        <div class="ls-hint">Her aramada aktif varyantlardan biri rastgele seçilir ve senaryonun 1. adımındaki açılış yerine
+          kelimesi kelimesine söylenir. Varyant yoksa senaryo olduğu gibi çalışır. Aşağıdaki tabloda hangi açılışın daha az
+          kapattırdığını ve soruya daha çok ulaştığını görürsünüz.</div>
+        <div id="ovList" class="ov-list"></div>
+        <div id="ovStats" class="ov-stats"></div>
+      </div>
       <div class="scenario-form-actions">
         <button class="btn-secondary" id="btnScenarioCancel">İptal</button>
         <button class="btn-start" id="btnScenarioSave" style="width:auto;padding:10px 20px">Kaydet</button>

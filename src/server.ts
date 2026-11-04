@@ -45,10 +45,12 @@ import {
 } from './whatsappPersonal';
 import { getAllScenarios, getScenario, createScenario, updateScenario, deleteScenario, seedDefaultScenario } from './scenarios';
 import { findUnsupportedVariables } from './templateVariables';
+import { parseOpeningVariants, pickOpeningVariant, applyOpeningVariant, computeOpeningStats, GOLDEN_OPENING_TEXT } from './opening';
 import {
   getAllCalls, readCall, readCallForUser, createCall, updateCall, updateCallForUser,
   appendTranscript, stripAudioTags, updateCosts, saveCallSummary, getCallOwnerUserId, getCallCountsByPhone,
   endedReasonToStatus, getStats, exportCSV, getCampaignStats, reconcileStaleCalls, getAdminUserComparison, getDataHealth,
+  getCallsForScenario,
 } from './calls';
 import { VapiCallRequest, VapiWebhookPayload, VapiCostItem, CallFilters, CallRecord, CallCosts, LEAD_STAGES, Lead, CustomerInfo, ScenarioVoiceModel, SCENARIO_VOICE_MODELS } from './types';
 import {
@@ -636,11 +638,17 @@ app.post('/api/call', requireUserAuth, async (req: Request, res: Response) => {
     const creds    = await resolveVapiCreds(req.userId!);
     const scenario = scenarioId ? await getScenario(req.userId!, scenarioId) : null;
     const user     = await getUserById(req.userId!);
-    const vapiCall = await createVapiCall(creds, customer, scenario?.systemPrompt, {
+    // Açılış A/B varyantı — kampanya akışıyla aynı mantık (bkz. campaign.ts callContact).
+    const opening = pickOpeningVariant(scenario);
+    const systemPrompt = scenario?.systemPrompt && opening
+      ? applyOpeningVariant(scenario.systemPrompt, opening) : scenario?.systemPrompt;
+    const vapiCall = await createVapiCall(creds, customer, systemPrompt, {
       agentName: user?.assistantName || undefined,
       voiceModel: scenario?.voiceModel,
+      waitForGreeting: opening?.waitForGreeting,
     });
-    const record   = await createCall(req.userId!, vapiCall.id, customer, scenario?.id, scenario?.name);
+    const record   = await createCall(req.userId!, vapiCall.id, customer, scenario?.id, scenario?.name,
+      undefined, undefined, undefined, undefined, { openingVariantId: opening?.id });
 
     console.log(`[Vapi] Arama başlatıldı: ${vapiCall.id} → ${customer.phone}`);
     return res.json({ success: true, data: { callId: vapiCall.id, recordId: record.callId } });
@@ -1945,7 +1953,7 @@ app.get('/api/scenarios', requireUserAuth, async (req: Request, res) => {
 
 app.post('/api/scenarios', requireUserAuth, async (req: Request, res) => {
   try {
-    const { name, systemPrompt, voiceModel } = req.body as { name: string; systemPrompt: string; voiceModel?: string };
+    const { name, systemPrompt, voiceModel, openingVariants } = req.body as { name: string; systemPrompt: string; voiceModel?: string; openingVariants?: unknown };
     if (!name || !systemPrompt)
       return res.status(400).json({ success: false, error: 'Ad ve prompt zorunlu' });
     const vm = parseScenarioVoiceModel(voiceModel);
@@ -1957,13 +1965,15 @@ app.post('/api/scenarios', requireUserAuth, async (req: Request, res) => {
         error: `Tanınmayan değişken(ler): ${unknown.map(v => '{{' + v + '}}').join(', ')} — Vapi bunları olduğu gibi (literal metin olarak) okur, doldurmaz. Kullanılabilir değişkenler: {{customerName}}, {{customerRegion}}, {{customerNotes}}, {{customerReference}}, {{agentName}}`,
       });
     }
-    return res.status(201).json({ success: true, data: await createScenario(req.userId!, name, systemPrompt, vm || undefined) });
+    const ov = openingVariants === undefined ? undefined : parseOpeningVariants(openingVariants);
+    if (ov && !ov.ok) return res.status(400).json({ success: false, error: ov.error });
+    return res.status(201).json({ success: true, data: await createScenario(req.userId!, name, systemPrompt, vm || undefined, ov?.variants) });
   } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.put('/api/scenarios/:id', requireUserAuth, async (req: Request, res) => {
   try {
-    const { name, systemPrompt, voiceModel } = req.body as { name: string; systemPrompt: string; voiceModel?: string | null };
+    const { name, systemPrompt, voiceModel, openingVariants } = req.body as { name: string; systemPrompt: string; voiceModel?: string | null; openingVariants?: unknown };
     const vm = parseScenarioVoiceModel(voiceModel);
     if (vm === false) return res.status(400).json({ success: false, error: 'Geçersiz ses modeli' });
     const unknown = findUnsupportedVariables(systemPrompt || '');
@@ -1973,9 +1983,23 @@ app.put('/api/scenarios/:id', requireUserAuth, async (req: Request, res) => {
         error: `Tanınmayan değişken(ler): ${unknown.map(v => '{{' + v + '}}').join(', ')} — Vapi bunları olduğu gibi (literal metin olarak) okur, doldurmaz. Kullanılabilir değişkenler: {{customerName}}, {{customerRegion}}, {{customerNotes}}, {{customerReference}}, {{agentName}}`,
       });
     }
-    const updated = await updateScenario(req.userId!, req.params.id, name, systemPrompt, voiceModel === undefined ? undefined : (vm || null));
+    const ov = openingVariants === undefined ? undefined : parseOpeningVariants(openingVariants);
+    if (ov && !ov.ok) return res.status(400).json({ success: false, error: ov.error });
+    const updated = await updateScenario(req.userId!, req.params.id, name, systemPrompt, voiceModel === undefined ? undefined : (vm || null), ov?.variants);
     if (!updated) return res.status(404).json({ success: false, error: 'Senaryo bulunamadı' });
     return res.json({ success: true, data: updated });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+// Açılış A/B sonuçları — senaryonun aramaları varyant bazında (bkz. src/opening.ts).
+// Varyantsız aramalar (senaryonun kendi açılışı) variantId=null satırında görünür,
+// böylece "eski açılış vs. yeni varyantlar" tek tabloda karşılaştırılır.
+app.get('/api/scenarios/:id/opening-stats', requireUserAuth, async (req: Request, res) => {
+  try {
+    const scenario = await getScenario(req.userId!, req.params.id);
+    if (!scenario) return res.status(404).json({ success: false, error: 'Senaryo bulunamadı' });
+    const stats = computeOpeningStats(await getCallsForScenario(req.userId!, scenario.id));
+    return res.json({ success: true, data: { stats, goldenOpening: GOLDEN_OPENING_TEXT } });
   } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 

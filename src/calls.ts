@@ -82,6 +82,15 @@ export async function getAllCalls(userId: string, filters?: CallFilters): Promis
   return calls;
 }
 
+// Açılış A/B istatistiği için — bir senaryonun tüm gerçek aramaları (bkz. src/opening.ts).
+export async function getCallsForScenario(userId: string, scenarioId: string): Promise<CallRecord[]> {
+  const { rows } = await pool.query(
+    `SELECT data FROM calls WHERE user_id = $1 AND is_practice = false AND data->>'scenarioId' = $2`,
+    [userId, scenarioId],
+  );
+  return rows.map(r => r.data as CallRecord);
+}
+
 export async function createCall(
   userId: string,
   vapiCallId: string,
@@ -92,6 +101,7 @@ export async function createCall(
   leadSource?: string,
   isPractice?: boolean,
   personaId?: string,
+  extra?: { openingVariantId?: string },
 ): Promise<CallRecord> {
   const record: CallRecord = {
     callId:        `call_${Date.now()}`,
@@ -111,6 +121,7 @@ export async function createCall(
     leadSource: leadSource || undefined,
     isPractice: isPractice || undefined,
     personaId,
+    openingVariantId: extra?.openingVariantId,
   };
   await pool.query(
     `INSERT INTO calls (vapi_call_id, data, start_time, status, user_id, is_practice)

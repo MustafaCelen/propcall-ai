@@ -20,6 +20,7 @@ import {
   getBestCallsByPhoneForCampaign, findRecentCallForPhone, BestCallInfo,
 } from './calls';
 import { getScenario } from './scenarios';
+import { pickOpeningVariant, applyOpeningVariant } from './opening';
 import { resolveVapiCreds, getUserById, getUserElevenLabsKey, CALL_MINUTE_RATE_TRY } from './users';
 import { CustomerInfo, CallSummary } from './types';
 import {
@@ -1250,15 +1251,22 @@ async function callContact(entry: CampaignEngineEntry, idx: number): Promise<voi
       name: (c.name || '').slice(0, 40), phone: normalizePhone(c.phone) || c.phone,
       region: c.region || '', notes: c.notes || '', reference: c.reference || '',
     };
-    const vapiCall = await createVapiCall(creds, customer, scenario?.systemPrompt, {
+    // Açılış A/B: senaryoda aktif varyant varsa biri seçilir ve prompt'un başına
+    // eklenir; hangi varyantın kullanıldığı arama kaydına yazılır (bkz. src/opening.ts).
+    const opening = pickOpeningVariant(scenario);
+    const systemPrompt = scenario?.systemPrompt && opening
+      ? applyOpeningVariant(scenario.systemPrompt, opening) : scenario?.systemPrompt;
+    const vapiCall = await createVapiCall(creds, customer, systemPrompt, {
       agentName: user?.assistantName || undefined,
       voiceModel: scenario?.voiceModel,
+      waitForGreeting: opening?.waitForGreeting,
     });
     c.vapiCallId   = vapiCall.id;
 
     // Aramayı DB'ye kaydet — Geçmiş Aramalar'da VE kampanya analizinde görünmesi için.
     // leadSource boşsa kampanya adı fallback olur — raporlamada hiçbir arama kaynaksız kalmaz.
-    await createCall(entry.userId, vapiCall.id, customer, scenario?.id, scenario?.name, entry.id, c.leadSource || entry.name);
+    await createCall(entry.userId, vapiCall.id, customer, scenario?.id, scenario?.name, entry.id, c.leadSource || entry.name,
+      undefined, undefined, { openingVariantId: opening?.id });
 
     await persistContacts(entry);
     // campaignId ZORUNLU: istemcideki filtre (app.js campaign-contact-update) onu

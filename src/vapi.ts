@@ -109,7 +109,13 @@ export async function createVapiCall(
   creds: ResolvedVapiCredentials,
   customer: CustomerInfo,
   systemPrompt?: string,
-  personalization?: { agentName?: string; voiceModel?: ScenarioVoiceModel },
+  personalization?: {
+    agentName?: string;
+    voiceModel?: ScenarioVoiceModel;
+    // Açılış varyantı "Alo'yu bekle" istiyorsa (bkz. src/opening.ts) asistanın
+    // varsayılan "önce asistan konuşur" modu bu arama için geçersiz kılınır.
+    waitForGreeting?: boolean;
+  },
 ): Promise<VapiCallResponse> {
   const { apiKey, phoneNumberId, assistantId } = creds;
 
@@ -140,6 +146,10 @@ export async function createVapiCall(
   if (personalization?.voiceModel) {
     const voice = await buildScenarioVoiceOverride(apiKey, assistantId, personalization.voiceModel);
     if (voice) assistantOverrides.voice = voice;
+  }
+
+  if (personalization?.waitForGreeting) {
+    assistantOverrides.firstMessageMode = 'assistant-waits-for-user';
   }
 
   const body = {

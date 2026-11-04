@@ -1447,3 +1447,29 @@ table.adm-table td:first-child{white-space:normal;overflow-wrap:anywhere;min-wid
 
 /* Senaryo listesi: senaryo bazlı ses modeli rozeti */
 .sc-voice-badge{display:inline-block;margin-left:8px;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:600;background:var(--s2);color:var(--txm);vertical-align:middle}
+.sc-ab-badge{display:inline-block;margin-left:6px;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:600;background:var(--primary-soft,var(--s2));color:var(--primary);vertical-align:middle}
+
+/* ── Açılış varyantları (A/B) ── */
+.ov-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.ov-head label{margin:0}
+.ov-head-actions{display:flex;gap:6px}
+.ov-head-actions .btn-secondary{padding:4px 10px;font-size:11px}
+.ov-list{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.ov-item{display:grid;grid-template-columns:52px 1fr auto;gap:8px;align-items:start;padding:10px;background:var(--s1,var(--bg));border:1px solid var(--border);border-radius:var(--rs)}
+.ov-item.ov-off{opacity:.55}
+.ov-item input.ov-label{width:100%;padding:6px 8px;font-size:12px;font-weight:700;text-align:center}
+.ov-item textarea.ov-text{width:100%;min-height:54px;resize:vertical;font-size:12.5px;line-height:1.4}
+.ov-meta{display:flex;align-items:center;gap:10px;margin-top:6px;font-size:11px;color:var(--txm);flex-wrap:wrap}
+.ov-meta label{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:500;color:var(--tx2);text-transform:none;letter-spacing:0;cursor:pointer;margin:0;white-space:nowrap}
+.ov-meta .ov-words{font-variant-numeric:tabular-nums}
+.ov-meta .ov-words.warn{color:var(--amber,#d97706);font-weight:600}
+.ov-side{display:flex;flex-direction:column;gap:6px;align-items:flex-end}
+.ov-side .btn-sc-del{white-space:nowrap}
+.ov-empty{font-size:12px;color:var(--txm);padding:8px 0}
+.ov-stats{margin-top:10px;overflow-x:auto}
+.ov-stats table{width:100%;border-collapse:collapse;font-size:12px}
+.ov-stats th{font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--txm);font-weight:600;text-align:right;padding:6px 8px;border-bottom:1px solid var(--border)}
+.ov-stats th:first-child,.ov-stats td:first-child{text-align:left}
+.ov-stats td{padding:6px 8px;border-bottom:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums}
+.ov-stats td.best{color:var(--green,#16a34a);font-weight:700}
+.ov-stats .ov-stats-note{font-size:11px;color:var(--txm);margin-top:6px}

@@ -1,5 +1,5 @@
 import pool from './db';
-import { Scenario, ScenarioVoiceModel } from './types';
+import { Scenario, ScenarioVoiceModel, OpeningVariant } from './types';
 
 // Her yeni danışman hesabında otomatik oluşturulan varsayılan senaryo — {{agentName}}
 // (asistanın kendi konuşma kimliği, örn. "Deniz" — users.assistant_name) Vapi'nin
@@ -104,12 +104,14 @@ export async function getScenario(userId: string, id: string): Promise<Scenario 
 
 export async function createScenario(
   userId: string, name: string, systemPrompt: string, voiceModel?: ScenarioVoiceModel,
+  openingVariants?: OpeningVariant[],
 ): Promise<Scenario> {
   const scenario: Scenario = {
     id:           `sc_${Date.now()}`,
     name:         name.trim(),
     systemPrompt,
     ...(voiceModel ? { voiceModel } : {}),
+    ...(openingVariants?.length ? { openingVariants } : {}),
     createdAt:    new Date().toISOString(),
   };
   await pool.query(
@@ -125,6 +127,7 @@ export async function updateScenario(
   name: string,
   systemPrompt: string,
   voiceModel?: ScenarioVoiceModel | null,
+  openingVariants?: OpeningVariant[],
 ): Promise<Scenario | null> {
   const { rows } = await pool.query('SELECT data FROM scenarios WHERE id = $1 AND user_id = $2', [id, userId]);
   if (!rows[0]) return null;
@@ -137,6 +140,10 @@ export async function updateScenario(
   // undefined = alana dokunma (eski istemciler); null = asistan varsayılanına dön.
   if (voiceModel !== undefined) {
     if (voiceModel) updated.voiceModel = voiceModel; else delete updated.voiceModel;
+  }
+  // undefined = dokunma; boş liste = varyantları kaldır.
+  if (openingVariants !== undefined) {
+    if (openingVariants.length) updated.openingVariants = openingVariants; else delete updated.openingVariants;
   }
   await pool.query(
     'UPDATE scenarios SET data = $1 WHERE id = $2 AND user_id = $3',
