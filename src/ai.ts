@@ -161,7 +161,10 @@ doğurur (bu numara BİR DAHA HİÇBİR DANIŞMAN TARAFINDAN aranamaz hale gelir
 - false: Sadece "şu an ilgilenmiyorum", "müsait değilim", "teşekkürler istemiyorum"
   gibi normal bir red — bunlar ret_nedeni'ne yansır ama beni_aramayin_talebi=false
   kalır. Kalıcı arama yasağı talebi ile normal "ilgilenmiyorum" cevabı FARKLI şeyler,
-  ŞÜPHEDE KALDIĞINDA false seç.`,
+  ŞÜPHEDE KALDIĞINDA false seç.
+- Kural: true demek için müşterinin "arama", "aramayın", "numaramı sil", "rahatsız
+  etme", "şikayet" gibi bir ifadeyi KENDİSİNİN söylemiş olması gerekir; "planı yok",
+  "satmıyor", "ilgilenmiyor" ifadelerinden true ÇIKARILMAZ.`,
       },
     ],
   });

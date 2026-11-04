@@ -20,7 +20,7 @@ import {
   getBestCallsByPhoneForCampaign, findRecentCallForPhone, BestCallInfo,
 } from './calls';
 import { getScenario } from './scenarios';
-import { pickOpeningVariant, buildCallPrompt, nameVariableValues } from './opening';
+import { pickOpeningVariant, buildCallPrompt, nameVariableValues, resolveWaitForGreeting } from './opening';
 import { resolveVapiCreds, getUserById, getUserElevenLabsKey, CALL_MINUTE_RATE_TRY } from './users';
 import { CustomerInfo, CallSummary } from './types';
 import {
@@ -1258,7 +1258,7 @@ async function callContact(entry: CampaignEngineEntry, idx: number): Promise<voi
     const vapiCall = await createVapiCall(creds, customer, buildCallPrompt(scenario, opening), {
       agentName,
       voiceModel: scenario?.voiceModel,
-      waitForGreeting: opening?.waitForGreeting,
+      waitForGreeting: resolveWaitForGreeting(scenario, opening),
       variableOverrides: nameVariableValues(scenario, customer.name, agentName),
     });
     c.vapiCallId   = vapiCall.id;

@@ -99,6 +99,12 @@ export function pickOpeningVariant(scenario: Scenario | null | undefined): Openi
   return active[Math.floor(Math.random() * active.length)];
 }
 
+// "Önce Alo bekle": varyant seçildiyse varyantın ayarı, yoksa senaryonun ayarı.
+export function resolveWaitForGreeting(scenario: Scenario | null | undefined, opening: OpeningVariant | null): boolean {
+  if (opening) return opening.waitForGreeting === true;
+  return scenario?.waitForGreeting === true;
+}
+
 // Arama anında modele gidecek nihai prompt: açılış varyantı (varsa) + isim kuralları.
 // Tek giriş noktası — kampanya ve tekil arama aynı yolu kullanır.
 export function buildCallPrompt(scenario: Scenario | null | undefined, opening: OpeningVariant | null): string | undefined {

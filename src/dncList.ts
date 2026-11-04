@@ -46,6 +46,37 @@ export function phoneVariants(phone: string): string[] {
   return [...variants];
 }
 
+// ─── Deterministik tespit (çift tetiğin ikinci kolu) ─────────────────────────
+// AI özeti (beni_aramayin_talebi) tek tetikken iki sorun vardı: özet üretilemeyen
+// aramalarda (Anthropic kredisi bitmiş, bozuk JSON) talep tamamen kaçıyordu ve model
+// ara sıra "şu an ilgilenmiyor"u da talep sayıyordu. Burası özetten BAĞIMSIZ çalışır:
+// yalnızca MÜŞTERİNİN söylediklerine bakar ve ancak açık bir "bir daha aramayın"
+// kalıbı geçiyorsa tetiklenir. Kalıplar bilinçli olarak dar — yanlış pozitif kalıcı
+// engel demek. "ilgilenmiyorum / müsait değilim" gibi normal retler eşleşmez.
+// "ara-" fiilinin yalnızca OLUMSUZ EMİR/İSTEK çekimleri: aramayın, arama, aramayınız,
+// aramazsanız (sevinirim), aramasın. "aramaların", "aramalar" gibi isim halleri ve
+// "arayın" (olumlu) eşleşmez — canlı transkriptlerde bunlar yanlış tetik üretmişti.
+const NEG_CALL = 'ara(ma|may[ıi]n|may[ıi]n[ıi]z|mazsan[ıi]z|mas[ıi]n)\\b';
+const DNC_REQUEST_PATTERNS: RegExp[] = [
+  new RegExp(`\\b(bir daha|tekrar|artık)\\s+(beni |bizi )?${NEG_CALL}`),          // bir daha aramayın / tekrar arama
+  new RegExp(`\\b(beni|bizi)\\s+(bir daha |tekrar |artık |lütfen )?${NEG_CALL}`),  // beni aramayın / beni aramazsanız
+  new RegExp(`\\b${NEG_CALL}\\s+(bir daha|artık|lütfen|beni|bizi)\\b`),            // aramayın lütfen / aramayın beni
+  /\bnumaram[ıi]\s+(sil|çıkar|kaldır)/,                                            // numaramı silin
+  /\blisten?(iz)?den\s+(beni |numaramı )?(çıkar|sil|kaldır)/,                      // listenizden çıkarın
+  /\brahatsız\s+etmey(in|iniz)\b|\brahatsız\s+etme\b/,                             // rahatsız etmeyin (emir)
+  /\b(ararsan[ıi]z|ararsan)\s+şikayet/,                                            // tekrar ararsanız şikayet ederim
+];
+
+// Müşteri turlarını tarar; eşleşen ilk cümleyi (gerekçe olarak kaydetmek için) döner.
+export function detectDncRequest(transcript: Array<{ role: string; text: string }>): string | null {
+  for (const t of transcript) {
+    if (t.role !== 'user' || !t.text) continue;
+    const norm = t.text.toLocaleLowerCase('tr').replace(/[^a-zçğıöşü0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (DNC_REQUEST_PATTERNS.some(re => re.test(norm))) return t.text.trim().slice(0, 200);
+  }
+  return null;
+}
+
 export async function isPhoneBlocked(phone: string): Promise<boolean> {
   const normalized = normalizePhone(phone);
   if (!normalized) return false;
@@ -57,7 +88,7 @@ export async function isPhoneBlocked(phone: string): Promise<boolean> {
 }
 
 export async function addToDoNotCallList(
-  phone: string, reason: string | null, source: 'ai_detected' | 'manual',
+  phone: string, reason: string | null, source: 'ai_detected' | 'keyword_detected' | 'manual',
   addedByUserId: string | null, vapiCallId: string | null,
 ): Promise<void> {
   const normalized = normalizePhone(phone);

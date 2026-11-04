@@ -110,6 +110,9 @@ export interface Scenario {
   // "isim söyleme" kuralı eklenir (bkz. src/opening.ts applyNameRules).
   useCustomerName?: boolean;
   useAgentName?: boolean;
+  // true: asistan konuşmadan önce müşterinin "Alo" demesini bekler (Vapi
+  // assistant-waits-for-user). Açılış varyantının kendi ayarı varsa o öncelikli.
+  waitForGreeting?: boolean;
   createdAt: string;
   updatedAt?: string;
 }

@@ -4364,6 +4364,7 @@ function showNewScenarioForm() {
   $('scenarioVoiceModel').value = '';
   $('scenarioUseCustomerName').checked = false;
   $('scenarioUseAgentName').checked = false;
+  $('scenarioWaitForGreeting').checked = false;
   ovDraft = [];
   renderOpeningVariants();
   $('ovStats').innerHTML = '';
@@ -4380,6 +4381,7 @@ function showEditScenarioForm(id) {
   $('scenarioVoiceModel').value = s.voiceModel || '';
   $('scenarioUseCustomerName').checked = s.useCustomerName === true;
   $('scenarioUseAgentName').checked = s.useAgentName === true;
+  $('scenarioWaitForGreeting').checked = s.waitForGreeting === true;
   ovDraft = (s.openingVariants || []).map(v => ({ ...v }));
   renderOpeningVariants();
   loadOpeningStats(s.id);
@@ -4494,6 +4496,7 @@ async function saveScenario() {
         name, systemPrompt: prompt, voiceModel, openingVariants,
         useCustomerName: $('scenarioUseCustomerName').checked,
         useAgentName: $('scenarioUseAgentName').checked,
+        waitForGreeting: $('scenarioWaitForGreeting').checked,
       }),
     });
     const j = await r.json();

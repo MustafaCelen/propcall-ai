@@ -10,7 +10,7 @@ dotenv.config();
 import { initDb } from './db';
 import pool from './db';
 import { generateCallSummary } from './ai';
-import { isPhoneBlocked, addToDoNotCallList, listDoNotCallEntries, removeFromDoNotCallList, normalizePhone } from './dncList';
+import { isPhoneBlocked, addToDoNotCallList, listDoNotCallEntries, removeFromDoNotCallList, normalizePhone, detectDncRequest } from './dncList';
 import { ROLEPLAY_PERSONAS, getRoleplayPersona } from './personas';
 import {
   createVapiCall, endVapiCall, getVapiCredit, getAssistantSystemPrompt, updateAssistantSystemPrompt,
@@ -45,7 +45,7 @@ import {
 } from './whatsappPersonal';
 import { getAllScenarios, getScenario, createScenario, updateScenario, deleteScenario, seedDefaultScenario } from './scenarios';
 import { findUnsupportedVariables } from './templateVariables';
-import { parseOpeningVariants, pickOpeningVariant, buildCallPrompt, nameVariableValues, computeOpeningStats, GOLDEN_OPENING_TEXT } from './opening';
+import { parseOpeningVariants, pickOpeningVariant, buildCallPrompt, nameVariableValues, resolveWaitForGreeting, computeOpeningStats, GOLDEN_OPENING_TEXT } from './opening';
 import {
   getAllCalls, readCall, readCallForUser, createCall, updateCall, updateCallForUser,
   appendTranscript, stripAudioTags, updateCosts, saveCallSummary, getCallOwnerUserId, getCallCountsByPhone,
@@ -644,7 +644,7 @@ app.post('/api/call', requireUserAuth, async (req: Request, res: Response) => {
     const vapiCall = await createVapiCall(creds, customer, buildCallPrompt(scenario, opening), {
       agentName,
       voiceModel: scenario?.voiceModel,
-      waitForGreeting: opening?.waitForGreeting,
+      waitForGreeting: resolveWaitForGreeting(scenario, opening),
       variableOverrides: nameVariableValues(scenario, customer.name, agentName),
     });
     const record   = await createCall(req.userId!, vapiCall.id, customer, scenario?.id, scenario?.name,
@@ -1232,6 +1232,20 @@ async function generateSummaryForCall(vapiCallId: string, attempt = 1): Promise<
 
   const ownerId = await getCallOwnerUserId(vapiCallId);
   if (!ownerId) { console.warn(`[AI] ${vapiCallId} sahibi bulunamadı, özet atlandı`); return; }
+
+  // Çift tetiğin deterministik kolu — özet başarısız olsa bile çalışır (bkz. dncList.ts
+  // detectDncRequest). Yalnızca ilk denemede; tekrar denemelerde aynı transkript.
+  if (attempt === 1) {
+    const matched = detectDncRequest(record.transcript);
+    if (matched) {
+      addToDoNotCallList(record.customerPhone, `Müşteri: "${matched}"`, 'keyword_detected', ownerId, vapiCallId)
+        .then(() => {
+          console.warn(`[DNC] ${record.customerPhone} global ret listesine eklendi (kalıp tespiti, arama: ${vapiCallId})`);
+          broadcast(ownerId, 'dnc-added', { phone: record.customerPhone, vapiCallId });
+        })
+        .catch(err => console.error('[DNC] Ret listesine ekleme hatası:', err));
+    }
+  }
 
   try {
     const anthropicKey = await getUserAnthropicKey(ownerId);
@@ -1953,7 +1967,7 @@ app.get('/api/scenarios', requireUserAuth, async (req: Request, res) => {
 
 app.post('/api/scenarios', requireUserAuth, async (req: Request, res) => {
   try {
-    const { name, systemPrompt, voiceModel, openingVariants, useCustomerName, useAgentName } = req.body as { name: string; systemPrompt: string; voiceModel?: string; openingVariants?: unknown; useCustomerName?: unknown; useAgentName?: unknown };
+    const { name, systemPrompt, voiceModel, openingVariants, useCustomerName, useAgentName, waitForGreeting } = req.body as { name: string; systemPrompt: string; voiceModel?: string; openingVariants?: unknown; useCustomerName?: unknown; useAgentName?: unknown; waitForGreeting?: unknown };
     if (!name || !systemPrompt)
       return res.status(400).json({ success: false, error: 'Ad ve prompt zorunlu' });
     const vm = parseScenarioVoiceModel(voiceModel);
@@ -1967,14 +1981,18 @@ app.post('/api/scenarios', requireUserAuth, async (req: Request, res) => {
     }
     const ov = openingVariants === undefined ? undefined : parseOpeningVariants(openingVariants);
     if (ov && !ov.ok) return res.status(400).json({ success: false, error: ov.error });
-    return res.status(201).json({ success: true, data: await createScenario(req.userId!, name, systemPrompt, vm || undefined, ov?.variants,
-      { useCustomerName: useCustomerName === true, useAgentName: useAgentName === true }) });
+    const created = await createScenario(req.userId!, name, systemPrompt, vm || undefined, ov?.variants,
+      { useCustomerName: useCustomerName === true, useAgentName: useAgentName === true });
+    const data = waitForGreeting === true
+      ? (await updateScenario(req.userId!, created.id, created.name, created.systemPrompt, undefined, undefined, undefined, true)) || created
+      : created;
+    return res.status(201).json({ success: true, data });
   } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
 app.put('/api/scenarios/:id', requireUserAuth, async (req: Request, res) => {
   try {
-    const { name, systemPrompt, voiceModel, openingVariants, useCustomerName, useAgentName } = req.body as { name: string; systemPrompt: string; voiceModel?: string | null; openingVariants?: unknown; useCustomerName?: unknown; useAgentName?: unknown };
+    const { name, systemPrompt, voiceModel, openingVariants, useCustomerName, useAgentName, waitForGreeting } = req.body as { name: string; systemPrompt: string; voiceModel?: string | null; openingVariants?: unknown; useCustomerName?: unknown; useAgentName?: unknown; waitForGreeting?: unknown };
     const vm = parseScenarioVoiceModel(voiceModel);
     if (vm === false) return res.status(400).json({ success: false, error: 'Geçersiz ses modeli' });
     const unknown = findUnsupportedVariables(systemPrompt || '');
@@ -1989,7 +2007,8 @@ app.put('/api/scenarios/:id', requireUserAuth, async (req: Request, res) => {
     // İsim bayrakları: alan gönderilmemişse dokunma (eski istemciler), gönderildiyse boolean'a indir.
     const nameFlags = (useCustomerName === undefined && useAgentName === undefined) ? undefined
       : { useCustomerName: useCustomerName === true, useAgentName: useAgentName === true };
-    const updated = await updateScenario(req.userId!, req.params.id, name, systemPrompt, voiceModel === undefined ? undefined : (vm || null), ov?.variants, nameFlags);
+    const updated = await updateScenario(req.userId!, req.params.id, name, systemPrompt, voiceModel === undefined ? undefined : (vm || null), ov?.variants, nameFlags,
+      waitForGreeting === undefined ? undefined : waitForGreeting === true);
     if (!updated) return res.status(404).json({ success: false, error: 'Senaryo bulunamadı' });
     return res.json({ success: true, data: updated });
   } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }

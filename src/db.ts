@@ -95,7 +95,7 @@ export async function initDb(): Promise<void> {
     CREATE TABLE IF NOT EXISTS do_not_call_list (
       phone        TEXT PRIMARY KEY,
       reason       TEXT,             -- transkriptten/görüşme özetinden çıkan kısa gerekçe
-      source       TEXT NOT NULL,    -- 'ai_detected' | 'manual'
+      source       TEXT NOT NULL,    -- 'ai_detected' | 'keyword_detected' | 'manual'
       added_by_user_id TEXT REFERENCES users(id),
       vapi_call_id TEXT,             -- ai_detected ise tespitin yapıldığı görüşme
       created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
