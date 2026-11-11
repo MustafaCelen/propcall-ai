@@ -85,6 +85,10 @@ Satış ya da baskı amacı taşımazsın. Yapay zeka olduğunu sorulursa açık
 <DERHAL kes>
 
 [Error Handling]
+- Müşteri aranmak istemediğini söylerse ("beni aramayın", "numaramı silin", "rahatsız
+  etmeyin" vb.) — hangi adımda olursan ol — AYNEN şunu söyle ve DERHAL kes:
+  "Anlıyorum, numaranızı arama listemizden çıkarıyoruz. Rahatsız ettiğimiz için özür dileriz, iyi günler."
+- Yanlış kişiye ulaşıldıysa: "Özür dilerim, yanlış numara olmuş. İyi günler." <DERHAL kes>
 - Anlaşılmayan yanıtta kısa tekrar sor, ADIM ATLAMA
 - Konu dışına çıkarsa "Bilgim dahilinde değil" de ve kaldığın adıma geri dön
 - Kapanış cümlesiz aramayı asla bitirme
@@ -94,6 +98,22 @@ Satış ya da baskı amacı taşımazsın. Yapay zeka olduğunu sorulursa açık
 Kapanışa (adım 6/7/8/9) geçmeden önce adım 1'in açılışını ve müsaitse adım 3'ün
 sorusunu MUTLAKA sormuş olmalısın. Kısa/belirsiz bir ilk yanıt erken kapanış
 için gerekçe DEĞİLDİR.`;
+
+// "Aranmak istemiyor" dalı — HER senaryoda bulunmak zorunda (İYS/ret listesi teyidi:
+// müşteri talebini sesli duymalı; arka plandaki tespit bkz. dncList.ts). Senaryo
+// oluşturulurken/güncellenirken metinde bu dal yoksa otomatik eklenir; varsa dokunulmaz.
+export const DNC_HANDLING_BLOCK = `[Aranmak İstemiyor — ZORUNLU, her senaryoda geçerli]
+- Müşteri aranmak istemediğini söylerse ("beni aramayın", "numaramı silin", "rahatsız
+  etmeyin" vb.) — hangi adımda olursan ol — AYNEN şunu söyle ve DERHAL kes:
+  "Anlıyorum, numaranızı arama listemizden çıkarıyoruz. Rahatsız ettiğimiz için özür dileriz, iyi günler."
+- Yanlış kişiye ulaşıldıysa: "Özür dilerim, yanlış numara olmuş. İyi günler." <DERHAL kes>`;
+
+const DNC_HANDLING_RE = /aranmak istem|beni aramay[ıi]n|arama listemizden|listeden çıkar/i;
+
+export function ensureDncHandling(systemPrompt: string): string {
+  if (DNC_HANDLING_RE.test(systemPrompt)) return systemPrompt;
+  return systemPrompt.trimEnd() + '\n\n' + DNC_HANDLING_BLOCK;
+}
 
 export async function getAllScenarios(userId: string): Promise<Scenario[]> {
   const { rows } = await pool.query(
@@ -119,7 +139,7 @@ export async function createScenario(
   const scenario: Scenario = {
     id:           `sc_${Date.now()}`,
     name:         name.trim(),
-    systemPrompt,
+    systemPrompt: ensureDncHandling(systemPrompt),
     ...(voiceModel ? { voiceModel } : {}),
     ...(openingVariants?.length ? { openingVariants } : {}),
     ...(nameFlags?.useCustomerName ? { useCustomerName: true } : {}),
@@ -148,7 +168,7 @@ export async function updateScenario(
   const updated: Scenario = {
     ...rows[0].data,
     name: name.trim(),
-    systemPrompt,
+    systemPrompt: ensureDncHandling(systemPrompt),
     updatedAt: new Date().toISOString(),
   };
   // undefined = alana dokunma (eski istemciler); null = asistan varsayılanına dön.
