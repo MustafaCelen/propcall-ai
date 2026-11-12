@@ -105,9 +105,15 @@ SADECE bu JSON formatında döndür:
 ALAN KRİTERLERİ:
 
 randevu_alindi:
-- true: Müşteri asistanın teklif ettiği sonraki adımı (randevu, tanışma görüşmesi, toplantı vb.)
-  açıkça kabul etti ("tamam", "evet", "olur", "ayarlayın", "olabilir" vb.)
-- false: Reddetti, yanıt vermedi veya belirsiz kaldı
+- true: SADECE müşteri bir GÖRÜŞME, ZİYARET/MÜLK GEZME, TOPLANTI ya da DANIŞMANIN GERİ
+  ARAMASI teklifini AÇIKÇA kabul ettiyse ("tamam arasın", "evet olur", "ayarlayın",
+  "gelebilirim" vb.) — yani danışmanın yapacağı somut bir insan teması kararlaştırıldıysa
+- false: Reddetti, yanıt vermedi, belirsiz kaldı ("düşüneyim", "bakarız", "olabilir")
+- false: Yalnızca katalog/broşür/bilgi/mesaj GÖNDERİLMESİNİ kabul etti, "bilgi alayım"
+  dedi ya da sadece soru sordu — bunlar randevu DEĞİLDİR; ilgi_seviyesi="yüksek" ve
+  tavsiye_edilen_aksiyon="Ara" ile ifade et, randevu_alindi=true YAPMA
+- false: Asistan teklif etmeden müşteri "siz arayın" demediyse; kibar "tamam, iyi günler"
+  kapanışı kabul sayılmaz
 
 ilgi_seviyesi:
 - "yüksek": randevu_alindi=true İSE HER ZAMAN "yüksek" — YA DA müşteri aktif soru sordu/detay
