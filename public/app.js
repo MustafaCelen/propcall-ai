@@ -2403,28 +2403,74 @@ function isValidPhone(p) {
 // (parseContacts, aşağıda) hem Adaylar'ın müşteri veritabanı içe aktarımı
 // (leads.js) tarafından kullanılır. Sonuç şekli: { rows: [{name,phone,region,
 // notes,reference,leadSource}], skipped: [{row,name,reason}], phoneColumnFound }.
+// Başlık hücresini karşılaştırılabilir hale getirir: Türkçe küçük harf, Türkçe
+// karakterler sadeleştirilir ("Bölge"→"bolge", "Adı Soyadı"→"adi soyadi"), fazla
+// boşluk/noktalama temizlenir.
+function normalizeHeader(h) {
+  return String(h == null ? '' : h).toLocaleLowerCase('tr')
+    .replace(/ı/g, 'i').replace(/ş/g, 's').replace(/ğ/g, 'g').replace(/ü/g, 'u').replace(/ö/g, 'o').replace(/ç/g, 'c')
+    .replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// Sütun eşleme: önce TAM eşleşme, sonra kelime bazlı eşleşme — "ad" ararken
+// "adres" veya "e mail adresi"ne, "not" ararken "kontrol"e takılmasın (gerçek
+// müşteri listelerinde ad sütunu bu yüzden yanlış seçiliyordu).
+function findHeaderColumn(headers, exact, words, exclude) {
+  const ex = exclude || [];
+  const blocked = h => ex.some(w => h.split(' ').includes(w));
+  let idx = headers.findIndex(h => h && exact.includes(h));
+  if (idx >= 0) return idx;
+  idx = headers.findIndex(h => h && !blocked(h) && h.split(' ').some(tok => words.includes(tok)));
+  return idx;
+}
+
+const PHONE_HEADER_EXACT = ['telefon', 'tel', 'phone', 'gsm', 'cep', 'cep telefonu', 'telefon numarasi', 'telefon no', 'numara', 'mobile', 'phone number'];
+const PHONE_HEADER_WORDS = ['telefon', 'tel', 'phone', 'gsm', 'cep', 'numara', 'mobile', 'mobil'];
+
+// Hücrede birden fazla numara olabilir ("0532… / 0533…", satır sonu, virgül):
+// ilk geçerli numarayı al. Excel sayı hücresi bilimsel gösterimle gelirse
+// (5.32E+9) Number ile açılır.
+function firstValidPhone(raw) {
+  if (typeof raw === 'number') raw = Number.isFinite(raw) ? raw.toLocaleString('fullwide', { useGrouping: false }) : '';
+  const s = String(raw == null ? '' : raw);
+  const parts = s.split(/[\/,;\n|]+/).map(p => p.trim()).filter(Boolean);
+  if (!parts.length) return cleanPhone(s);
+  for (const p of parts) {
+    const c = cleanPhone(p);
+    if (isValidPhone(c)) return c;
+  }
+  return cleanPhone(parts[0]);
+}
+
 function parseSpreadsheetRows(rawRows) {
   if (!rawRows.length) return { rows: [], skipped: [], phoneColumnFound: true };
 
   let dataStart = 0;
-  let colName = 0, colPhone = 1, colRegion = 2, colNotes = 3, colReference = -1, colLeadSource = -1;
+  let colName = 0, colSurname = -1, colPhone = 1, colRegion = 2, colNotes = 3, colReference = -1, colLeadSource = -1;
 
-  const first = rawRows[0].map(c => String(c).toLowerCase().trim());
-  const phoneIdx = first.findIndex(h => h.includes('telefon') || h.includes('phone') || h.includes('tel'));
-  const phoneColumnFound = phoneIdx >= 0;
-  if (phoneIdx >= 0) {
-    dataStart = 1;
-    colPhone  = phoneIdx;
-    colName   = first.findIndex(h => h.includes('ad') || h.includes('isim') || h.includes('name'));
-    if (colName < 0) colName = phoneIdx === 0 ? 1 : 0;
-    colRegion = first.findIndex(h => h.includes('bölge') || h.includes('bolge') || h.includes('region'));
-    if (colRegion < 0) colRegion = -1;
-    colNotes  = first.findIndex(h => h.includes('not') || h.includes('note'));
-    if (colNotes < 0) colNotes = -1;
-    colReference = first.findIndex(h => h.includes('referans') || h.includes('reference') || h.includes('ref'));
-    if (colReference < 0) colReference = -1;
-    colLeadSource = first.findIndex(h => h.includes('kaynak') || h.includes('source') || h.includes('ilan'));
-    if (colLeadSource < 0) colLeadSource = -1;
+  // Başlık satırı her zaman 1. satırda olmaz (üstte başlık/açıklama satırları olan
+  // listeler yaygın): ilk 10 satırda telefon başlığı taşıyan satırı ara.
+  let headerRowIdx = -1;
+  for (let r = 0; r < Math.min(10, rawRows.length); r++) {
+    const hdr = (rawRows[r] || []).map(normalizeHeader);
+    if (findHeaderColumn(hdr, PHONE_HEADER_EXACT, PHONE_HEADER_WORDS) >= 0) { headerRowIdx = r; break; }
+  }
+  const phoneColumnFound = headerRowIdx >= 0;
+  if (phoneColumnFound) {
+    const first = rawRows[headerRowIdx].map(normalizeHeader);
+    dataStart = headerRowIdx + 1;
+    colPhone  = findHeaderColumn(first, PHONE_HEADER_EXACT, PHONE_HEADER_WORDS);
+    colName   = findHeaderColumn(first,
+      ['ad', 'adi', 'isim', 'ad soyad', 'adi soyadi', 'ad soyadi', 'isim soyisim', 'musteri', 'musteri adi', 'name', 'full name', 'contact', 'kisi', 'sahibi', 'mal sahibi'],
+      ['ad', 'adi', 'isim', 'name', 'musteri', 'kisi', 'sahibi'],
+      ['adres', 'adresi', 'mail', 'email', 'eposta', 'posta']);
+    if (colName < 0) colName = colPhone === 0 ? 1 : 0;
+    colSurname = findHeaderColumn(first, ['soyad', 'soyadi', 'soyisim', 'surname', 'last name', 'lastname'], ['soyad', 'soyadi', 'soyisim', 'surname', 'lastname']);
+    if (colSurname === colName) colSurname = -1;
+    colRegion = findHeaderColumn(first, ['bolge', 'region', 'ilce', 'semt', 'mahalle', 'il', 'sehir', 'lokasyon', 'konum'], ['bolge', 'region', 'ilce', 'semt', 'mahalle', 'sehir', 'lokasyon', 'konum']);
+    colNotes  = findHeaderColumn(first, ['not', 'notlar', 'note', 'notes', 'aciklama', 'description'], ['not', 'notlar', 'note', 'notes', 'aciklama']);
+    colReference = findHeaderColumn(first, ['referans', 'reference', 'ref'], ['referans', 'reference', 'ref']);
+    colLeadSource = findHeaderColumn(first, ['kaynak', 'source', 'ilan', 'ilan no', 'lead source', 'lead kaynagi'], ['kaynak', 'source', 'ilan']);
   }
 
   const seenPhones = new Set();
@@ -2432,10 +2478,18 @@ function parseSpreadsheetRows(rawRows) {
   const rows = [];
 
   for (let i = dataStart; i < rawRows.length; i++) {
-    const row      = rawRows[i];
+    const row      = rawRows[i] || [];
+    // Tamamen boş satırlar (Excel'in sonundaki biçimlendirilmiş boş satırlar)
+    // "Telefon boş" diye atlandı listesini şişirmesin.
+    if (!row.some(c => String(c == null ? '' : c).trim() !== '')) continue;
     const rawPhone = row[colPhone];
-    const phone    = cleanPhone(rawPhone);
-    const name     = String(row[colName] || '').trim() || ('Kişi ' + (i - dataStart + 1));
+    const phone    = firstValidPhone(rawPhone);
+    let name       = String(row[colName] || '').trim();
+    if (colSurname >= 0) {
+      const sur = String(row[colSurname] || '').trim();
+      if (sur && !name.toLocaleLowerCase('tr').endsWith(sur.toLocaleLowerCase('tr'))) name = (name + ' ' + sur).trim();
+    }
+    if (!name) name = 'Kişi ' + (i - dataStart + 1);
     const rowNum   = i + 1;
 
     if (!phone) {
