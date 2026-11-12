@@ -49,7 +49,7 @@ async function syncForm(userId: string, config: MetaConfig, formId: string, form
         lastName = parts.slice(1).join(' ') || null;
       }
 
-      await createLead(userId, {
+      const createdLead = await createLead(userId, {
         firstName,
         lastName,
         email: fields.email || null,
@@ -69,6 +69,15 @@ async function syncForm(userId: string, config: MetaConfig, formId: string, form
           campaignName: leadData.campaign_name || null,
         },
       });
+      // Meta lead sıcakken aranmalı: 15 dakika vadeli "ilk temas" görevi (bkz. src/tasks.ts).
+      try {
+        const { createTask } = await import('./tasks');
+        await createTask(userId, {
+          leadId: createdLead.id, title: 'İlk temas (Meta lead)', kind: 'call',
+          dueAt: new Date(Date.now() + 15 * 60 * 1000), source: 'meta',
+          note: [formName, leadData.campaign_name].filter(Boolean).join(' · ') || null,
+        });
+      } catch (err) { console.error('[Tasks] Meta lead görevi oluşturulamadı:', err); }
       imported++;
     }
 

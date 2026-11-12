@@ -159,6 +159,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!r.ok) { location.href = '/login?next=' + encodeURIComponent(location.pathname); return; }
     const session = await r.json();
     CURRENT_USER_ID = session.data?.id || null;
+    window.CURRENT_USER_NAME = session.data?.name || '';
     if (session.data?.role === 'admin' && $('linkUsers')) $('linkUsers').style.display = '';
     if (session.data && session.data.termsAcceptedVersion !== CURRENT_TERMS_VERSION) {
       showTermsGate();
@@ -179,9 +180,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   initTabs();
-  // Dar ekranda sol panel (müşteri formu) çekmece: başlıktaki ☰ ile açılır,
-  // arka plana dokununca kapanır. Masaüstünde CSS bu kontrolleri gizler.
-  const leftPanel = document.querySelector('.left-panel');
+  // Dar ekranda sol menü (rail) çekmece: başlıktaki ☰ ile açılır, arka plana
+  // dokununca kapanır. Masaüstünde CSS bu kontrolleri gizler. (Müşteri formu artık
+  // Canlı Görüşme sekmesinin içinde — bkz. .live-layout.)
+  const leftPanel = document.querySelector('.rail');
   const leftBackdrop = $('leftPanelBackdrop');
   window.setLeftPanel = open => {
     if (leftPanel) leftPanel.classList.toggle('open', !!open);
@@ -202,6 +204,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   connectSSE();
   loadHistory();
   loadFollowupBadge();
+  if (typeof loadToday === 'function') loadToday();
 });
 
 // ─── KREDİLER (Vapi + ElevenLabs) ─────────────────────────────────────────────
@@ -357,7 +360,8 @@ function initTabs() {
 function switchTab(name) {
   DOM.tabBtns.forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   DOM.tabContents.forEach(c => {
-    const match = (name === 'live'            && c.id === 'tabLive')            ||
+    const match = (name === 'today'           && c.id === 'tabToday')           ||
+                  (name === 'live'            && c.id === 'tabLive')            ||
                   (name === 'history'         && c.id === 'tabHistory')         ||
                   (name === 'stats'           && c.id === 'tabStats')           ||
                   (name === 'campaign'        && c.id === 'tabCampaign')        ||
@@ -369,8 +373,11 @@ function switchTab(name) {
                   (name === 'roleplay'        && c.id === 'tabRoleplay');
     c.classList.toggle('active', match);
   });
+  if (name === 'today' && typeof loadToday === 'function') loadToday();
   if (name === 'campaignHistory') loadCampaignHistory();
   if (name === 'history') loadHistory();
+  // Dar ekranda menü çekmecesi seçimden sonra kapanır.
+  if (typeof setLeftPanel === 'function') setLeftPanel(false);
   if (name === 'stats')   loadStats();
   if (name === 'followup') loadFollowup();
   if (name === 'leads')   loadLeads();

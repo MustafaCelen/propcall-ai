@@ -486,6 +486,30 @@ export async function upsertLeadFromCallOutcome(
     `INSERT INTO lead_activities (id, lead_id, user_id, type, data) VALUES ($1, $2, $3, 'CALL_COMPLETED', $4)`,
     [newActivityId(), leadId, userId, JSON.stringify({ vapiCallId, randevuAlindi, ilgiSeviyesi, ozet })],
   );
+  await scheduleFollowupTask(userId, leadId, vapiCallId, randevuAlindi, ozet);
+}
+
+// Arama sonucu → otomatik "sonraki adım" (CRM Faz 1, bkz. src/tasks.ts). Randevu
+// alındıysa ertesi sabah bir randevu görevi (AI saat/yer bilmez; danışman teyit edip
+// düzeltir), sadece ilgi varsa 2 gün sonra "geri ara". Aynı kişiye açık görev varsa
+// ikinci açılmaz (kampanya tekrar araması Bugün listesini şişirmesin).
+async function scheduleFollowupTask(
+  userId: string, leadId: string, vapiCallId: string, randevuAlindi: boolean, ozet: string,
+): Promise<void> {
+  try {
+    const { ensureOpenTaskForLead, istanbulAt } = await import('./tasks');
+    if (randevuAlindi) {
+      await ensureOpenTaskForLead(userId, leadId, {
+        title: 'Randevuyu teyit et', kind: 'meeting', dueAt: istanbulAt(1, 10), source: 'ai_call', vapiCallId, note: ozet,
+      });
+    } else {
+      await ensureOpenTaskForLead(userId, leadId, {
+        title: 'Geri ara', kind: 'call', dueAt: istanbulAt(2, 10), source: 'ai_call', vapiCallId, note: ozet,
+      });
+    }
+  } catch (err) {
+    console.error('[Tasks] Arama sonucu → görev oluşturulamadı:', err);
+  }
 }
 
 // upsertLeadFromCallOutcome'un ID-bazlı kardeşi — arama, müşteri veritabanından
@@ -523,6 +547,7 @@ export async function applyCallOutcomeToLeadById(
     `INSERT INTO lead_activities (id, lead_id, user_id, type, data) VALUES ($1, $2, $3, 'CALL_COMPLETED', $4)`,
     [newActivityId(), leadId, userId, JSON.stringify({ vapiCallId, randevuAlindi, ilgiSeviyesi, ozet })],
   );
+  await scheduleFollowupTask(userId, leadId, vapiCallId, randevuAlindi, ozet);
 }
 
 // ─── WhatsApp yazışması → Aday aşaması (aramadakiyle aynı asimetrik-risk ilkesi) ────

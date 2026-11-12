@@ -292,6 +292,27 @@ export async function initDb(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_lead_activities_lead_id ON lead_activities (lead_id);
 
+    -- Görevler / sonraki adım (CRM Faz 1, bkz. src/tasks.ts). Randevu = kind 'meeting'.
+    -- lead_id boş olabilir (kişiye bağlı olmayan serbest görev). Çoğu satırı sistem
+    -- açar (source ai_call/meta/whatsapp); danışman tamamlar ya da erteler.
+    CREATE TABLE IF NOT EXISTS tasks (
+      id           TEXT PRIMARY KEY,
+      user_id      TEXT NOT NULL REFERENCES users(id),
+      lead_id      TEXT REFERENCES leads(id) ON DELETE CASCADE,
+      title        TEXT NOT NULL,
+      kind         TEXT NOT NULL DEFAULT 'call',     -- call | whatsapp | meeting | other
+      due_at       TIMESTAMPTZ NOT NULL,
+      status       TEXT NOT NULL DEFAULT 'open',     -- open | done
+      source       TEXT NOT NULL DEFAULT 'manual',   -- manual | ai_call | whatsapp | meta | system
+      vapi_call_id TEXT,
+      note         TEXT,
+      snooze_count INT NOT NULL DEFAULT 0,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      done_at      TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_tasks_user_due ON tasks (user_id, status, due_at);
+    CREATE INDEX IF NOT EXISTS idx_tasks_lead ON tasks (lead_id);
+
     -- Akıllı Plan — belirli gün/saat penceresinde otomatik kampanya açıp kapatan
     -- zamanlayıcı (bkz. src/smartPlans.ts). campaigns tablosuna MOD eklemek yerine
     -- ayrı bir wrapper: her tetiklendiğinde normal bir campaigns satırı yaratıp

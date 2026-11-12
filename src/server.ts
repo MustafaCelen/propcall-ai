@@ -61,6 +61,7 @@ import {
   getLiveAccountStats,
 } from './campaign';
 import { listVapiAccountsForAdmin, updateVapiAccount } from './vapiAccounts';
+import { getTodayDigest, listTasks, createTask, completeTask, snoozeTask, updateTask, deleteTask, istanbulAt, TaskScope, TaskKind } from './tasks';
 import { listCampaigns, getCampaign, deleteCampaignRecord } from './campaigns';
 import { translateDialError, toClientError } from './campaignErrors';
 import {
@@ -1287,6 +1288,71 @@ async function generateSummaryForCall(vapiCallId: string, attempt = 1): Promise<
     broadcast(ownerId, 'summary-error', { vapiCallId, error: toClientError(err) });
   }
 }
+
+// ─── BUGÜN + GÖREVLER (CRM Faz 1, bkz. src/tasks.ts) ─────────────────────────
+
+app.get('/api/today', requireUserAuth, async (req: Request, res: Response) => {
+  try { return res.json({ success: true, data: await getTodayDigest(req.userId!) }); }
+  catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+app.get('/api/tasks', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const scope = String(req.query.scope || 'open') as TaskScope;
+    if (!['today', 'overdue', 'upcoming', 'open', 'done'].includes(scope)) {
+      return res.status(400).json({ success: false, error: 'Geçersiz kapsam' });
+    }
+    return res.json({ success: true, data: await listTasks(req.userId!, scope) });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+app.post('/api/tasks', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const { leadId, title, kind, dueAt, note } = req.body as { leadId?: string; title?: string; kind?: TaskKind; dueAt?: string; note?: string };
+    if (!title?.trim()) return res.status(400).json({ success: false, error: 'Görev başlığı zorunlu' });
+    const due = dueAt ? new Date(dueAt) : istanbulAt(0, 18);
+    if (Number.isNaN(due.getTime())) return res.status(400).json({ success: false, error: 'Geçersiz tarih' });
+    if (kind && !['call', 'whatsapp', 'meeting', 'other'].includes(kind)) return res.status(400).json({ success: false, error: 'Geçersiz görev türü' });
+    if (leadId) {
+      const lead = await getLead(req.userId!, leadId);
+      if (!lead) return res.status(404).json({ success: false, error: 'Aday bulunamadı' });
+    }
+    const task = await createTask(req.userId!, { leadId: leadId || null, title, kind, dueAt: due, note: note?.trim() || null, source: 'manual' });
+    return res.status(201).json({ success: true, data: task });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+app.patch('/api/tasks/:id', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const { done, snoozeUntil, title, dueAt, note, kind } = req.body as {
+      done?: boolean; snoozeUntil?: string; title?: string; dueAt?: string; note?: string | null; kind?: TaskKind;
+    };
+    let ok = true;
+    if (done === true) ok = await completeTask(req.userId!, req.params.id);
+    else if (snoozeUntil) {
+      const until = new Date(snoozeUntil);
+      if (Number.isNaN(until.getTime())) return res.status(400).json({ success: false, error: 'Geçersiz erteleme tarihi' });
+      ok = await snoozeTask(req.userId!, req.params.id, until);
+    } else {
+      const patch: { title?: string; dueAt?: Date; note?: string | null; kind?: TaskKind } = {};
+      if (title !== undefined) { if (!title.trim()) return res.status(400).json({ success: false, error: 'Başlık boş olamaz' }); patch.title = title; }
+      if (dueAt !== undefined) { const d = new Date(dueAt); if (Number.isNaN(d.getTime())) return res.status(400).json({ success: false, error: 'Geçersiz tarih' }); patch.dueAt = d; }
+      if (note !== undefined)  patch.note = note;
+      if (kind !== undefined)  { if (!['call', 'whatsapp', 'meeting', 'other'].includes(kind)) return res.status(400).json({ success: false, error: 'Geçersiz görev türü' }); patch.kind = kind; }
+      ok = await updateTask(req.userId!, req.params.id, patch);
+    }
+    if (!ok) return res.status(404).json({ success: false, error: 'Görev bulunamadı' });
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+app.delete('/api/tasks/:id', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteTask(req.userId!, req.params.id);
+    if (!ok) return res.status(404).json({ success: false, error: 'Görev bulunamadı' });
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
 
 // ─── TAKİP LİSTESİ ───────────────────────────────────────────────────────────
 

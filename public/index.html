@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PropCall AI</title>
   <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="shell.css" />
 </head>
 <body>
 <div class="app-layout">
@@ -12,7 +13,7 @@
   <!-- HEADER -->
   <header class="app-header">
     <div class="logo">
-      <button class="btn-secondary btn-left-toggle" id="btnLeftToggle" title="Müşteri bilgileri ve arama" aria-label="Müşteri panelini aç">☰</button>
+      <button class="btn-secondary btn-left-toggle" id="btnLeftToggle" title="Menü" aria-label="Menüyü aç">☰</button>
       <div class="logo-icon">📞</div>
       <div class="logo-text">Prop<span>Call</span> AI</div>
     </div>
@@ -48,7 +49,36 @@
     </div>
   </header>
 
-  <!-- LEFT PANEL -->
+  <!-- SOL MENÜ (rail) — sekme çubuğunun yerini aldı; .tab-btn sınıfı korunur, app.js aynı kodla çalışır -->
+  <nav class="rail" id="rail" aria-label="Ana menü">
+    <button class="tab-btn rail-item" data-tab="today">🗓️ Bugün <span class="tab-badge" id="todayBadge" style="display:none"></span></button>
+    <button class="tab-btn rail-item" data-tab="leads">🗂️ Pano</button>
+    <button class="tab-btn rail-item" data-tab="followup">📋 Takip <span class="tab-badge" id="followupBadge" style="display:none"></span></button>
+    <div class="rail-sec">Arama</div>
+    <button class="tab-btn rail-item" data-tab="live"><span class="live-dot" id="liveDotBtn"></span>Canlı Görüşme</button>
+    <button class="tab-btn rail-item" data-tab="campaign">📞 Toplu Arama</button>
+    <button class="tab-btn rail-item" data-tab="campaignHistory">📊 Kampanya Geçmişi</button>
+    <button class="tab-btn rail-item" data-tab="history">🕓 Geçmiş Aramalar</button>
+    <div class="rail-sec">İletişim</div>
+    <button class="tab-btn rail-item" data-tab="whatsapp">💬 WhatsApp</button>
+    <button class="tab-btn rail-item" data-tab="smartPlans">🧠 Akıllı Plan</button>
+    <div class="rail-sec">Öğren</div>
+    <button class="tab-btn rail-item" data-tab="stats">📈 Raporlar</button>
+    <button class="tab-btn rail-item" data-tab="roleplay">🎯 Pratik Yap</button>
+  </nav>
+  <div class="left-panel-backdrop" id="leftPanelBackdrop"></div>
+
+  <!-- RIGHT PANEL -->
+  <main class="right-panel">
+
+    <!-- ── TAB 0: BUGÜN ──────────────────────────────────── -->
+    <div class="tab-content active" id="tabToday">
+      <div class="today-scroll" id="todayRoot"><div class="today-loading">Yükleniyor…</div></div>
+    </div>
+
+    <!-- ── TAB 1: CANLI ──────────────────────────────────── -->
+    <div class="tab-content" id="tabLive">
+    <div class="live-layout">
   <aside class="left-panel">
     <div class="panel-section" id="tourCustomerForm">
       <div class="section-title">Müşteri Bilgileri</div>
@@ -100,29 +130,7 @@
       <button class="btn-end" id="btnEndCall">⏹ Aramayı Sonlandır</button>
     </div>
   </aside>
-  <div class="left-panel-backdrop" id="leftPanelBackdrop"></div>
-
-  <!-- RIGHT PANEL -->
-  <main class="right-panel">
-
-    <!-- Tab Bar -->
-    <div class="tab-bar">
-      <button class="tab-btn active" data-tab="live">
-        <span class="live-dot" id="liveDotBtn"></span>Canlı Görüşme
-      </button>
-      <button class="tab-btn" data-tab="followup">📋 Takip <span class="tab-badge" id="followupBadge" style="display:none"></span></button>
-      <button class="tab-btn" data-tab="history">Geçmiş Aramalar</button>
-      <button class="tab-btn" data-tab="stats">İstatistikler</button>
-      <button class="tab-btn" data-tab="campaign">📋 Toplu Arama</button>
-      <button class="tab-btn" data-tab="campaignHistory">📊 Kampanya Geçmişi</button>
-      <button class="tab-btn" data-tab="leads">👥 Adaylar</button>
-      <button class="tab-btn" data-tab="whatsapp">💬 WhatsApp</button>
-      <button class="tab-btn" data-tab="smartPlans">🧠 Akıllı Plan</button>
-      <button class="tab-btn" data-tab="roleplay">🎯 Pratik Yap</button>
-    </div>
-
-    <!-- ── TAB 1: CANLI ──────────────────────────────────── -->
-    <div class="tab-content active" id="tabLive">
+    <div class="live-main">
 
       <!-- Arama bilgi çubuğu -->
       <div class="live-call-bar" id="liveCallBar" style="display:none">
@@ -160,6 +168,8 @@
         </div>
       </div>
 
+    </div><!-- /live-main -->
+    </div><!-- /live-layout -->
     </div>
 
     <!-- ── TAB 2: GEÇMİŞ ─────────────────────────────────── -->
@@ -1214,6 +1224,7 @@
 <script src="tour.js"></script>
 <script src="terms.js"></script>
 <script src="app.js"></script>
+<script src="today.js"></script>
 <script src="leads.js"></script>
 <script src="whatsapp.js"></script>
 <script src="smartPlans.js"></script>
