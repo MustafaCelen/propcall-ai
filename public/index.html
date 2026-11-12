@@ -187,6 +187,7 @@
 
     <!-- ── TAB 2: GEÇMİŞ ─────────────────────────────────── -->
     <div class="tab-content" id="tabHistory">
+      <div class="pano-head page-head"><div class="pano-title"><h2>Geçmiş Aramalar</h2><span class="td-sub">Tüm aramalar; satıra tıklayın, transkript ve özet açılır.</span></div></div>
 
       <!-- Hızlı dönem chip'leri -->
       <div class="quick-chips" id="historyChips">
@@ -286,6 +287,7 @@
     <!-- ── TAB 3: İSTATİSTİKLER ─────────────────────────── -->
     <div class="tab-content" id="tabStats">
       <div class="stats-scroll">
+        <div class="pano-head page-head" style="padding:0 0 4px"><div class="pano-title"><h2>Raporlar</h2><span class="td-sub">Arama hacmi, cevaplanma, randevu dönüşümü ve maliyet.</span></div></div>
 
         <div class="stats-filter-panel">
           <div class="quick-chips stats-chips" id="statsChips">
@@ -413,6 +415,7 @@
 
     <!-- ── TAB: TAKİP ──────────────────────────────────────── -->
     <div class="tab-content" id="tabFollowup">
+      <div class="pano-head page-head"><div class="pano-title"><h2>Takip</h2><span class="td-sub">Arama sonuçlarına göre bugün kimi aramalı: cevapsızlar, randevular, geri aranacaklar.</span></div></div>
       <div class="followup-toolbar">
         <input type="text" id="followupSearch" placeholder="🔍 Ad veya telefon ara..." />
         <select id="followupScenarioFilter" class="fu-scenario-select">
@@ -430,6 +433,7 @@
     <!-- ── TAB 4: TOPLU ARAMA ─────────────────────────────── -->
     <div class="tab-content" id="tabCampaign">
       <div class="campaign-layout">
+        <div class="pano-head page-head"><div class="pano-title"><h2>Toplu Arama</h2><span class="td-sub">Listeyi yükleyin, senaryoyu seçin, başlatın. Sonuçlar Pano'ya ve Takip'e otomatik düşer.</span></div></div>
 
         <!-- Üst kontrol çubuğu -->
         <div class="campaign-toolbar">
@@ -608,8 +612,9 @@
 
     <!-- ── TAB 5: KAMPANYA GEÇMİŞİ ─────────────────────────── -->
     <div class="tab-content" id="tabCampaignHistory">
+      <div class="pano-head page-head"><div class="pano-title"><h2>Kampanya Geçmişi</h2><span class="td-sub">Senaryo bazında karşılaştırın; hangi liste daha çok randevu getirdi.</span></div></div>
       <div class="ch-toolbar">
-        <span class="ch-hint">Geçmiş kampanyalar — senaryo bazında karşılaştırın, hangi listenin daha çok randevu getirdiğini görün.</span>
+        <span class="ch-hint" hidden>Geçmiş kampanyalar — senaryo bazında karşılaştırın, hangi listenin daha çok randevu getirdiğini görün.</span>
         <input type="search" id="chSearch" class="ch-search" placeholder="🔍 Kampanya adı ara..." />
         <select id="chStatusFilter" class="ch-select">
           <option value="">Tüm durumlar</option>
@@ -737,6 +742,7 @@
 
     <!-- ── TAB 7: WHATSAPP ─────────────────────────────────── -->
     <div class="tab-content" id="tabWhatsapp">
+      <div class="pano-head page-head"><div class="pano-title"><h2>WhatsApp</h2><span class="td-sub">Gelen yazışmalar ve onaylı şablonlarla toplu mesaj.</span></div></div>
       <div class="fu-subtabs" id="waSubtabs">
         <button class="fu-subtab active" data-wasub="inbox">💬 Gelen Kutusu</button>
         <button class="fu-subtab" data-wasub="templates">📋 Şablonlar & Kampanya</button>
@@ -789,9 +795,9 @@
 
     <!-- ── TAB: AKILLI PLAN ─────────────────────────────────── -->
     <div class="tab-content" id="tabSmartPlans">
-      <div class="ch-toolbar">
-        <span class="ch-hint">Belirlediğiniz gün/saat penceresinde, günlük arama tavanıyla otomatik kampanya başlatır — her gün elle "Başlat"a basmanıza gerek kalmaz.</span>
-        <button class="btn-upload" id="btnAddSmartPlan">+ Yeni Plan</button>
+      <div class="pano-head page-head">
+        <div class="pano-title"><h2>Akıllı Plan</h2><span class="td-sub">Belirlediğiniz gün ve saat penceresinde, günlük tavanla kampanya kendiliğinden başlar.</span></div>
+        <div class="pano-tools"><button class="td-btn" id="btnAddSmartPlan">+ Yeni plan</button></div>
       </div>
       <div id="smartPlansList">
         <div class="drawer-loading">⏳ Yükleniyor...</div>
@@ -801,9 +807,7 @@
     <!-- ── TAB: PRATİK YAP (Roleplay) ─────────────────────────────────── -->
     <div class="tab-content" id="tabRoleplay">
       <div class="rp-scroll">
-        <div class="ch-toolbar">
-          <span class="ch-hint" id="roleplayRateNote">Bu görüşmeler gerçek bir arama gibi dakika başı bakiyenizden düşülür.</span>
-        </div>
+        <div class="pano-head page-head" style="padding:0 0 4px"><div class="pano-title"><h2>Pratik Yap</h2><span class="td-sub" id="roleplayRateNote">Bu görüşmeler gerçek bir arama gibi dakika başı bakiyenizden düşülür.</span></div></div>
         <div class="rp-cards" id="roleplayCards">
           <div class="drawer-loading">⏳ Yükleniyor...</div>
         </div>

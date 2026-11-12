@@ -193,8 +193,71 @@
 .tm-num.warn b{color:var(--red)}
 .tm-num small{color:var(--txm);font-size:10.5px;white-space:nowrap}
 
+/* ── Kalan ekranlar: ortak Berrak katmanı ──
+   Eski ekranların JS'ine dokunmadan araç çubukları, çipler, tablolar, kartlar ve
+   düğmeler aynı dile çekilir. Sayfa başlıkları index.html'de .page-head ile verildi. */
+.page-head{padding-bottom:8px}
+.ch-hint[hidden]{display:none}
+.page-head+.ch-toolbar,.page-head+.quick-chips,.page-head+.followup-toolbar,.page-head+.fu-subtabs{border-top:none}
+.ch-toolbar,.quick-chips,.filter-bar,.stats-filter-panel,.followup-toolbar,.fu-subtabs,.campaign-toolbar{background:transparent;border-bottom:none}
+.ch-toolbar,.quick-chips,.followup-toolbar{padding:4px 24px 10px}
+.filter-bar{padding:4px 24px 10px;gap:12px}
+.fu-subtabs{padding:4px 24px 8px}
+.quick-chips .chip-counter{color:var(--txm);font-family:var(--font);font-weight:500}
+/* çip: pano-seg ile aynı dil */
+.chip,.fu-subtab{background:var(--s1);border:1px solid var(--border);border-radius:9px;color:var(--tx2);font-weight:500;padding:7px 12px;font-size:12.5px}
+.chip:hover,.fu-subtab:hover{border-color:var(--border-a);color:var(--tx)}
+.chip.active,.fu-subtab.active{background:var(--primary-dim);border-color:transparent;color:var(--primary);font-weight:600}
+.fu-subtab-count{background:var(--s1);color:var(--txm);border:1px solid var(--border);font-weight:600}
+.fu-subtab.active .fu-subtab-count{background:#fff;color:var(--primary);border-color:transparent}
+.chip-refresh{border-radius:9px;background:var(--s1)}
+/* araç çubuğu düğmeleri: ghost */
+.btn-upload,.btn-secondary,.btn-export,.btn-filter-clear,.ch-toolbar .btn-secondary,.btn-delete-old,.adm-mini-btn{background:var(--s1);border:1px solid var(--border);border-radius:9px;color:var(--tx);font-weight:500;font-size:13px;padding:8px 14px;height:36px;line-height:1}
+.btn-upload:hover,.btn-secondary:hover,.btn-export:hover,.btn-filter-clear:hover{background:var(--s2);border-color:var(--border-a);color:var(--tx)}
+.btn-filter{border-radius:9px;height:36px;padding:0 14px;font-weight:600}
+.btn-delete-old{color:var(--red)}
+.ch-search,.ch-select,.followup-toolbar input,.followup-toolbar select,.filter-group input,.filter-group select,.quick-chips .chip-search,.campaign-toolbar input,.campaign-toolbar select{background:var(--s1);border:1px solid var(--border);border-radius:9px;height:36px;padding:0 12px;font-family:var(--font);font-size:13px;color:var(--tx)}
+.ch-search:focus,.followup-toolbar input:focus,.filter-group input:focus,.campaign-toolbar input:focus{outline:none;border-color:var(--primary)}
+.filter-group label,.campaign-toolbar label,.section-title{font-size:11px;letter-spacing:.06em;color:var(--txm);font-weight:600}
+/* tablolar */
+.tab-content table{border-collapse:separate;border-spacing:0}
+.tab-content table thead th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--txm);font-weight:600;background:var(--bg);border-bottom:1px solid var(--border);padding:10px 12px}
+.tab-content table tbody td{padding:11px 12px;border-bottom:1px solid var(--border);font-size:13px;color:var(--tx2)}
+.tab-content table tbody tr:hover td{background:var(--s2)}
+.tab-content table tbody tr:last-child td{border-bottom:none}
+.tbl-name{font-size:13.5px}
+.tbl-cost,.tbl-phone{font-family:var(--font);font-variant-numeric:tabular-nums}
+.status-tag{border-radius:999px;padding:3px 9px;font-size:11px;letter-spacing:.02em;text-transform:none}
+/* kartlar */
+.stat-card,.chart-card,.rp-card,.fu-section,.sp-card,.campaign-panel{border-radius:12px;box-shadow:none}
+.stat-card{padding:16px}
+.stat-card .stat-value,.stat-card b{font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.chart-card h3,.chart-title{font-size:13px;font-weight:600;letter-spacing:0;text-transform:none;color:var(--tx)}
+.rp-card{padding:18px;border:1px solid var(--border)}
+.rp-card:hover{border-color:var(--border-a);box-shadow:0 3px 10px rgba(0,0,0,.06)}
+.rp-cards{margin-top:8px}
+.stats-scroll,.rp-scroll{padding:18px 24px 24px}
+.welcome-screen h2,.welcome-title{font-weight:700;letter-spacing:-.02em}
+/* Toplu Arama ayar paneli: beyaz kart */
+.campaign-toolbar{margin:0 24px 10px;background:var(--s1);border:1px solid var(--border);border-radius:12px;padding:14px 16px}
+.campaign-toolbar-row{border-bottom:none}
+.progress-fill{background:var(--primary)}
+/* WhatsApp gelen kutusu */
+.wa-inbox-list{background:var(--s1)}
+.wa-inbox-item{padding:12px 16px}
+.wa-inbox-item.active,.wa-inbox-item:hover{background:var(--primary-dim)}
+.wa-inbox-item-channel{border-radius:999px;font-size:9.5px}
+.wa-inbox-thread-header{font-size:14px}
+/* Takip listesi */
+.fu-section{border-left:1px solid var(--border)}
+/* Ayarlar sayfası (settings.html) başlık */
+.adm-page-title,.settings-title{letter-spacing:-.02em}
+
 /* ── Dar ekran ── */
 @media (max-width:900px){
+  .ch-toolbar,.quick-chips,.followup-toolbar,.filter-bar,.fu-subtabs{padding-left:12px;padding-right:12px}
+  .campaign-toolbar{margin:0 12px 10px}
+  .stats-scroll,.rp-scroll{padding:12px}
   .fn-row{grid-template-columns:110px minmax(0,1fr) 44px}
   .tm-row{grid-template-columns:1fr 1fr;row-gap:8px}
   .tm-who{grid-column:1 / -1}
