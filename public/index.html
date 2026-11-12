@@ -643,15 +643,27 @@
 
     <!-- ── TAB 6: ADAYLAR (LEADS KANBAN / LİSTE) ──────────────────── -->
     <div class="tab-content" id="tabLeads">
-      <div class="ch-toolbar">
-        <span class="ch-hint">Aday takip panosu — aşama değiştirmek için kartı sürükleyin veya karta tıklayıp detaydan değiştirin.</span>
-        <div class="leads-view-toggle">
-          <button class="leads-view-btn active" id="btnLeadsViewKanban" title="Pano görünümü">🗂️ Pano</button>
-          <button class="leads-view-btn" id="btnLeadsViewList" title="Liste görünümü — çoklu seçim ve kampanya oluşturma için">📋 Liste</button>
+      <div class="pano-head">
+        <div class="pano-title">
+          <h2>Pano</h2>
+          <span class="td-sub" id="panoSummary">Fırsatlar aşamalara göre — kartı sürükleyin ya da tıklayıp detaydan ilerletin.</span>
         </div>
-        <input type="file" id="leadImportFile" accept=".xlsx,.xls,.csv" style="display:none"/>
-        <button class="btn-upload" id="btnImportLeads">📂 Excel / CSV Yükle</button>
-        <button class="btn-upload" id="btnAddLead">+ Yeni Aday</button>
+        <div class="pano-tools">
+          <div class="pano-seg" id="panoDealFilter" role="group" aria-label="Fırsat tipi">
+            <button class="active" data-deal="">Tümü</button>
+            <button data-deal="SELLER">Satıcı</button>
+            <button data-deal="BUYER">Alıcı</button>
+            <button data-deal="RENTAL">Kiralama</button>
+          </div>
+          <input type="search" class="pano-search" id="panoSearch" placeholder="Ad, telefon, konum…" />
+          <div class="pano-seg" id="leadsViewToggle">
+            <button class="active" id="btnLeadsViewKanban" title="Pano görünümü">Pano</button>
+            <button id="btnLeadsViewList" title="Liste görünümü — çoklu seçim ve kampanya oluşturma için">Liste</button>
+          </div>
+          <input type="file" id="leadImportFile" accept=".xlsx,.xls,.csv" style="display:none"/>
+          <button class="td-btn ghost" id="btnImportLeads">Excel / CSV yükle</button>
+          <button class="td-btn" id="btnAddLead">+ Yeni kişi</button>
+        </div>
       </div>
 
       <div class="leads-board" id="leadsBoard">
@@ -661,14 +673,13 @@
       <div class="leads-list-wrap" id="leadsListWrap" style="display:none">
         <div class="leads-list-filters">
           <select id="leadsFilterStage">
-            <option value="">Tüm Aşamalar</option>
+            <option value="">Tüm aşamalar</option>
             <option value="NEW">Yeni</option>
-            <option value="CONTACTED">İletişime Geçildi</option>
-            <option value="QUALIFIED">Nitelikli</option>
-            <option value="VIEWING">Gezme</option>
-            <option value="OFFER">Teklif</option>
-            <option value="WON">Kazanıldı</option>
-            <option value="LOST">Kaybedildi</option>
+            <option value="CONTACTED">Temas kuruldu</option>
+            <option value="MEETING">Randevu</option>
+            <option value="AGREEMENT">Yetki / Anlaşma</option>
+            <option value="WON">Kapandı</option>
+            <option value="LOST">Kayıp</option>
           </select>
           <select id="leadsFilterSource">
             <option value="">Tüm Kaynaklar</option>
@@ -698,11 +709,12 @@
               <th><input type="checkbox" id="leadsSelectAll" /></th>
               <th>Ad Soyad</th>
               <th>Telefon</th>
+              <th>Tip</th>
               <th>Aşama</th>
+              <th>Mülk</th>
               <th>Kaynak</th>
-              <th>Bölge</th>
               <th>Etiketler</th>
-              <th>Son Güncelleme</th>
+              <th>Son hareket</th>
             </tr>
           </thead>
           <tbody id="leadsListBody"></tbody>
@@ -834,10 +846,9 @@
         <div class="sp-rule-inline">
           <select id="spRuleStaleStage">
             <option value="NEW">Yeni</option>
-            <option value="CONTACTED">İletişime Geçildi</option>
-            <option value="QUALIFIED">Nitelikli</option>
-            <option value="VIEWING">Gezme</option>
-            <option value="OFFER">Teklif</option>
+            <option value="CONTACTED">Temas kuruldu</option>
+            <option value="MEETING">Randevu</option>
+            <option value="AGREEMENT">Yetki / Anlaşma</option>
           </select>
           <input type="number" id="spRuleStaleDays" min="1" value="30" style="width:80px" />
           <span class="adm-field-hint">gündür hareketsiz</span>
@@ -847,12 +858,11 @@
       <div id="spRuleStageEquals" class="sp-rule-subfield" style="display:none">
         <select id="spRuleStage">
           <option value="NEW">Yeni</option>
-          <option value="CONTACTED">İletişime Geçildi</option>
-          <option value="QUALIFIED">Nitelikli</option>
-          <option value="VIEWING">Gezme</option>
-          <option value="OFFER">Teklif</option>
-          <option value="WON">Kazanıldı</option>
-          <option value="LOST">Kaybedildi</option>
+          <option value="CONTACTED">Temas kuruldu</option>
+          <option value="MEETING">Randevu</option>
+          <option value="AGREEMENT">Yetki / Anlaşma</option>
+          <option value="WON">Kapandı</option>
+          <option value="LOST">Kayıp</option>
         </select>
       </div>
 
@@ -950,31 +960,64 @@
 
 <!-- ADAY DETAY MODAL -->
 <div class="modal-overlay" id="leadFormOverlay"></div>
-<div class="modal modal-sm" id="leadFormModal">
+<div class="modal modal-md" id="leadFormModal">
   <div class="modal-header">
-    <div class="modal-title" id="leadFormTitle">Yeni Aday</div>
+    <div class="modal-title" id="leadFormTitle">Yeni kişi</div>
     <button class="modal-close" id="leadFormClose">✕</button>
   </div>
   <div class="modal-body">
-    <div class="form-group">
-      <label>Ad *</label>
-      <input type="text" id="leadFormFirstName" placeholder="Ad" />
+    <div class="form-row-2">
+      <div class="form-group">
+        <label>Ad *</label>
+        <input type="text" id="leadFormFirstName" placeholder="Ad" />
+      </div>
+      <div class="form-group">
+        <label>Soyad</label>
+        <input type="text" id="leadFormLastName" placeholder="Soyad" />
+      </div>
     </div>
-    <div class="form-group">
-      <label>Soyad</label>
-      <input type="text" id="leadFormLastName" placeholder="Soyad" />
+    <div class="form-row-2">
+      <div class="form-group">
+        <label>Telefon</label>
+        <input type="text" id="leadFormPhone" placeholder="+90 5xx xxx xx xx" />
+      </div>
+      <div class="form-group">
+        <label>E-posta</label>
+        <input type="email" id="leadFormEmail" placeholder="ornek@eposta.com" />
+      </div>
     </div>
+    <div class="modal-section-divider">Fırsat</div>
     <div class="form-group">
-      <label>Telefon</label>
-      <input type="text" id="leadFormPhone" placeholder="+90 5xx xxx xx xx" />
+      <label>Fırsat tipi</label>
+      <div class="pano-seg" id="leadFormDealType">
+        <button type="button" data-deal="SELLER">Satıcı</button>
+        <button type="button" data-deal="BUYER">Alıcı</button>
+        <button type="button" data-deal="RENTAL">Kiralama</button>
+      </div>
     </div>
-    <div class="form-group">
-      <label>E-posta</label>
-      <input type="email" id="leadFormEmail" placeholder="ornek@eposta.com" />
+    <div class="form-row-2">
+      <div class="form-group">
+        <label>Mülk tipi</label>
+        <input type="text" id="leadFormPropertyType" placeholder="3+1 daire, arsa, dükkan…" />
+      </div>
+      <div class="form-group">
+        <label>Konum</label>
+        <input type="text" id="leadFormPropertyLocation" placeholder="Mahalle / site / ilçe" />
+      </div>
+    </div>
+    <div class="form-row-2">
+      <div class="form-group">
+        <label>m²</label>
+        <input type="number" id="leadFormPropertyM2" min="0" placeholder="120" />
+      </div>
+      <div class="form-group">
+        <label>Fiyat beklentisi (TL)</label>
+        <input type="number" id="leadFormPrice" min="0" step="1000" placeholder="5000000" />
+      </div>
     </div>
     <div class="form-group">
       <label>Not</label>
-      <textarea id="leadFormNotes" rows="3" placeholder="Serbest not..."></textarea>
+      <textarea id="leadFormNotes" rows="2" placeholder="Serbest not..."></textarea>
     </div>
     <div class="form-group">
       <label>Etiketler</label>
@@ -983,6 +1026,27 @@
     <div class="modal-actions">
       <button class="btn-modal-cancel" id="leadFormCancel" type="button">Vazgeç</button>
       <button class="btn-modal-confirm" id="leadFormSave" type="button">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- KAYIP NEDENİ (LOST'a geçişte zorunlu) -->
+<div class="modal-overlay" id="leadLostOverlay"></div>
+<div class="modal modal-sm" id="leadLostModal">
+  <div class="modal-header">
+    <div class="modal-title">Neden kaybedildi?</div>
+    <button class="modal-close" id="leadLostClose">✕</button>
+  </div>
+  <div class="modal-body">
+    <div class="td-sub" id="leadLostWho"></div>
+    <div class="lost-reasons" id="leadLostReasons"></div>
+    <div class="form-group">
+      <label>Not (isteğe bağlı)</label>
+      <input type="text" id="leadLostNote" placeholder="Kısa açıklama" maxlength="500" />
+    </div>
+    <div class="modal-actions">
+      <button class="btn-modal-cancel" id="leadLostCancel" type="button">Vazgeç</button>
+      <button class="btn-modal-confirm" id="leadLostConfirm" type="button" disabled>Kayıp olarak işaretle</button>
     </div>
   </div>
 </div>

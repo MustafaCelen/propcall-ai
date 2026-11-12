@@ -2,11 +2,21 @@
 // aşama değişimi + aktivite geçmişi. app.js'in $/$$ helper'larını ve ui-kit.js'in
 // toast/uiConfirm'ünü kullanır — bu dosya app.js'ten SONRA yüklenmelidir.
 
-const LEAD_STAGES = ['NEW', 'CONTACTED', 'QUALIFIED', 'VIEWING', 'OFFER', 'WON', 'LOST'];
+// CRM Faz 2: 6 aşamalı emlak hunisi (bkz. src/types.ts LEAD_STAGES). Eski kodlar
+// (QUALIFIED/VIEWING/OFFER) sunucuda yeni koda çevrilir; burada sadece etiket için tutulur.
+const LEAD_STAGES = ['NEW', 'CONTACTED', 'MEETING', 'AGREEMENT', 'WON', 'LOST'];
 const LEAD_STAGE_LABELS = {
-  NEW: 'Yeni', CONTACTED: 'İletişime Geçildi', QUALIFIED: 'Nitelikli',
-  VIEWING: 'Gezme', OFFER: 'Teklif', WON: 'Kazanıldı', LOST: 'Kaybedildi',
+  NEW: 'Yeni', CONTACTED: 'Temas kuruldu', MEETING: 'Randevu', AGREEMENT: 'Yetki / Anlaşma',
+  WON: 'Kapandı', LOST: 'Kayıp',
+  QUALIFIED: 'Randevu', VIEWING: 'Randevu', OFFER: 'Yetki / Anlaşma',
 };
+const DEAL_TYPE_LABELS = { SELLER: 'Satıcı', BUYER: 'Alıcı', RENTAL: 'Kiralama' };
+const AUTHORITY_LABELS = { EXCLUSIVE: 'Tek yetki', OPEN: 'Açık yetki', NONE: 'Yetki yok' };
+const LOST_REASON_LABELS = {
+  PRICE: 'Fiyat uyuşmadı', OTHER_AGENT: 'Başka danışmanla çalıştı', GAVE_UP: 'Satış / alımdan vazgeçti',
+  UNREACHABLE: 'Ulaşılamadı', NOT_INTERESTED: 'İlgilenmiyor', OTHER: 'Diğer',
+};
+window.LEAD_STAGE_LABELS = LEAD_STAGE_LABELS;
 const LEAD_SOURCE_LABELS = {
   MANUAL: 'Manuel', META_LEAD_AD: 'Meta Lead Ad', CSV_IMPORT: 'CSV',
   CALL_CAMPAIGN: 'Arama Sonucu', REFERRAL: 'Referans', OTHER: 'Diğer',
@@ -21,7 +31,7 @@ const leadsState = {
   leads: [], openId: null, draggedId: null,
   view: 'kanban', // 'kanban' | 'list'
   selectedIds: new Set(),
-  filters: { stage: '', source: '', region: '', tag: '', neverContacted: false },
+  filters: { stage: '', source: '', region: '', tag: '', neverContacted: false, dealType: '', q: '' },
 };
 
 function parseTagsInput(raw) {
@@ -30,6 +40,42 @@ function parseTagsInput(raw) {
 
 function leadFullName(lead) {
   return [lead.firstName, lead.lastName].filter(Boolean).join(' ') || '(isimsiz)';
+}
+
+// "3+1 daire · Bahçelievler · 120 m² · 5,2 mn" — dolu olan alanlar, kısa.
+function fmtPrice(n) {
+  if (n == null || n === '') return '';
+  const v = Number(n);
+  if (!Number.isFinite(v)) return '';
+  if (v >= 1e6) return (v / 1e6).toLocaleString('tr-TR', { maximumFractionDigits: 1 }) + ' mn';
+  if (v >= 1e3) return Math.round(v / 1e3).toLocaleString('tr-TR') + ' bin';
+  return v.toLocaleString('tr-TR');
+}
+function leadPropertyLine(lead) {
+  return [
+    lead.propertyType, lead.propertyLocation,
+    lead.propertyM2 ? lead.propertyM2 + ' m²' : '',
+    fmtPrice(lead.priceExpectation),
+  ].filter(Boolean).join(' · ');
+}
+function dealChip(lead) {
+  if (!lead.dealType) return '';
+  return `<span class="deal-chip ${lead.dealType.toLowerCase()}">${DEAL_TYPE_LABELS[lead.dealType] || lead.dealType}</span>`;
+}
+
+// Genel (herhangi bir metin) + fırsat tipi filtresi — hem pano hem liste bunu kullanır.
+function baseFilteredLeads() {
+  const f = leadsState.filters;
+  const q = (f.q || '').trim().toLowerCase();
+  return leadsState.leads.filter(l => {
+    if (f.dealType && l.dealType !== f.dealType) return false;
+    if (q) {
+      const hay = [leadFullName(l), l.phone, l.propertyLocation, l.propertyType, l.region, (l.tags || []).join(' ')]
+        .filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
 }
 
 function leadRelativeTime(iso) {
@@ -61,7 +107,7 @@ function renderLeadsView() {
 
 function setLeadsView(view) {
   leadsState.view = view;
-  $('leadsBoard').style.display = view === 'kanban' ? 'flex' : 'none';
+  $('leadsBoard').style.display = view === 'kanban' ? 'grid' : 'none';
   $('leadsListWrap').style.display = view === 'list' ? 'block' : 'none';
   $('btnLeadsViewKanban').classList.toggle('active', view === 'kanban');
   $('btnLeadsViewList').classList.toggle('active', view === 'list');
@@ -79,7 +125,7 @@ function leadLooksNeverContacted(lead) {
 
 function filteredLeads() {
   const f = leadsState.filters;
-  return leadsState.leads.filter(l => {
+  return baseFilteredLeads().filter(l => {
     if (f.stage && l.stage !== f.stage) return false;
     if (f.source && l.source !== f.source) return false;
     if (f.region && !(l.region || '').toLowerCase().includes(f.region.toLowerCase())) return false;
@@ -99,14 +145,15 @@ function renderLeadsList() {
         <td><input type="checkbox" class="lead-select-checkbox" data-lead-id="${l.id}" ${leadsState.selectedIds.has(l.id) ? 'checked' : ''} /></td>
         <td class="leads-list-name">${esc(leadFullName(l))}</td>
         <td>${esc(l.phone || '—')}</td>
-        <td><span class="lead-stage-tag">${LEAD_STAGE_LABELS[l.stage] || l.stage}</span></td>
+        <td>${dealChip(l) || '—'}</td>
+        <td><span class="lead-stage-tag s-${l.stage}">${LEAD_STAGE_LABELS[l.stage] || l.stage}</span></td>
+        <td class="leads-list-prop">${esc(leadPropertyLine(l) || l.region || '—')}</td>
         <td>${LEAD_SOURCE_LABELS[l.source] || l.source}</td>
-        <td>${esc(l.region || '—')}</td>
         <td>${(l.tags || []).length ? l.tags.map(t => `<span class="lead-tag-chip">${esc(t)}</span>`).join(' ') : '—'}</td>
         <td>${leadRelativeTime(l.updatedAt)}</td>
       </tr>
     `).join('')
-    : '<tr><td colspan="8" class="lead-column-empty">Filtreye uyan aday yok</td></tr>';
+    : '<tr><td colspan="9" class="lead-column-empty">Filtreye uyan kişi yok</td></tr>';
 
   wrap.querySelectorAll('.lead-select-checkbox').forEach(cb => {
     cb.addEventListener('change', () => {
@@ -176,10 +223,16 @@ async function createCampaignFromSelection() {
 
 function renderLeadsBoard() {
   const board = $('leadsBoard');
+  const visible = baseFilteredLeads();
+  const summary = $('panoSummary');
+  if (summary) {
+    const open = visible.filter(l => l.stage !== 'WON' && l.stage !== 'LOST').length;
+    summary.textContent = `${visible.length} kişi · ${open} açık fırsat — kartı sürükleyin ya da tıklayıp detaydan ilerletin.`;
+  }
   board.innerHTML = LEAD_STAGES.map(stage => {
-    const items = leadsState.leads.filter(l => l.stage === stage);
+    const items = visible.filter(l => l.stage === stage);
     return `
-      <div class="lead-column" data-stage="${stage}">
+      <div class="lead-column s-${stage}" data-stage="${stage}">
         <div class="lead-column-header">
           <span class="lead-column-title">${LEAD_STAGE_LABELS[stage]}</span>
           <span class="lead-column-count">${items.length}</span>
@@ -215,23 +268,31 @@ function renderLeadsBoard() {
 }
 
 function leadCardHtml(lead) {
+  const prop = leadPropertyLine(lead);
+  const stale = lead.stage !== 'WON' && lead.stage !== 'LOST' && (Date.now() - new Date(lead.updatedAt).getTime()) > 7 * 86400000;
   return `
     <div class="lead-card" draggable="true" data-lead-id="${lead.id}">
-      <div class="lead-card-name">${esc(leadFullName(lead))}</div>
-      ${lead.phone ? `<div class="lead-card-phone">${esc(lead.phone)}</div>` : ''}
+      <div class="lead-card-top">
+        <div class="lead-card-name">${esc(leadFullName(lead))}</div>
+        ${dealChip(lead)}
+      </div>
+      ${prop ? `<div class="lead-card-prop">${esc(prop)}</div>` : (lead.phone ? `<div class="lead-card-phone">${esc(lead.phone)}</div>` : '')}
+      ${lead.stage === 'LOST' && lead.lostReason ? `<div class="lead-card-lost">${esc(LOST_REASON_LABELS[lead.lostReason] || lead.lostReason)}</div>` : ''}
       <div class="lead-card-meta">
         <span class="lead-card-source">${LEAD_SOURCE_LABELS[lead.source] || lead.source}</span>
-        <span class="lead-card-time">${leadRelativeTime(lead.updatedAt)}</span>
+        <span class="lead-card-time${stale ? ' stale' : ''}" title="${stale ? '7 günden uzun süredir hareket yok' : ''}">${leadRelativeTime(lead.updatedAt)}</span>
       </div>
     </div>
   `;
 }
 
-async function moveLeadStage(id, stage) {
+// Aşama değişimi. LOST: neden sorulmadan sunucuya gidilmez (sunucu da 400 döner).
+async function moveLeadStage(id, stage, extra) {
+  if (stage === 'LOST' && !(extra && extra.lostReason)) { openLostModal(id); return; }
   try {
     const r = await fetch(`/api/leads/${id}/stage`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ stage }),
+      body: JSON.stringify({ stage, ...(extra || {}) }),
     });
     const j = await r.json();
     if (!j.success) throw new Error(j.error || 'Aşama güncellenemedi');
@@ -239,6 +300,73 @@ async function moveLeadStage(id, stage) {
     if (idx !== -1) leadsState.leads[idx] = j.data;
     renderLeadsView();
     if (leadsState.openId === id) openLeadDrawer(id);
+    if (typeof loadToday === 'function') loadToday();
+  } catch (err) {
+    toast('✗ ' + err.message, 'error');
+  }
+}
+
+// ─── KAYIP NEDENİ MODALI ────────────────────────────────────────────────────
+const lostState = { leadId: null, reason: null };
+
+function openLostModal(id) {
+  const lead = leadsState.leads.find(l => l.id === id);
+  if (!lead) return;
+  lostState.leadId = id; lostState.reason = null;
+  $('leadLostWho').textContent = leadFullName(lead) + (leadPropertyLine(lead) ? ' · ' + leadPropertyLine(lead) : '');
+  $('leadLostReasons').innerHTML = Object.entries(LOST_REASON_LABELS)
+    .map(([k, v]) => `<button type="button" class="lost-reason" data-reason="${k}">${v}</button>`).join('');
+  $('leadLostReasons').querySelectorAll('.lost-reason').forEach(btn => {
+    btn.addEventListener('click', () => {
+      lostState.reason = btn.dataset.reason;
+      $('leadLostReasons').querySelectorAll('.lost-reason').forEach(b => b.classList.toggle('active', b === btn));
+      $('leadLostConfirm').disabled = false;
+    });
+  });
+  $('leadLostNote').value = '';
+  $('leadLostConfirm').disabled = true;
+  $('leadLostModal').classList.add('open');
+  $('leadLostOverlay').classList.add('visible');
+}
+
+function closeLostModal() {
+  $('leadLostModal').classList.remove('open');
+  $('leadLostOverlay').classList.remove('visible');
+  lostState.leadId = null; lostState.reason = null;
+  // Sürükleyerek LOST'a bırakılıp vazgeçildiyse kart eski sütununa dönsün.
+  renderLeadsView();
+}
+
+async function confirmLost() {
+  if (!lostState.leadId || !lostState.reason) return;
+  const id = lostState.leadId;
+  const extra = { lostReason: lostState.reason, lostNote: $('leadLostNote').value.trim() || null };
+  $('leadLostModal').classList.remove('open');
+  $('leadLostOverlay').classList.remove('visible');
+  lostState.leadId = null; lostState.reason = null;
+  await moveLeadStage(id, 'LOST', extra);
+}
+
+// ─── FIRSAT ALANLARI (çekmece) ──────────────────────────────────────────────
+async function saveLeadDeal(id) {
+  const body = {
+    dealType: $('ldDealType').value || null,
+    propertyType: $('ldPropType').value.trim() || null,
+    propertyLocation: $('ldPropLoc').value.trim() || null,
+    propertyM2: $('ldPropM2').value.trim() || null,
+    priceExpectation: $('ldPrice').value.trim() || null,
+    authority: $('ldAuthority').value || null,
+  };
+  try {
+    const r = await fetch(`/api/leads/${id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error || 'Fırsat kaydedilemedi');
+    const idx = leadsState.leads.findIndex(l => l.id === id);
+    if (idx !== -1) leadsState.leads[idx] = j.data;
+    renderLeadsView();
+    toast('✓ Fırsat bilgileri kaydedildi', 'success');
   } catch (err) {
     toast('✗ ' + err.message, 'error');
   }
@@ -285,11 +413,37 @@ async function openLeadDrawer(id) {
 
   $('leadDrawerTitle').textContent = leadFullName(lead);
   $('leadDrawerSub').textContent = [lead.phone, lead.email].filter(Boolean).join(' · ') || LEAD_SOURCE_LABELS[lead.source];
+  const sel = (v, cur) => v === (cur || '') ? ' selected' : '';
   $('leadDrawerBody').innerHTML = `
     <div class="drawer-section">
       <div class="drawer-section-title">Aşama</div>
       <div class="lead-drawer-actions" id="leadStageButtons">
         ${LEAD_STAGES.map(s => `<button class="lead-drawer-stage-btn${s === lead.stage ? ' active' : ''}" data-stage="${s}">${LEAD_STAGE_LABELS[s]}</button>`).join('')}
+      </div>
+      ${lead.stage === 'LOST' && lead.lostReason ? `<div class="lead-lost-info">Kayıp nedeni: <b>${esc(LOST_REASON_LABELS[lead.lostReason] || lead.lostReason)}</b>${lead.lostNote ? ' — ' + esc(lead.lostNote) : ''}</div>` : ''}
+    </div>
+    <div class="drawer-section">
+      <div class="drawer-section-title">Fırsat</div>
+      <div class="ld-grid">
+        <label>Tip
+          <select id="ldDealType">
+            <option value=""${sel('', lead.dealType)}>—</option>
+            ${Object.entries(DEAL_TYPE_LABELS).map(([k, v]) => `<option value="${k}"${sel(k, lead.dealType)}>${v}</option>`).join('')}
+          </select>
+        </label>
+        <label>Yetki
+          <select id="ldAuthority">
+            <option value=""${sel('', lead.authority)}>—</option>
+            ${Object.entries(AUTHORITY_LABELS).map(([k, v]) => `<option value="${k}"${sel(k, lead.authority)}>${v}</option>`).join('')}
+          </select>
+        </label>
+        <label>Mülk tipi<input type="text" id="ldPropType" value="${esc(lead.propertyType || '')}" placeholder="3+1 daire, arsa…" /></label>
+        <label>Konum<input type="text" id="ldPropLoc" value="${esc(lead.propertyLocation || '')}" placeholder="Mahalle / site" /></label>
+        <label>m²<input type="number" id="ldPropM2" min="0" value="${lead.propertyM2 ?? ''}" /></label>
+        <label>Fiyat beklentisi (TL)<input type="number" id="ldPrice" min="0" step="1000" value="${lead.priceExpectation ?? ''}" /></label>
+      </div>
+      <div class="drawer-actions">
+        <button class="btn-save-notes" id="ldDealSave">Fırsatı kaydet</button>
       </div>
     </div>
     <div class="drawer-section">
@@ -329,6 +483,7 @@ async function openLeadDrawer(id) {
   $('leadStageButtons').querySelectorAll('.lead-drawer-stage-btn').forEach(btn => {
     btn.addEventListener('click', () => moveLeadStage(id, btn.dataset.stage));
   });
+  $('ldDealSave').addEventListener('click', () => saveLeadDeal(id));
   $('leadTagAdd').addEventListener('click', () => addLeadTag(id));
   $('leadTagInput').addEventListener('keydown', e => { if (e.key === 'Enter') addLeadTag(id); });
   $('leadDrawerTags').querySelectorAll('.lead-tag-remove').forEach(btn => {
@@ -402,7 +557,10 @@ async function loadLeadActivities(id) {
 }
 
 function leadActivitySummary(a) {
-  if (a.type === 'STAGE_CHANGE') return `Aşama → <b>${LEAD_STAGE_LABELS[a.data.to] || a.data.to}</b>`;
+  if (a.type === 'STAGE_CHANGE') {
+    const reason = a.data.lostReason ? ` (${esc(LOST_REASON_LABELS[a.data.lostReason] || a.data.lostReason)}${a.data.lostNote ? ': ' + esc(a.data.lostNote) : ''})` : '';
+    return `Aşama → <b>${LEAD_STAGE_LABELS[a.data.to] || a.data.to}</b>${reason}`;
+  }
   if (a.type === 'NOTE') return esc(a.data.note || '');
   if (a.type === 'WHATSAPP_ANALYZED') {
     const tag = a.data.qualifies ? '✅ Fırsat' : '— Yeterli ilgi yok';
@@ -438,8 +596,18 @@ function closeLeadDrawer() {
 
 // ─── YENİ ADAY MODAL ────────────────────────────────────────────────────────
 
+const leadFormState = { dealType: null };
+
+function setLeadFormDealType(type) {
+  leadFormState.dealType = leadFormState.dealType === type ? null : type;
+  $('leadFormDealType').querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.deal === leadFormState.dealType));
+}
+
 function openLeadFormModal() {
-  ['leadFormFirstName', 'leadFormLastName', 'leadFormPhone', 'leadFormEmail', 'leadFormNotes', 'leadFormTags'].forEach(id => { $(id).value = ''; });
+  ['leadFormFirstName', 'leadFormLastName', 'leadFormPhone', 'leadFormEmail', 'leadFormNotes', 'leadFormTags',
+   'leadFormPropertyType', 'leadFormPropertyLocation', 'leadFormPropertyM2', 'leadFormPrice'].forEach(id => { $(id).value = ''; });
+  leadFormState.dealType = null;
+  $('leadFormDealType').querySelectorAll('button').forEach(b => b.classList.remove('active'));
   $('leadFormModal').classList.add('open');
   $('leadFormOverlay').classList.add('visible');
   $('leadFormFirstName').focus();
@@ -460,6 +628,11 @@ async function saveNewLead() {
     email: $('leadFormEmail').value.trim() || null,
     notes: $('leadFormNotes').value.trim() || null,
     tags: parseTagsInput($('leadFormTags').value),
+    dealType: leadFormState.dealType,
+    propertyType: $('leadFormPropertyType').value.trim() || null,
+    propertyLocation: $('leadFormPropertyLocation').value.trim() || null,
+    propertyM2: $('leadFormPropertyM2').value.trim() || null,
+    priceExpectation: $('leadFormPrice').value.trim() || null,
   };
   try {
     const r = await fetch('/api/leads', {
@@ -467,11 +640,11 @@ async function saveNewLead() {
       body: JSON.stringify(body),
     });
     const j = await r.json();
-    if (!j.success) throw new Error(j.error || 'Aday eklenemedi');
+    if (!j.success) throw new Error(j.error || 'Kişi eklenemedi');
     leadsState.leads.unshift(j.data);
     renderLeadsView();
     closeLeadFormModal();
-    toast('✓ Aday eklendi', 'success');
+    toast('✓ Kişi eklendi', 'success');
   } catch (err) {
     toast('✗ ' + err.message, 'error');
   }
@@ -483,6 +656,19 @@ document.addEventListener('DOMContentLoaded', () => {
   $('leadFormOverlay').addEventListener('click', closeLeadFormModal);
   $('leadFormClose').addEventListener('click', closeLeadFormModal);
   $('leadFormSave').addEventListener('click', saveNewLead);
+  $('leadFormDealType').querySelectorAll('button').forEach(b => b.addEventListener('click', () => setLeadFormDealType(b.dataset.deal)));
+
+  $('leadLostCancel').addEventListener('click', closeLostModal);
+  $('leadLostClose').addEventListener('click', closeLostModal);
+  $('leadLostOverlay').addEventListener('click', closeLostModal);
+  $('leadLostConfirm').addEventListener('click', confirmLost);
+
+  $('panoDealFilter').querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    leadsState.filters.dealType = b.dataset.deal;
+    $('panoDealFilter').querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
+    renderLeadsView();
+  }));
+  $('panoSearch').addEventListener('input', () => { leadsState.filters.q = $('panoSearch').value; renderLeadsView(); });
 
   $('leadDrawerClose').addEventListener('click', closeLeadDrawer);
   $('leadDrawerOverlay').addEventListener('click', closeLeadDrawer);

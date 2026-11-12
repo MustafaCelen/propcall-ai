@@ -1,10 +1,10 @@
 // PropCall AI / RLM — WhatsApp şablon yöneticisi + toplu kampanya paneli.
 // leads.js gibi app.js'in $/$$ ve ui-kit.js'in toast/uiConfirm'ünü kullanır.
 
-const WA_STAGES = ['NEW', 'CONTACTED', 'QUALIFIED', 'VIEWING', 'OFFER', 'WON', 'LOST'];
+const WA_STAGES = ['NEW', 'CONTACTED', 'MEETING', 'AGREEMENT', 'WON', 'LOST'];
 const WA_STAGE_LABELS = {
-  NEW: 'Yeni', CONTACTED: 'İletişime Geçildi', QUALIFIED: 'Nitelikli',
-  VIEWING: 'Gezme', OFFER: 'Teklif', WON: 'Kazanıldı', LOST: 'Kaybedildi',
+  NEW: 'Yeni', CONTACTED: 'Temas kuruldu', MEETING: 'Randevu', AGREEMENT: 'Yetki / Anlaşma',
+  WON: 'Kapandı', LOST: 'Kayıp',
 };
 
 const waState = { templates: [], selectedStages: new Set(), previewedCount: null, inbox: [], openLeadId: null, personalConnected: false, replyChannel: 'TWILIO' };

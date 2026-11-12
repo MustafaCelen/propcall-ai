@@ -38,7 +38,8 @@
   }
   function stageLabel(s) {
     return (window.LEAD_STAGE_LABELS_TR && window.LEAD_STAGE_LABELS_TR[s]) ||
-      ({ NEW: 'Yeni', CONTACTED: 'Temas kuruldu', QUALIFIED: 'Nitelikli', VIEWING: 'Gezme', OFFER: 'Teklif', WON: 'Kazanıldı', LOST: 'Kaybedildi' })[s] || s;
+      ({ NEW: 'Yeni', CONTACTED: 'Temas kuruldu', MEETING: 'Randevu', AGREEMENT: 'Yetki / Anlaşma', WON: 'Kapandı', LOST: 'Kayıp',
+         QUALIFIED: 'Randevu', VIEWING: 'Randevu', OFFER: 'Yetki / Anlaşma' })[s] || s;
   }
 
   function greeting() {

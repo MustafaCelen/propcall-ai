@@ -25,8 +25,8 @@ const SP_DAY_LABELS = ['Paz', 'Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt'];
 const SP_RULE_LABELS = {
   STATIC_LIST: r => `👥 Sabit liste (${r.leadIds.length} kişi)`,
   NEVER_CONTACTED: () => '🆕 Hiç aranmamış kişiler',
-  STAGE_STALE: r => `⏳ "${r.stage}" aşamasında ${r.staleDays}+ gündür hareketsiz`,
-  STAGE_EQUALS: r => `🏷️ "${r.stage}" aşamasındaki herkes`,
+  STAGE_STALE: r => `⏳ "${(window.LEAD_STAGE_LABELS || {})[r.stage] || r.stage}" aşamasında ${r.staleDays}+ gündür hareketsiz`,
+  STAGE_EQUALS: r => `🏷️ "${(window.LEAD_STAGE_LABELS || {})[r.stage] || r.stage}" aşamasındaki herkes`,
   SOURCE_EQUALS: r => `📥 Kaynak: ${r.source}`,
   TAG_INCLUDES: r => `🏷️ Etiket: ${r.tag}`,
 };

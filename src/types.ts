@@ -195,17 +195,56 @@ export interface ApiResponse<T = unknown> {
 
 // ── Adaylar (Leads) ──────────────────────────────────────────────────────────
 
-export const LEAD_STAGES = ['NEW', 'CONTACTED', 'QUALIFIED', 'VIEWING', 'OFFER', 'WON', 'LOST'] as const;
+// CRM Faz 2 (2026-11): tek, kısa emlak hunisi. Eski 7 aşama (QUALIFIED/VIEWING/OFFER)
+// bu altıya göç etti — bkz. normalizeLeadStage ve db.ts'teki tek seferlik UPDATE.
+export const LEAD_STAGES = ['NEW', 'CONTACTED', 'MEETING', 'AGREEMENT', 'WON', 'LOST'] as const;
 export type LeadStage = (typeof LEAD_STAGES)[number];
 
 export const LEAD_STAGE_LABELS: Record<LeadStage, string> = {
   NEW: 'Yeni',
-  CONTACTED: 'İletişime Geçildi',
-  QUALIFIED: 'Nitelikli',
-  VIEWING: 'Gezme',
-  OFFER: 'Teklif',
-  WON: 'Kazanıldı',
-  LOST: 'Kaybedildi',
+  CONTACTED: 'Temas kuruldu',
+  MEETING: 'Randevu',
+  AGREEMENT: 'Yetki / Anlaşma',
+  WON: 'Kapandı',
+  LOST: 'Kayıp',
+};
+
+// Eski aşama kodlarını yeni hunideki karşılığına çevirir; bilinmeyen değer NEW olur.
+// Hem DB'den okurken (eski kayıt) hem API'den gelirken (eski istemci / eski akıllı
+// plan kuralı) kullanılır — aşama dışarıdan asla ham haliyle içeri girmez.
+const LEGACY_STAGE_MAP: Record<string, LeadStage> = {
+  QUALIFIED: 'MEETING', VIEWING: 'MEETING', OFFER: 'AGREEMENT',
+};
+export function normalizeLeadStage(raw: string | null | undefined): LeadStage {
+  const s = String(raw || '').toUpperCase();
+  if ((LEAD_STAGES as readonly string[]).includes(s)) return s as LeadStage;
+  return LEGACY_STAGE_MAP[s] ?? 'NEW';
+}
+export function isKnownLeadStage(raw: string | null | undefined): boolean {
+  const s = String(raw || '').toUpperCase();
+  return (LEAD_STAGES as readonly string[]).includes(s) || s in LEGACY_STAGE_MAP;
+}
+
+// Fırsat tipi — her kişi aynı zamanda bir fırsattır; tip, kartta ve filtrede görünür.
+export const DEAL_TYPES = ['SELLER', 'BUYER', 'RENTAL'] as const;
+export type DealType = (typeof DEAL_TYPES)[number];
+export const DEAL_TYPE_LABELS: Record<DealType, string> = { SELLER: 'Satıcı', BUYER: 'Alıcı', RENTAL: 'Kiralama' };
+
+// Yetki durumu (satıcı fırsatlarında anlamlı).
+export const AUTHORITY_TYPES = ['EXCLUSIVE', 'OPEN', 'NONE'] as const;
+export type AuthorityType = (typeof AUTHORITY_TYPES)[number];
+export const AUTHORITY_LABELS: Record<AuthorityType, string> = { EXCLUSIVE: 'Tek yetki', OPEN: 'Açık yetki', NONE: 'Yetki yok' };
+
+// Kayıp nedeni — LOST'a geçişte ZORUNLU (huni raporu bunun üstüne kurulur).
+export const LOST_REASONS = ['PRICE', 'OTHER_AGENT', 'GAVE_UP', 'UNREACHABLE', 'NOT_INTERESTED', 'OTHER'] as const;
+export type LostReason = (typeof LOST_REASONS)[number];
+export const LOST_REASON_LABELS: Record<LostReason, string> = {
+  PRICE: 'Fiyat uyuşmadı',
+  OTHER_AGENT: 'Başka danışmanla çalıştı',
+  GAVE_UP: 'Satış / alımdan vazgeçti',
+  UNREACHABLE: 'Ulaşılamadı',
+  NOT_INTERESTED: 'İlgilenmiyor',
+  OTHER: 'Diğer',
 };
 
 // META_LEAD_AD ve CALL_CAMPAIGN otomatik (sırasıyla Meta senkron ve arama sonucu
@@ -256,6 +295,16 @@ export interface Lead {
   // özellikler ve raporlama için (bkz. leads.ts importSource kullanımı).
   importSource: string | null;
   importBatchId: string | null;
+  // ── Fırsat alanları (CRM Faz 2) — hepsi JSONB data içinde, hepsi boş olabilir ──
+  dealType?: DealType | null;
+  propertyType?: string | null;      // "3+1 daire", "arsa", "dükkan" — serbest metin; arama özeti mulk_tipi'nden de dolar
+  propertyLocation?: string | null;  // mahalle / site / ilçe
+  propertyM2?: number | null;
+  priceExpectation?: number | null;  // TL
+  authority?: AuthorityType | null;
+  lostReason?: LostReason | null;    // sadece stage === 'LOST' iken dolu
+  lostNote?: string | null;
+  legacyStage?: string | null;       // 7 aşamalı dönemden göç eden kayıtlarda eski kod
   createdAt: string;
   updatedAt: string;
 }

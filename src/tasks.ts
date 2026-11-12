@@ -186,7 +186,7 @@ export async function getTodayDigest(userId: string): Promise<TodayDigest> {
       `SELECT l.id, l.stage, l.updated_at,
               NULLIF(TRIM(CONCAT(l.data->>'firstName',' ',COALESCE(l.data->>'lastName',''))),'') AS name, l.data->>'phone' AS phone
        FROM leads l
-       WHERE l.user_id = $1 AND l.stage IN ('CONTACTED','QUALIFIED','VIEWING','OFFER')
+       WHERE l.user_id = $1 AND l.stage IN ('CONTACTED','MEETING','AGREEMENT')
          AND l.updated_at < NOW() - INTERVAL '48 hours'
          AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.lead_id = l.id AND t.status = 'open')
        ORDER BY l.updated_at ASC LIMIT 20`, [userId]),

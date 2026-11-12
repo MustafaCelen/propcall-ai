@@ -4,7 +4,7 @@
 // gönderimi hızlı ve senkron; rlm2'nin kendi (doğru) tasarım tercihiyle aynı.
 
 import pool from './db';
-import { WhatsappMessage, WhatsappCampaign, WhatsappCampaignFilter, Lead } from './types';
+import { WhatsappMessage, WhatsappCampaign, WhatsappCampaignFilter, Lead, normalizeLeadStage } from './types';
 import { getUserWhatsappConfig } from './users';
 import { sendWhatsAppMessage } from './whatsapp';
 import { getTemplate } from './whatsappTemplates';
@@ -202,7 +202,7 @@ export async function recordChannelMessage(userId: string, params: {
   // ilgi_seviyesi çıkarıp aşama yükseltme kısmı kapalı. Tekrar açmak için bu sabiti
   // true yapmak yeterli.
   const WHATSAPP_AI_ANALYSIS_ENABLED = false;
-  if (WHATSAPP_AI_ANALYSIS_ENABLED && !whatsappIgnored && direction === 'IN' && leadStage !== 'QUALIFIED' && leadStage !== 'VIEWING' && leadStage !== 'OFFER' && leadStage !== 'WON') {
+  if (WHATSAPP_AI_ANALYSIS_ENABLED && !whatsappIgnored && direction === 'IN' && leadStage !== 'MEETING' && leadStage !== 'AGREEMENT' && leadStage !== 'WON') {
     const { rows: lastAnalyzed } = await pool.query(
       `SELECT created_at FROM lead_activities WHERE lead_id = $1 AND type = 'WHATSAPP_ANALYZED' ORDER BY created_at DESC LIMIT 1`,
       [leadId],
@@ -244,7 +244,8 @@ export async function getAllCampaigns(userId: string): Promise<WhatsappCampaign[
 async function getLeadsForCampaign(userId: string, filter: WhatsappCampaignFilter): Promise<Array<{ id: string; phone: string; firstName: string }>> {
   const conditions = ['user_id = $1', `data->>'phone' IS NOT NULL`, `data->>'phone' != ''`];
   const vals: unknown[] = [userId];
-  if (filter.stages?.length) { vals.push(filter.stages); conditions.push(`stage = ANY($${vals.length})`); }
+  // Eski kampanya filtreleri QUALIFIED/VIEWING/OFFER diyebilir — yeni huni koduna çevir.
+  if (filter.stages?.length) { vals.push([...new Set(filter.stages.map(normalizeLeadStage))]); conditions.push(`stage = ANY($${vals.length})`); }
   if (filter.sources?.length) { vals.push(filter.sources); conditions.push(`data->>'source' = ANY($${vals.length})`); }
   const { rows } = await pool.query(
     `SELECT id, data->>'phone' AS phone, data->>'firstName' AS "firstName" FROM leads WHERE ${conditions.join(' AND ')}`,

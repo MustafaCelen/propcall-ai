@@ -838,7 +838,7 @@ export async function onCampaignSummaryReady(
   if (c.leadId) {
     const { applyCallOutcomeToLeadById } = await import('./leads');
     applyCallOutcomeToLeadById(
-      entry.userId, c.leadId, vapiCallId, summary.randevu_alindi, summary.ilgi_seviyesi, summary.ozet,
+      entry.userId, c.leadId, vapiCallId, summary.randevu_alindi, summary.ilgi_seviyesi, summary.ozet, summary.mulk_tipi,
     ).catch(err => console.error('[Campaign] applyCallOutcomeToLeadById hatası:', err));
   }
 }

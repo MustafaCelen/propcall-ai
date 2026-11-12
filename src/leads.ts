@@ -3,7 +3,10 @@
 // (user_id, stage, meta_lead_id), geri kalanı JSONB 'data'.
 
 import pool from './db';
-import { Lead, LeadStage, LeadActivity, LeadActivityType, LEAD_STAGES } from './types';
+import {
+  Lead, LeadStage, LeadActivity, LeadActivityType, LEAD_STAGES, normalizeLeadStage,
+  DealType, AuthorityType, LostReason, DEAL_TYPES, AUTHORITY_TYPES, LOST_REASONS,
+} from './types';
 import { phoneVariants, normalizePhone } from './dncList';
 
 function newLeadId(): string {
@@ -18,10 +21,58 @@ function rowToLead(row: { id: string; stage: string; data: any; created_at: Date
   return {
     ...row.data,
     id: row.id,
-    stage: row.stage as LeadStage,
+    // Göç UPDATE'i çalışmadan önce okunmuş eski bir satır bile istemciye yeni kodla gider.
+    stage: normalizeLeadStage(row.stage),
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+// ── Fırsat alanı doğrulama — API'den gelen ham değerleri temizler/sınırlar ──
+// undefined = "bu alana dokunma", null = "temizle". Geçersiz enum → hata (400'e çevrilir).
+export interface DealFieldsInput {
+  dealType?: DealType | null;
+  propertyType?: string | null;
+  propertyLocation?: string | null;
+  propertyM2?: number | string | null;
+  priceExpectation?: number | string | null;
+  authority?: AuthorityType | null;
+}
+
+function cleanNumber(v: number | string | null | undefined, label: string): number | null | undefined {
+  if (v === undefined) return undefined;
+  if (v === null || v === '') return null;
+  // "5.250.000", "5,250,000", "120,5", "1.200.000 TL" hepsi kabul: tek ayraç + 1-2 hane
+  // ondalık sayılır, gerisi binlik ayracı olarak atılır.
+  let n: number;
+  if (typeof v === 'number') n = v;
+  else {
+    const s = String(v).replace(/[^\d.,]/g, '');
+    if (!/\d/.test(s)) throw new Error(`${label} sayı olmalı`);
+    const dec = s.match(/^(\d+)[.,](\d{1,2})$/);
+    n = dec ? Number(dec[1] + '.' + dec[2]) : Number(s.replace(/[.,]/g, ''));
+  }
+  if (!Number.isFinite(n) || n < 0) throw new Error(`${label} sayı olmalı`);
+  return Math.round(n);
+}
+
+export function sanitizeDealFields(input: DealFieldsInput): Partial<Lead> {
+  const out: Partial<Lead> = {};
+  if (input.dealType !== undefined) {
+    if (input.dealType !== null && !DEAL_TYPES.includes(input.dealType)) throw new Error('Geçersiz fırsat tipi');
+    out.dealType = input.dealType;
+  }
+  if (input.authority !== undefined) {
+    if (input.authority !== null && !AUTHORITY_TYPES.includes(input.authority)) throw new Error('Geçersiz yetki durumu');
+    out.authority = input.authority;
+  }
+  if (input.propertyType !== undefined) out.propertyType = input.propertyType?.toString().trim().slice(0, 120) || null;
+  if (input.propertyLocation !== undefined) out.propertyLocation = input.propertyLocation?.toString().trim().slice(0, 160) || null;
+  const m2 = cleanNumber(input.propertyM2, 'Metrekare');
+  if (m2 !== undefined) out.propertyM2 = m2;
+  const price = cleanNumber(input.priceExpectation, 'Fiyat beklentisi');
+  if (price !== undefined) out.priceExpectation = price;
+  return out;
 }
 
 export async function getAllLeads(userId: string): Promise<Lead[]> {
@@ -54,11 +105,16 @@ export interface CreateLeadInput {
   adData?: Lead['adData'];
   importSource?: string | null;
   importBatchId?: string | null;
+  deal?: DealFieldsInput;
 }
 
 export async function createLead(userId: string, input: CreateLeadInput): Promise<Lead> {
   const id = newLeadId();
+  const deal = sanitizeDealFields(input.deal ?? {});
   const data = {
+    dealType: null, propertyType: null, propertyLocation: null, propertyM2: null, priceExpectation: null,
+    authority: null, lostReason: null, lostNote: null,
+    ...deal,
     source: input.source ?? 'MANUAL',
     firstName: input.firstName.trim(),
     lastName: input.lastName?.trim() || null,
@@ -95,35 +151,58 @@ export interface UpdateLeadInput {
   reference?: string | null;
   tags?: string[];
   whatsappIgnored?: boolean;
+  deal?: DealFieldsInput;
 }
 
 export async function updateLead(userId: string, id: string, patch: UpdateLeadInput): Promise<Lead | null> {
+  const { deal, ...rest } = patch;
+  const merged: Record<string, unknown> = { ...rest, ...sanitizeDealFields(deal ?? {}) };
+  // undefined alanlar JSON.stringify'da zaten düşer; data || ile sadece verilenler değişir.
   const { rows } = await pool.query(
     `UPDATE leads SET data = data || $3::jsonb, updated_at = NOW()
      WHERE id = $1 AND user_id = $2
      RETURNING id, stage, data, created_at, updated_at`,
-    [id, userId, JSON.stringify(patch)],
+    [id, userId, JSON.stringify(merged)],
   );
   return rows[0] ? rowToLead(rows[0]) : null;
 }
 
-// Kanban sürükle-bırak / aşama değişimi — aynı sorguda hem stage sütununu hem
-// data.stage'i günceller ki rowToLead tutarlı kalsın, ayrıca STAGE_CHANGE aktivitesi loglar.
-export async function setLeadStage(userId: string, id: string, stage: LeadStage): Promise<Lead | null> {
+export interface StageChangeOptions {
+  lostReason?: LostReason | null;
+  lostNote?: string | null;
+}
+
+// Kanban sürükle-bırak / aşama değişimi — STAGE_CHANGE aktivitesi loglar.
+// LOST'a geçiş kayıp nedeni ister (huni raporu için); LOST dışına çıkınca neden temizlenir
+// (geçmişi aktivite kaydı zaten tutar).
+export async function setLeadStage(
+  userId: string, id: string, stage: LeadStage, opts: StageChangeOptions = {},
+): Promise<Lead | null> {
   if (!LEAD_STAGES.includes(stage)) throw new Error('Geçersiz aşama: ' + stage);
+  let dataPatch: Record<string, unknown>;
+  if (stage === 'LOST') {
+    if (!opts.lostReason || !LOST_REASONS.includes(opts.lostReason)) throw new Error('Kayıp nedeni zorunlu');
+    dataPatch = { lostReason: opts.lostReason, lostNote: opts.lostNote?.toString().trim().slice(0, 500) || null };
+  } else {
+    dataPatch = { lostReason: null, lostNote: null };
+  }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const { rows: before } = await client.query(`SELECT stage FROM leads WHERE id = $1 AND user_id = $2`, [id, userId]);
+    if (!before[0]) { await client.query('ROLLBACK'); return null; }
     const { rows } = await client.query(
-      `UPDATE leads SET stage = $3, updated_at = NOW()
+      `UPDATE leads SET stage = $3, data = data || $4::jsonb, updated_at = NOW()
        WHERE id = $1 AND user_id = $2
        RETURNING id, stage, data, created_at, updated_at`,
-      [id, userId, stage],
+      [id, userId, stage, JSON.stringify(dataPatch)],
     );
-    if (!rows[0]) { await client.query('ROLLBACK'); return null; }
     await client.query(
       `INSERT INTO lead_activities (id, lead_id, user_id, type, data) VALUES ($1, $2, $3, 'STAGE_CHANGE', $4)`,
-      [newActivityId(), id, userId, JSON.stringify({ to: stage })],
+      [newActivityId(), id, userId, JSON.stringify({
+        from: normalizeLeadStage(before[0].stage), to: stage,
+        ...(stage === 'LOST' ? { lostReason: dataPatch.lostReason, lostNote: dataPatch.lostNote } : {}),
+      })],
     );
     await client.query('COMMIT');
     return rowToLead(rows[0]);
@@ -351,6 +430,7 @@ export async function querySegment(userId: string, rule: SegmentRule): Promise<L
     return rows.map(rowToLead);
   }
 
+  // Eski akıllı planların kuralı hâlâ QUALIFIED/VIEWING/OFFER diyebilir — yeni koda çevir.
   if (rule.type === 'STAGE_STALE') {
     const { rows } = await pool.query(
       `SELECT l.id, l.stage, l.data, l.created_at, l.updated_at FROM leads l
@@ -359,7 +439,7 @@ export async function querySegment(userId: string, rule: SegmentRule): Promise<L
            SELECT 1 FROM lead_activities a
            WHERE a.lead_id = l.id AND a.created_at > NOW() - ($3 || ' days')::interval
          )`,
-      [userId, rule.stage, Math.max(1, Math.round(rule.staleDays || 30))],
+      [userId, normalizeLeadStage(rule.stage), Math.max(1, Math.round(rule.staleDays || 30))],
     );
     return rows.map(rowToLead);
   }
@@ -367,7 +447,7 @@ export async function querySegment(userId: string, rule: SegmentRule): Promise<L
   if (rule.type === 'STAGE_EQUALS') {
     const { rows } = await pool.query(
       `SELECT id, stage, data, created_at, updated_at FROM leads WHERE user_id = $1 AND stage = $2`,
-      [userId, rule.stage],
+      [userId, normalizeLeadStage(rule.stage)],
     );
     return rows.map(rowToLead);
   }
@@ -416,7 +496,23 @@ export async function getLeadActivities(userId: string, leadId: string): Promise
 // bir arama sonucu bir adayın aşamasını SADECE İLERİ taşıyabilir, asla geri almaz
 // veya LOST'a çekmez — o karar danışmana ait. "Kişiyle konuşuldu" gerçeği bile en
 // kötü ihtimalle CONTACTED'a taşır, hiçbir zaman NEW'in altına düşürmez.
-const STAGE_RANK: Record<string, number> = { NEW: 0, CONTACTED: 1, QUALIFIED: 2, VIEWING: 3, OFFER: 4, WON: 5, LOST: -1 };
+const STAGE_RANK: Record<LeadStage, number> = { NEW: 0, CONTACTED: 1, MEETING: 2, AGREEMENT: 3, WON: 4, LOST: -1 };
+const rankOf = (raw: string): number => STAGE_RANK[normalizeLeadStage(raw)] ?? 0;
+
+// Arama özetindeki mülk tipini ("3+1 daire", "arsa"…) fırsata yazar — SADECE alan
+// boşsa; danışmanın elle girdiği bilgi AI'nın yan bilgisiyle ezilmez.
+function propertyTypePatch(mulkTipi: string | null | undefined): Record<string, unknown> {
+  const v = mulkTipi?.toString().trim();
+  return v ? { propertyType: v.slice(0, 120) } : {};
+}
+async function fillPropertyTypeIfEmpty(leadId: string, mulkTipi: string | null | undefined): Promise<void> {
+  const patch = propertyTypePatch(mulkTipi);
+  if (!Object.keys(patch).length) return;
+  await pool.query(
+    `UPDATE leads SET data = data || $2::jsonb WHERE id = $1 AND COALESCE(data->>'propertyType','') = ''`,
+    [leadId, JSON.stringify(patch)],
+  );
+}
 
 export async function upsertLeadFromCallOutcome(
   userId: string,
@@ -426,6 +522,7 @@ export async function upsertLeadFromCallOutcome(
   randevuAlindi: boolean,
   ilgiSeviyesi: string,
   ozet: string,
+  mulkTipi: string | null = null,
 ): Promise<void> {
   if (!phone?.trim()) return;
 
@@ -437,7 +534,7 @@ export async function upsertLeadFromCallOutcome(
   const qualifies = randevuAlindi || ilgiSeviyesi === 'orta' || ilgiSeviyesi === 'yüksek';
   if (!qualifies) return;
 
-  const candidateStage: LeadStage = randevuAlindi ? 'QUALIFIED' : 'CONTACTED';
+  const candidateStage: LeadStage = randevuAlindi ? 'MEETING' : 'CONTACTED';
 
   // Numaranın tüm yazım biçimleriyle ara. Aramalar E.164 ("+90555…") kaydediliyor
   // ama adaylar CSV/elle girişten gelirken ham ("0555…") olabiliyor; tek formatla
@@ -451,7 +548,7 @@ export async function upsertLeadFromCallOutcome(
   let leadId: string;
   if (rows[0]) {
     leadId = rows[0].id;
-    const currentRank = STAGE_RANK[rows[0].stage] ?? 0;
+    const currentRank = rankOf(rows[0].stage);
     const candidateRank = STAGE_RANK[candidateStage];
     if (candidateRank > currentRank) {
       await pool.query(
@@ -481,6 +578,7 @@ export async function upsertLeadFromCallOutcome(
       [leadId, vapiCallId],
     );
   }
+  await fillPropertyTypeIfEmpty(leadId, mulkTipi);
 
   await pool.query(
     `INSERT INTO lead_activities (id, lead_id, user_id, type, data) VALUES ($1, $2, $3, 'CALL_COMPLETED', $4)`,
@@ -519,16 +617,16 @@ async function scheduleFollowupTask(
 // (sadece ileri, asla geri) kuralıyla yazılır.
 export async function applyCallOutcomeToLeadById(
   userId: string, leadId: string, vapiCallId: string,
-  randevuAlindi: boolean, ilgiSeviyesi: string, ozet: string,
+  randevuAlindi: boolean, ilgiSeviyesi: string, ozet: string, mulkTipi: string | null = null,
 ): Promise<void> {
   const qualifies = randevuAlindi || ilgiSeviyesi === 'orta' || ilgiSeviyesi === 'yüksek';
   if (!qualifies) return;
 
-  const candidateStage: LeadStage = randevuAlindi ? 'QUALIFIED' : 'CONTACTED';
+  const candidateStage: LeadStage = randevuAlindi ? 'MEETING' : 'CONTACTED';
   const { rows } = await pool.query(`SELECT stage FROM leads WHERE id = $1 AND user_id = $2`, [leadId, userId]);
   if (!rows[0]) return; // lead silinmiş olabilir — sessizce atla
 
-  const currentRank = STAGE_RANK[rows[0].stage] ?? 0;
+  const currentRank = rankOf(rows[0].stage);
   if (STAGE_RANK[candidateStage] > currentRank) {
     await pool.query(
       `UPDATE leads SET stage = $3, data = data || jsonb_build_object('linkedCallId', $4::text), updated_at = NOW()
@@ -542,6 +640,7 @@ export async function applyCallOutcomeToLeadById(
       [leadId, userId, vapiCallId],
     );
   }
+  await fillPropertyTypeIfEmpty(leadId, mulkTipi);
 
   await pool.query(
     `INSERT INTO lead_activities (id, lead_id, user_id, type, data) VALUES ($1, $2, $3, 'CALL_COMPLETED', $4)`,
@@ -561,12 +660,12 @@ export async function applyWhatsappAnalysisToLead(
   userId: string, leadId: string, randevuAlindi: boolean, ilgiSeviyesi: string, ozet: string,
 ): Promise<void> {
   const qualifies = randevuAlindi || ilgiSeviyesi === 'orta' || ilgiSeviyesi === 'yüksek';
-  const candidateStage: LeadStage = randevuAlindi ? 'QUALIFIED' : 'CONTACTED';
+  const candidateStage: LeadStage = randevuAlindi ? 'MEETING' : 'CONTACTED';
 
   if (qualifies) {
     const { rows } = await pool.query(`SELECT stage FROM leads WHERE id = $1 AND user_id = $2`, [leadId, userId]);
     if (rows[0]) {
-      const currentRank = STAGE_RANK[rows[0].stage] ?? 0;
+      const currentRank = rankOf(rows[0].stage);
       if (STAGE_RANK[candidateStage] > currentRank) {
         await pool.query(
           `UPDATE leads SET stage = $3, updated_at = NOW() WHERE id = $1 AND user_id = $2`,

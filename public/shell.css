@@ -77,8 +77,76 @@
 .td-add input[type=datetime-local]{flex:0 0 190px}
 .td-add button{height:34px}
 
+/* ── Pano (fırsat hunisi) ── */
+.pano-head{display:flex;justify-content:space-between;align-items:flex-end;gap:14px;padding:18px 24px 12px;flex-wrap:wrap;flex-shrink:0}
+.pano-title h2{font-size:22px;font-weight:700;letter-spacing:-.02em;margin:0 0 2px}
+.pano-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.pano-seg{display:inline-flex;background:var(--s2);border-radius:9px;padding:3px;gap:2px}
+.pano-seg button{background:transparent;border:none;color:var(--tx2);font-family:var(--font);font-size:12.5px;font-weight:500;padding:6px 11px;border-radius:7px;cursor:pointer;white-space:nowrap}
+.pano-seg button:hover{color:var(--tx)}
+.pano-seg button.active{background:var(--s1);color:var(--tx);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.pano-search{height:34px;width:200px;border:1px solid var(--border);border-radius:9px;background:var(--s1);padding:0 12px;font-family:var(--font);font-size:13px;color:var(--tx)}
+.pano-search:focus{outline:none;border-color:var(--primary)}
+#tabLeads .leads-board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(230px,1fr);gap:12px;padding:4px 24px 20px;overflow-x:auto;overflow-y:hidden;align-items:stretch;flex:1;min-height:0}
+#tabLeads .lead-column{width:auto;flex:none;background:var(--s2);border:1px solid transparent;border-radius:12px;max-height:100%;min-height:0}
+#tabLeads .lead-column.drag-over{border-color:var(--primary);background:var(--primary-dim)}
+#tabLeads .lead-column-header{border-bottom:none;padding:12px 12px 6px}
+#tabLeads .lead-column-title{font-size:12.5px;font-weight:600;color:var(--tx);display:flex;align-items:center;gap:7px}
+#tabLeads .lead-column-title::before{content:'';width:8px;height:8px;border-radius:50%;background:var(--txm)}
+#tabLeads .lead-column.s-NEW .lead-column-title::before{background:var(--blue)}
+#tabLeads .lead-column.s-CONTACTED .lead-column-title::before{background:var(--orange)}
+#tabLeads .lead-column.s-MEETING .lead-column-title::before{background:#7c5cbf}
+#tabLeads .lead-column.s-AGREEMENT .lead-column-title::before{background:var(--primary)}
+#tabLeads .lead-column.s-WON .lead-column-title::before{background:var(--primary)}
+#tabLeads .lead-column.s-LOST .lead-column-title::before{background:var(--red)}
+#tabLeads .lead-column-count{background:var(--s1);color:var(--txm);font-family:var(--font);font-weight:600;font-variant-numeric:tabular-nums}
+#tabLeads .lead-column-body{padding:6px 8px 10px;gap:8px}
+#tabLeads .lead-card{background:var(--s1);border:1px solid var(--border);border-radius:10px;padding:10px 12px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+#tabLeads .lead-card:hover{border-color:var(--border-a);box-shadow:0 3px 10px rgba(0,0,0,.07)}
+.lead-card-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+#tabLeads .lead-card-name{font-size:13.5px;margin-bottom:2px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lead-card-prop{font-size:12px;color:var(--tx2);line-height:1.35;margin-top:2px}
+.lead-card-lost{font-size:11.5px;color:var(--red);margin-top:4px}
+#tabLeads .lead-card-meta{margin-top:8px}
+#tabLeads .lead-card-source{background:var(--s2);font-size:9.5px}
+.lead-card-time.stale{color:var(--orange);font-weight:600}
+.deal-chip{font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:999px;white-space:nowrap;flex-shrink:0;letter-spacing:.01em}
+.deal-chip.seller{background:var(--primary-dim);color:var(--primary)}
+.deal-chip.buyer{background:var(--blue-d);color:var(--blue)}
+.deal-chip.rental{background:rgba(201,116,26,.14);color:var(--orange)}
+.lead-stage-tag.s-NEW{background:var(--blue-d);color:var(--blue)}
+.lead-stage-tag.s-CONTACTED{background:rgba(201,116,26,.14);color:var(--orange)}
+.lead-stage-tag.s-MEETING{background:rgba(124,92,191,.14);color:#7c5cbf}
+.lead-stage-tag.s-AGREEMENT,.lead-stage-tag.s-WON{background:var(--primary-dim);color:var(--primary)}
+.lead-stage-tag.s-LOST{background:rgba(194,65,58,.12);color:var(--red)}
+.leads-list-prop{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#tabLeads .leads-list-wrap{padding:4px 24px 20px}
+#tabLeads .leads-selection-bar{border-radius:10px}
+
+/* Çekmece: fırsat alanları + kayıp bilgisi */
+.ld-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 10px}
+.ld-grid label{display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--txm);font-weight:500}
+.ld-grid input,.ld-grid select{height:34px;font-size:13px}
+.lead-lost-info{font-size:12.5px;color:var(--red);background:rgba(194,65,58,.08);border-radius:8px;padding:8px 10px}
+
+/* Kayıp nedeni modalı + yeni kişi formu */
+.lost-reasons{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.lost-reason{background:var(--s2);border:1px solid var(--border);border-radius:9px;padding:10px 12px;text-align:left;font-family:var(--font);font-size:13px;color:var(--tx);cursor:pointer}
+.lost-reason:hover{border-color:var(--border-a)}
+.lost-reason.active{border-color:var(--primary);background:var(--primary-dim);color:var(--primary);font-weight:600}
+.modal.modal-md{width:560px}
+.form-row-2{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+#leadFormDealType{align-self:flex-start}
+
 /* ── Dar ekran ── */
 @media (max-width:900px){
+  .pano-head{padding:14px 12px 10px}
+  .pano-tools{width:100%}
+  .pano-search{flex:1 1 140px;width:auto}
+  #tabLeads .leads-board{grid-auto-columns:minmax(78vw,1fr);padding:4px 12px 16px;scroll-snap-type:x mandatory}
+  #tabLeads .lead-column{scroll-snap-align:start}
+  #tabLeads .leads-list-wrap{padding:4px 12px 16px}
+  .ld-grid,.lost-reasons,.form-row-2{grid-template-columns:1fr}
   .app-layout{grid-template-columns:minmax(0,1fr)!important}
   .rail{position:fixed;top:var(--header-h);left:0;bottom:0;width:min(280px,85vw);z-index:25;transform:translateX(-100%);transition:transform .22s ease;box-shadow:0 8px 32px rgba(0,0,0,.18)}
   .rail.open{transform:none}

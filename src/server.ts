@@ -24,7 +24,7 @@ import {
   getAllLeads, getLead, createLead, updateLead, setLeadStage, deleteLead,
   getLeadActivities, addLeadActivity, upsertLeadFromCallOutcome,
   previewImportConflicts, commitImportResolutions, leadsToCampaignContacts,
-  querySegment, ImportRow, ImportResolution, SegmentRule,
+  querySegment, ImportRow, ImportResolution, SegmentRule, DealFieldsInput,
 } from './leads';
 import { startMetaSyncJob, syncUserMetaLeadsNow } from './metaLeads';
 import {
@@ -52,7 +52,7 @@ import {
   endedReasonToStatus, getStats, exportCSV, getCampaignStats, reconcileStaleCalls, getAdminUserComparison, getDataHealth,
   getCallsForScenario,
 } from './calls';
-import { VapiCallRequest, VapiWebhookPayload, VapiCostItem, CallFilters, CallRecord, CallCosts, LEAD_STAGES, Lead, CustomerInfo, ScenarioVoiceModel, SCENARIO_VOICE_MODELS } from './types';
+import { VapiCallRequest, VapiWebhookPayload, VapiCostItem, CallFilters, CallRecord, CallCosts, LEAD_STAGES, LOST_REASONS, normalizeLeadStage, isKnownLeadStage, Lead, CustomerInfo, ScenarioVoiceModel, SCENARIO_VOICE_MODELS } from './types';
 import {
   initCampaignRunner, loadAllActiveCampaigns, getCampaignState,
   campaignLoad, campaignStart, campaignResume, campaignPause, campaignStop, campaignClear,
@@ -1271,7 +1271,7 @@ async function generateSummaryForCall(vapiCallId: string, attempt = 1): Promise<
     // upsertLeadFromCallOutcome'daki asimetrik-risk yorumu (sadece ileri taşır).
     upsertLeadFromCallOutcome(
       ownerId, record.customerPhone, record.customerName, vapiCallId,
-      summary.randevu_alindi, summary.ilgi_seviyesi, summary.ozet,
+      summary.randevu_alindi, summary.ilgi_seviyesi, summary.ozet, summary.mulk_tipi,
     ).catch(err => console.error('[Leads] Arama sonucu → aday birleşimi hatası:', err));
     console.log(`[AI] Özet hazır: ${vapiCallId} (Anthropic: $${usage.costUsd.toFixed(4)})`);
   } catch (err) {
@@ -1662,36 +1662,65 @@ app.get('/api/leads/:id', requireUserAuth, async (req: Request, res: Response) =
   } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
+// Fırsat alanları (CRM Faz 2) — gövdede düz alanlar olarak gelir; sanitizeDealFields
+// (leads.ts) doğrular. Doğrulama hatası 400, DB hatası 500.
+function pickDealFields(body: Record<string, unknown>): DealFieldsInput {
+  const out: DealFieldsInput = {};
+  for (const k of ['dealType', 'propertyType', 'propertyLocation', 'propertyM2', 'priceExpectation', 'authority'] as const) {
+    if (k in body) (out as any)[k] = body[k];
+  }
+  return out;
+}
+const isValidationError = (err: unknown) =>
+  err instanceof Error && /Geçersiz|zorunlu|sayı olmalı/.test(err.message);
+
 app.post('/api/leads', requireUserAuth, async (req: Request, res: Response) => {
   try {
-    const { firstName, lastName, email, phone, notes, tags } = req.body as {
+    const { firstName, lastName, email, phone, notes, tags, region, reference } = req.body as {
       firstName?: string; lastName?: string; email?: string; phone?: string; notes?: string; tags?: string[];
+      region?: string; reference?: string;
     };
     if (!firstName?.trim()) return res.status(400).json({ success: false, error: 'Ad zorunlu' });
-    const lead = await createLead(req.userId!, { firstName, lastName, email, phone, notes, tags, source: 'MANUAL' });
+    const lead = await createLead(req.userId!, {
+      firstName, lastName, email, phone, notes, tags, region, reference, source: 'MANUAL', deal: pickDealFields(req.body),
+    });
     return res.status(201).json({ success: true, data: lead });
-  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+  } catch (err) {
+    if (isValidationError(err)) return res.status(400).json({ success: false, error: (err as Error).message });
+    return res.status(500).json({ success: false, error: toClientError(err) });
+  }
 });
 
 app.patch('/api/leads/:id', requireUserAuth, async (req: Request, res: Response) => {
   try {
-    const { firstName, lastName, email, phone, notes, tags, whatsappIgnored } = req.body as {
+    const { firstName, lastName, email, phone, notes, tags, whatsappIgnored, region, reference } = req.body as {
       firstName?: string; lastName?: string | null; email?: string | null; phone?: string | null;
-      notes?: string | null; tags?: string[]; whatsappIgnored?: boolean;
+      notes?: string | null; tags?: string[]; whatsappIgnored?: boolean; region?: string | null; reference?: string | null;
     };
-    const lead = await updateLead(req.userId!, req.params.id, { firstName, lastName, email, phone, notes, tags, whatsappIgnored });
+    const lead = await updateLead(req.userId!, req.params.id, {
+      firstName, lastName, email, phone, notes, tags, whatsappIgnored, region, reference, deal: pickDealFields(req.body),
+    });
     if (!lead) return res.status(404).json({ success: false, error: 'Aday bulunamadı' });
     return res.json({ success: true, data: lead });
-  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+  } catch (err) {
+    if (isValidationError(err)) return res.status(400).json({ success: false, error: (err as Error).message });
+    return res.status(500).json({ success: false, error: toClientError(err) });
+  }
 });
 
+// Eski aşama kodları (QUALIFIED/VIEWING/OFFER) kabul edilip yeni hunideki karşılığına
+// çevrilir. LOST için lostReason zorunlu — istemci modal açmadan gönderirse 400.
 app.patch('/api/leads/:id/stage', requireUserAuth, async (req: Request, res: Response) => {
   try {
-    const { stage } = req.body as { stage?: string };
-    if (!stage || !LEAD_STAGES.includes(stage as any)) {
+    const { stage, lostReason, lostNote } = req.body as { stage?: string; lostReason?: string | null; lostNote?: string | null };
+    if (!stage || !isKnownLeadStage(stage)) {
       return res.status(400).json({ success: false, error: `stage şunlardan biri olmalı: ${LEAD_STAGES.join(', ')}` });
     }
-    const lead = await setLeadStage(req.userId!, req.params.id, stage as any);
+    const target = normalizeLeadStage(stage);
+    if (target === 'LOST' && (!lostReason || !LOST_REASONS.includes(lostReason as any))) {
+      return res.status(400).json({ success: false, error: 'Kayıp nedeni zorunlu', code: 'LOST_REASON_REQUIRED' });
+    }
+    const lead = await setLeadStage(req.userId!, req.params.id, target, { lostReason: lostReason as any, lostNote });
     if (!lead) return res.status(404).json({ success: false, error: 'Aday bulunamadı' });
     return res.json({ success: true, data: lead });
   } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }

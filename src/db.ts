@@ -282,6 +282,14 @@ export async function initDb(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_leads_stage   ON leads (stage);
     CREATE INDEX IF NOT EXISTS idx_leads_phone   ON leads ((data ->> 'phone'));
 
+    -- CRM Faz 2 göçü (2026-11): 7 aşamalı huni → 6 aşama. Nitelikli/Gezme → Randevu,
+    -- Teklif → Yetki/Anlaşma. Eski kod data.legacyStage'de saklanır. İdempotent:
+    -- göçecek satır kalmayınca hiçbir şey yapmaz. (bkz. types.ts normalizeLeadStage)
+    UPDATE leads
+       SET data  = data || jsonb_build_object('legacyStage', stage),
+           stage = CASE stage WHEN 'OFFER' THEN 'AGREEMENT' ELSE 'MEETING' END
+     WHERE stage IN ('QUALIFIED', 'VIEWING', 'OFFER');
+
     CREATE TABLE IF NOT EXISTS lead_activities (
       id         TEXT PRIMARY KEY,
       lead_id    TEXT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
