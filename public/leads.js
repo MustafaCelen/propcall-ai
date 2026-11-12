@@ -411,10 +411,23 @@ async function openLeadDrawer(id) {
   if (!lead) return;
   leadsState.openId = id;
 
-  $('leadDrawerTitle').textContent = leadFullName(lead);
-  $('leadDrawerSub').textContent = [lead.phone, lead.email].filter(Boolean).join(' · ') || LEAD_SOURCE_LABELS[lead.source];
+  $('leadDrawerTitle').innerHTML = esc(leadFullName(lead)) + ' ' + dealChip(lead) + ` <span class="lead-stage-tag s-${lead.stage}">${LEAD_STAGE_LABELS[lead.stage] || lead.stage}</span>`;
+  $('leadDrawerSub').textContent = [lead.phone, lead.email, leadPropertyLine(lead)].filter(Boolean).join(' · ') || LEAD_SOURCE_LABELS[lead.source];
   const sel = (v, cur) => v === (cur || '') ? ' selected' : '';
+  const wa = lead.phone ? 'https://wa.me/' + lead.phone.replace(/\D/g, '') : '';
   $('leadDrawerBody').innerHTML = `
+    <div class="ld-quick">
+      <button class="ld-q" data-q="call" ${lead.phone ? '' : 'disabled'}>📞 Ara</button>
+      ${wa ? `<a class="ld-q" href="${wa}" target="_blank" rel="noopener">💬 WhatsApp</a>` : '<button class="ld-q" disabled>💬 WhatsApp</button>'}
+      <button class="ld-q" data-q="task">☑ Görev</button>
+      <button class="ld-q" data-q="meeting">📅 Randevu</button>
+    </div>
+    <div class="ld-mini" id="ldMini" hidden>
+      <input type="text" id="ldMiniTitle" placeholder="Görev başlığı" />
+      <input type="datetime-local" id="ldMiniDue" />
+      <button class="td-btn" id="ldMiniSave">Ekle</button>
+      <button class="td-btn ghost" id="ldMiniCancel">Vazgeç</button>
+    </div>
     <div class="drawer-section">
       <div class="drawer-section-title">Aşama</div>
       <div class="lead-drawer-actions" id="leadStageButtons">
@@ -422,6 +435,7 @@ async function openLeadDrawer(id) {
       </div>
       ${lead.stage === 'LOST' && lead.lostReason ? `<div class="lead-lost-info">Kayıp nedeni: <b>${esc(LOST_REASON_LABELS[lead.lostReason] || lead.lostReason)}</b>${lead.lostNote ? ' — ' + esc(lead.lostNote) : ''}</div>` : ''}
     </div>
+    <!--FIRSAT-BLOK-->
     <div class="drawer-section">
       <div class="drawer-section-title">Fırsat</div>
       <div class="ld-grid">
@@ -458,27 +472,34 @@ async function openLeadDrawer(id) {
         <button class="btn-save-notes" id="leadTagAdd">Ekle</button>
       </div>
     </div>
+    <!--/FIRSAT-BLOK-->
     <div class="drawer-section">
-      <div class="drawer-section-title">Not Ekle</div>
-      <textarea class="drawer-notes" id="leadNoteInput" rows="3" placeholder="Görüşme notu, hatırlatma..."></textarea>
-      <div class="drawer-actions">
-        <button class="btn-save-notes" id="leadNoteSave">Notu Kaydet</button>
+      <div class="drawer-section-title">Zaman çizelgesi</div>
+      <div class="ld-compose">
+        <textarea class="drawer-notes" id="leadNoteInput" rows="2" placeholder="Not yaz… (görüşme notu, hatırlatma)"></textarea>
+        <div class="drawer-actions">
+          <button class="btn-save-notes" id="leadNoteSave">Not ekle</button>
+          ${lead.phone ? `<input type="text" id="leadMsgInput" placeholder="WhatsApp mesajı yaz…" style="flex:1" /><button class="btn-secondary" id="leadMsgSend">Gönder</button>` : ''}
+        </div>
       </div>
-    </div>
-    ${lead.phone ? `
-    <div class="drawer-section">
-      <div class="drawer-section-title">WhatsApp</div>
-      <div class="lead-msg-thread" id="leadMsgThread"><div class="drawer-loading">⏳ Yükleniyor...</div></div>
-      <div class="drawer-actions" style="margin-top:8px">
-        <input type="text" id="leadMsgInput" placeholder="Mesaj yazın..." style="flex:1" />
-        <button class="btn-save-notes" id="leadMsgSend">Gönder</button>
-      </div>
-    </div>` : ''}
-    <div class="drawer-section">
-      <div class="drawer-section-title">Aktivite Geçmişi</div>
-      <div id="leadActivityList"><div class="drawer-loading">⏳ Yükleniyor...</div></div>
+      <div class="ld-timeline" id="leadTimeline"><div class="drawer-loading">⏳ Yükleniyor...</div></div>
     </div>
   `;
+  // Zaman çizelgesi kartın kalbi: Fırsat + Etiketler bloğu onun ALTINA, açılır-kapanır olarak taşınır.
+  {
+    const body = $('leadDrawerBody');
+    const html = body.innerHTML;
+    const s = html.indexOf('<!--FIRSAT-BLOK-->'), e = html.indexOf('<!--/FIRSAT-BLOK-->');
+    if (s !== -1 && e !== -1) {
+      const block = html.slice(s + '<!--FIRSAT-BLOK-->'.length, e);
+      const rest = html.slice(0, s) + html.slice(e + '<!--/FIRSAT-BLOK-->'.length);
+      body.innerHTML = rest + `<details class="ld-details" open><summary>Fırsat bilgileri ve etiketler</summary>${block}</details>`;
+    }
+  }
+
+  $('leadDrawerBody').querySelectorAll('[data-q]').forEach(b => b.addEventListener('click', () => quickAction(id, b.dataset.q)));
+  $('ldMiniSave').addEventListener('click', () => saveQuickTask(id));
+  $('ldMiniCancel').addEventListener('click', () => { $('ldMini').hidden = true; });
 
   $('leadStageButtons').querySelectorAll('.lead-drawer-stage-btn').forEach(btn => {
     btn.addEventListener('click', () => moveLeadStage(id, btn.dataset.stage));
@@ -492,31 +513,128 @@ async function openLeadDrawer(id) {
   $('leadNoteSave').addEventListener('click', () => saveLeadNote(id));
   if (lead.phone) {
     $('leadMsgSend').addEventListener('click', () => sendLeadMessage(id));
-    loadLeadMessages(id);
+    $('leadMsgInput').addEventListener('keydown', e => { if (e.key === 'Enter') sendLeadMessage(id); });
   }
 
   $('leadDrawer').classList.add('open');
   $('leadDrawerOverlay').classList.add('visible');
 
-  loadLeadActivities(id);
+  loadLeadTimeline(id);
 }
 
-async function loadLeadMessages(id) {
-  const thread = $('leadMsgThread');
+// ─── HIZLI AKSİYONLAR ───────────────────────────────────────────────────────
+const quickState = { kind: 'call' };
+
+function quickAction(id, q) {
+  const lead = leadsState.leads.find(l => l.id === id);
+  if (!lead) return;
+  if (q === 'call') {
+    if ($('customerName')) $('customerName').value = leadFullName(lead);
+    if ($('customerPhone')) $('customerPhone').value = lead.phone || '';
+    closeLeadDrawer();
+    switchTab('live');
+    return;
+  }
+  quickState.kind = q === 'meeting' ? 'meeting' : 'call';
+  const mini = $('ldMini');
+  mini.hidden = false;
+  $('ldMiniTitle').value = q === 'meeting' ? 'Randevu' : 'Geri ara';
+  // Varsayılan: randevu yarın 10:00, görev bugün 18:00 (yerel saat girişi)
+  const d = new Date(); d.setSeconds(0, 0);
+  if (q === 'meeting') { d.setDate(d.getDate() + 1); d.setHours(10, 0); } else { d.setHours(18, 0); }
+  const pad = n => String(n).padStart(2, '0');
+  $('ldMiniDue').value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  $('ldMiniTitle').focus();
+}
+
+async function saveQuickTask(id) {
+  const title = $('ldMiniTitle').value.trim();
+  const due = $('ldMiniDue').value;
+  if (!title || !due) { toast('✗ Başlık ve tarih gerekli', 'error'); return; }
   try {
-    const r = await fetch(`/api/leads/${id}/messages`);
+    const r = await fetch('/api/tasks', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leadId: id, title, kind: quickState.kind, dueAt: new Date(due).toISOString() }),
+    });
     const j = await r.json();
-    if (!j.success) throw new Error(j.error || 'Mesajlar yüklenemedi');
-    if (!j.data.length) { thread.innerHTML = '<div class="lead-column-empty">Henüz mesaj yok</div>'; return; }
-    thread.innerHTML = j.data.map(m => `
-      <div class="lead-msg ${m.direction}">
-        <div>${esc(m.body)}</div>
-        <div class="lead-msg-time">${leadRelativeTime(m.createdAt)}${m.status === 'FAILED' ? ' · ✗ gönderilemedi' : ''}</div>
-      </div>
-    `).join('');
-    thread.scrollTop = thread.scrollHeight;
+    if (!j.success) throw new Error(j.error || 'Görev eklenemedi');
+    $('ldMini').hidden = true;
+    toast(quickState.kind === 'meeting' ? '✓ Randevu eklendi' : '✓ Görev eklendi', 'success');
+    loadLeadTimeline(id);
+    if (typeof loadToday === 'function') loadToday();
   } catch (err) {
-    thread.innerHTML = `<div class="drawer-error">✗ ${err.message}</div>`;
+    toast('✗ ' + err.message, 'error');
+  }
+}
+
+// ─── ZAMAN ÇİZELGESİ ────────────────────────────────────────────────────────
+const TL_ICON = { created: '➕', stage: '🏷️', note: '📝', call: '📞', whatsapp: '💬', task: '☑', activity: '•' };
+
+function tlWhen(iso) {
+  const d = new Date(iso);
+  return d.toLocaleDateString('tr-TR', { day: '2-digit', month: 'short' }) + ' ' + d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+}
+
+function tlEventHtml(ev) {
+  const m = ev.meta || {};
+  let title = esc(ev.title);
+  let detail = ev.detail ? esc(ev.detail) : '';
+  let cls = ev.type;
+  if (ev.type === 'activity') {
+    title = esc(LEAD_ACTIVITY_LABELS[ev.title] || ev.title);
+    if (ev.title === 'WHATSAPP_ANALYZED') title += `<span class="tl-meta"> · ${m.qualifies ? 'fırsat' : 'yeterli ilgi yok'}</span>`;
+  }
+  if (ev.type === 'stage') {
+    title = `Aşama → <b>${LEAD_STAGE_LABELS[m.to] || m.to}</b>`;
+    if (m.lostReason) detail = esc(LOST_REASON_LABELS[m.lostReason] || m.lostReason) + (m.lostNote ? ' — ' + esc(m.lostNote) : '');
+  }
+  if (ev.type === 'call') {
+    const dur = m.duration ? ` · ${Math.round(m.duration / 60)} dk` : '';
+    title += `<span class="tl-meta">${dur}</span>`;
+    if (m.randevuAlindi) cls += ' good';
+    title = `<a href="#" class="tl-link" data-call="${esc(m.vapiCallId)}">${title}</a>`;
+  }
+  if (ev.type === 'whatsapp') { cls += m.direction === 'IN' ? ' in' : ' out'; if (m.status === 'FAILED') detail += ' <span class="tl-meta">✗ gönderilemedi</span>'; }
+  if (ev.type === 'task') {
+    if (m.status === 'open') {
+      title += `<span class="tl-meta"> · vade ${tlWhen(m.dueAt)}</span>`;
+      title += ` <button class="tl-done" data-task-done="${esc(m.taskId)}" title="Tamamla">✓</button>`;
+    } else cls += ' done';
+  }
+  return `
+    <div class="tl-item ${cls}">
+      <div class="tl-ic">${TL_ICON[ev.type] || '•'}</div>
+      <div class="tl-body">
+        <div class="tl-title">${title}</div>
+        ${detail ? `<div class="tl-detail">${detail}</div>` : ''}
+        <div class="tl-time">${tlWhen(ev.at)}</div>
+      </div>
+    </div>`;
+}
+
+async function loadLeadTimeline(id) {
+  const box = $('leadTimeline');
+  if (!box) return;
+  try {
+    const r = await fetch(`/api/leads/${id}/timeline`);
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error || 'Zaman çizelgesi yüklenemedi');
+    box.innerHTML = j.data.length ? j.data.map(tlEventHtml).join('') : '<div class="lead-column-empty">Henüz hareket yok</div>';
+    box.querySelectorAll('[data-call]').forEach(a => a.addEventListener('click', e => {
+      e.preventDefault();
+      if (typeof openDrawer === 'function') { closeLeadDrawer(); openDrawer(a.dataset.call); }
+    }));
+    box.querySelectorAll('[data-task-done]').forEach(b => b.addEventListener('click', async () => {
+      try {
+        const rr = await fetch(`/api/tasks/${b.dataset.taskDone}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ done: true }) });
+        const jj = await rr.json();
+        if (!jj.success) throw new Error(jj.error || 'Tamamlanamadı');
+        loadLeadTimeline(id);
+        if (typeof loadToday === 'function') loadToday();
+      } catch (err) { toast('✗ ' + err.message, 'error'); }
+    }));
+  } catch (err) {
+    box.innerHTML = `<div class="drawer-error">✗ ${err.message}</div>`;
   }
 }
 
@@ -532,41 +650,10 @@ async function sendLeadMessage(id) {
     const j = await r.json();
     if (!j.success) throw new Error(j.error || 'Mesaj gönderilemedi');
     input.value = '';
-    loadLeadMessages(id);
+    loadLeadTimeline(id);
   } catch (err) {
     toast('✗ ' + err.message, 'error');
   }
-}
-
-async function loadLeadActivities(id) {
-  const list = $('leadActivityList');
-  try {
-    const r = await fetch(`/api/leads/${id}/activities`);
-    const j = await r.json();
-    if (!j.success) throw new Error(j.error || 'Aktiviteler yüklenemedi');
-    if (!j.data.length) { list.innerHTML = '<div class="lead-column-empty">Henüz aktivite yok</div>'; return; }
-    list.innerHTML = j.data.map(a => `
-      <div class="lead-activity-item">
-        <div>${leadActivitySummary(a)}</div>
-        <div class="lead-activity-time">${leadRelativeTime(a.createdAt)}</div>
-      </div>
-    `).join('');
-  } catch (err) {
-    list.innerHTML = `<div class="drawer-error">✗ ${err.message}</div>`;
-  }
-}
-
-function leadActivitySummary(a) {
-  if (a.type === 'STAGE_CHANGE') {
-    const reason = a.data.lostReason ? ` (${esc(LOST_REASON_LABELS[a.data.lostReason] || a.data.lostReason)}${a.data.lostNote ? ': ' + esc(a.data.lostNote) : ''})` : '';
-    return `Aşama → <b>${LEAD_STAGE_LABELS[a.data.to] || a.data.to}</b>${reason}`;
-  }
-  if (a.type === 'NOTE') return esc(a.data.note || '');
-  if (a.type === 'WHATSAPP_ANALYZED') {
-    const tag = a.data.qualifies ? '✅ Fırsat' : '— Yeterli ilgi yok';
-    return `Yazışma analiz edildi (${esc(a.data.ilgiSeviyesi || '')}, ${tag})${a.data.ozet ? ' — ' + esc(a.data.ozet) : ''}`;
-  }
-  return LEAD_ACTIVITY_LABELS[a.type] || a.type;
 }
 
 async function saveLeadNote(id) {
@@ -582,7 +669,7 @@ async function saveLeadNote(id) {
     if (!j.success) throw new Error(j.error || 'Not kaydedilemedi');
     input.value = '';
     toast('✓ Not eklendi', 'success');
-    loadLeadActivities(id);
+    loadLeadTimeline(id);
   } catch (err) {
     toast('✗ ' + err.message, 'error');
   }

@@ -24,7 +24,7 @@ import {
   getAllLeads, getLead, createLead, updateLead, setLeadStage, deleteLead,
   getLeadActivities, addLeadActivity, upsertLeadFromCallOutcome,
   previewImportConflicts, commitImportResolutions, leadsToCampaignContacts,
-  querySegment, ImportRow, ImportResolution, SegmentRule, DealFieldsInput,
+  querySegment, ImportRow, ImportResolution, SegmentRule, DealFieldsInput, getLeadTimeline,
 } from './leads';
 import { startMetaSyncJob, syncUserMetaLeadsNow } from './metaLeads';
 import {
@@ -1731,6 +1731,14 @@ app.delete('/api/leads/:id', requireUserAuth, async (req: Request, res: Response
     if (!await deleteLead(req.userId!, req.params.id))
       return res.status(404).json({ success: false, error: 'Aday bulunamadı' });
     return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+app.get('/api/leads/:id/timeline', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const events = await getLeadTimeline(req.userId!, req.params.id);
+    if (!events) return res.status(404).json({ success: false, error: 'Aday bulunamadı' });
+    return res.json({ success: true, data: events });
   } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 

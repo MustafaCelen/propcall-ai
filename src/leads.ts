@@ -707,6 +707,72 @@ export async function analyzeWhatsappThreadForLead(userId: string, leadId: strin
   await applyWhatsappAnalysisToLead(userId, leadId, analysis.randevu_alindi, analysis.ilgi_seviyesi, analysis.ozet);
 }
 
+// ─── Kişi kartı zaman çizelgesi (CRM Faz 3) ────────────────────────────────
+// Tek kronolojik akış: aşama değişimleri + notlar (lead_activities), gerçek aramalar
+// (calls, numara varyantlarıyla), WhatsApp mesajları, görevler (açık + tamamlanan) ve
+// kaydın oluşturulması. Dört sorgu paralel; birleştirme/sıralama burada.
+export interface TimelineEvent {
+  id: string;
+  type: 'created' | 'stage' | 'note' | 'call' | 'whatsapp' | 'task' | 'activity';
+  at: string;
+  title: string;
+  detail: string | null;
+  meta: Record<string, unknown>;
+}
+
+export async function getLeadTimeline(userId: string, leadId: string, limit = 200): Promise<TimelineEvent[] | null> {
+  const lead = await getLead(userId, leadId);
+  if (!lead) return null;
+  const variants = lead.phone ? phoneVariants(lead.phone) : [];
+  const [acts, calls, msgs, tasks] = await Promise.all([
+    pool.query(`SELECT id, type, data, created_at FROM lead_activities WHERE lead_id = $1 ORDER BY created_at DESC LIMIT $2`, [leadId, limit]),
+    variants.length
+      ? pool.query(
+        `SELECT vapi_call_id, status, start_time, created_at, data->'summary' AS summary, data->>'duration' AS duration
+         FROM calls WHERE user_id = $1 AND data->>'customerPhone' = ANY($2::text[]) AND COALESCE(is_practice, false) = false
+         ORDER BY COALESCE(start_time, created_at) DESC LIMIT $3`, [userId, variants, limit])
+      : Promise.resolve({ rows: [] as any[] }),
+    pool.query(`SELECT id, direction, body, status, created_at FROM whatsapp_messages WHERE lead_id = $1 AND user_id = $2 ORDER BY created_at DESC LIMIT $3`, [leadId, userId, limit]),
+    pool.query(`SELECT id, title, kind, due_at, status, done_at, created_at, source FROM tasks WHERE lead_id = $1 AND user_id = $2 ORDER BY created_at DESC LIMIT $3`, [leadId, userId, limit]),
+  ]);
+
+  const events: TimelineEvent[] = [];
+  events.push({ id: 'created', type: 'created', at: lead.createdAt, title: 'Kişi oluşturuldu', detail: null, meta: { source: lead.source } });
+  for (const a of acts.rows) {
+    const at = new Date(a.created_at).toISOString();
+    if (a.type === 'STAGE_CHANGE') events.push({ id: a.id, type: 'stage', at, title: 'Aşama değişti', detail: null, meta: a.data });
+    else if (a.type === 'NOTE') events.push({ id: a.id, type: 'note', at, title: 'Not', detail: a.data?.note ?? null, meta: {} });
+    else if (a.type === 'CALL_COMPLETED') continue; // gerçek arama kaydı aşağıda calls'tan geliyor
+    else events.push({ id: a.id, type: 'activity', at, title: a.type, detail: a.data?.ozet ?? null, meta: a.data });
+  }
+  for (const c of calls.rows) {
+    const s = c.summary || null;
+    events.push({
+      id: c.vapi_call_id, type: 'call', at: new Date(c.start_time || c.created_at).toISOString(),
+      title: s ? (s.randevu_alindi ? 'Arama — randevu alındı' : `Arama — ilgi ${s.ilgi_seviyesi || '?'}`) : `Arama (${c.status || 'bilinmiyor'})`,
+      detail: s?.ozet ?? null,
+      meta: { vapiCallId: c.vapi_call_id, status: c.status, duration: c.duration ? Number(c.duration) : null, randevuAlindi: !!s?.randevu_alindi, ilgiSeviyesi: s?.ilgi_seviyesi ?? null },
+    });
+  }
+  for (const m of msgs.rows) {
+    events.push({
+      id: m.id, type: 'whatsapp', at: new Date(m.created_at).toISOString(),
+      title: m.direction === 'IN' ? 'WhatsApp — geldi' : 'WhatsApp — gönderildi',
+      detail: m.body, meta: { direction: m.direction, status: m.status },
+    });
+  }
+  for (const t of tasks.rows) {
+    events.push({
+      id: t.id, type: 'task', at: new Date(t.status === 'done' && t.done_at ? t.done_at : t.created_at).toISOString(),
+      title: t.status === 'done' ? 'Görev tamamlandı' : 'Görev açıldı',
+      detail: t.title,
+      meta: { taskId: t.id, kind: t.kind, status: t.status, dueAt: new Date(t.due_at).toISOString(), source: t.source },
+    });
+  }
+  events.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+  return events.slice(0, limit);
+}
+
 export async function addLeadActivity(
   userId: string, leadId: string, type: LeadActivityType, data: Record<string, unknown>,
 ): Promise<LeadActivity | null> {
