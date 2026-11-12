@@ -171,8 +171,33 @@
 .form-row-2{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
 #leadFormDealType{align-self:flex-start}
 
+/* ── Huni raporu + Ekip ── */
+.fn-wrap{padding:10px 16px 6px}
+.fn-row{display:grid;grid-template-columns:150px minmax(0,1fr) 54px;gap:12px;align-items:center;padding:7px 0}
+.fn-lbl{font-size:13px;color:var(--tx);display:flex;align-items:center;gap:8px}
+.fn-dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.fn-bar{height:26px;display:flex;align-items:center;gap:10px}
+.fn-fill{height:100%;border-radius:7px;opacity:.85;transition:width .3s;max-width:calc(100% - 44px)}
+.fn-bar b{font-size:13px;color:var(--tx);font-variant-numeric:tabular-nums;flex-shrink:0}
+.fn-conv{font-size:12px;color:var(--txm);text-align:right;font-variant-numeric:tabular-nums}
+.td-field b{font-weight:600;color:var(--tx);font-variant-numeric:tabular-nums}
+.tm-row{display:grid;grid-template-columns:minmax(160px,1.4fr) auto repeat(4,80px) 40px;gap:14px;align-items:center;padding:11px 16px;border-bottom:1px solid var(--border)}
+.tm-row:last-child{border-bottom:0}
+.tm-who b{display:block;font-size:13.5px}
+.tm-who small{color:var(--txm);font-size:12px}
+.tm-who .late{color:var(--orange);font-weight:600}
+.tm-stages{display:flex;gap:4px}
+.tm-stages span{min-width:30px;text-align:center;font-size:12px;font-weight:600;padding:3px 6px;border-radius:7px;border:1px solid;background:var(--s1);font-variant-numeric:tabular-nums}
+.tm-num{text-align:center}
+.tm-num b{display:block;font-size:16px;font-variant-numeric:tabular-nums}
+.tm-num.warn b{color:var(--red)}
+.tm-num small{color:var(--txm);font-size:10.5px;white-space:nowrap}
+
 /* ── Dar ekran ── */
 @media (max-width:900px){
+  .fn-row{grid-template-columns:110px minmax(0,1fr) 44px}
+  .tm-row{grid-template-columns:1fr 1fr;row-gap:8px}
+  .tm-who{grid-column:1 / -1}
   .pano-head{padding:14px 12px 10px}
   .pano-tools{width:100%}
   .pano-search{flex:1 1 140px;width:auto}

@@ -127,6 +127,18 @@ export async function requireUserAuth(req: Request, res: Response, next: NextFun
   next();
 }
 
+// Ekip görünümü: ofis yöneticisi (manager) veya admin. Kullanım koşulları şartı
+// requireUserAuth ile aynı.
+export async function requireManager(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const user = await resolveSession(req);
+  if (!user) { res.status(401).json({ success: false, error: 'not_authenticated' }); return; }
+  if (user.role !== 'admin' && user.role !== 'manager') { res.status(403).json({ success: false, error: 'manager_only' }); return; }
+  if (user.termsAcceptedVersion !== CURRENT_TERMS_VERSION) { res.status(403).json({ success: false, error: 'terms_not_accepted' }); return; }
+  req.userId = user.id;
+  req.user   = user;
+  next();
+}
+
 export async function requireAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
   const user = await resolveSession(req);
   if (!user) {

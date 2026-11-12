@@ -394,6 +394,7 @@ document.addEventListener('DOMContentLoaded', function () {
 const FIELD_META = {
   name:                { label: '👤 Adınız (Danışman)',         hint: 'Gerçek adınız — sadece görüntüleme amaçlı, senaryolarda kullanılmaz. Asistan Adı\'ndan (aşağıda) farklı bir alan.', section: 'profil' },
   assistantName:       { label: '🎙️ Asistan Adı',              hint: 'AI\'ın telefonda kendini tanıttığı isim — danışmanın kendi adı DEĞİL, asistanın konuşma kimliği (örn. "Deniz"). Senaryolarda {{agentName}} değişkeni olarak kullanılır.', section: 'profil' },
+  morningSummaryPhone: { label: '🌅 Sabah özeti (WhatsApp)',   hint: 'Her sabah 08:30\'da günün görevleri, randevular ve bekleyen yanıtlar bu numaraya WhatsApp ile gelir (kendi Twilio WhatsApp hattınız tanımlı olmalı). Boş bırakırsanız kapalı. Örn. +905321234567', section: 'profil', allowEmpty: true },
   vapiPhoneNumberId:   { label: '☎️ Vapi Telefon Numarası',    hint: 'Vapi hesabınızdaki numaralardan seçin', listType: 'phone-numbers', section: 'baglanti' },
   vapiAssistantId:     { label: '🧠 Vapi Asistanı',            hint: 'Vapi hesabınızdaki asistanlardan seçin', listType: 'assistants', section: 'baglanti' },
   vapiApiKey:          { label: '📞 Vapi API Key',            hint: 'Kendi Vapi hesabınızın Private Key\'i',           verifiable: true, section: 'keys' },
@@ -799,7 +800,9 @@ function renderFields(data) {
                    placeholder="${placeholder}" autocomplete="off" />
             ${listButton}
             <button class="adm-save-btn" data-save="${key}">Kaydet</button>
+            ${key === 'morningSummaryPhone' ? '<button class="adm-save-btn" data-preview-morning type="button">Örnek gör</button>' : ''}
           </div>
+          ${key === 'morningSummaryPhone' ? '<pre class="adm-field-hint" data-morning-preview style="display:none;white-space:pre-wrap;background:var(--s2);border-radius:8px;padding:10px;margin-top:8px"></pre>' : ''}
           <div class="adm-field-hint">${meta.hint}</div>
           <div class="adm-field-status" data-status="${key}"></div>
         </div>
@@ -811,6 +814,17 @@ function renderFields(data) {
     });
     container.querySelectorAll('[data-list]').forEach(btn => {
       btn.addEventListener('click', () => loadVapiList(btn.dataset.list, btn.dataset.target, btn));
+    });
+    container.querySelectorAll('[data-preview-morning]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const pre = container.querySelector('[data-morning-preview]');
+        btn.disabled = true;
+        try {
+          const j = await fetch('/api/reports/morning-preview').then(r => r.json());
+          pre.textContent = j.success ? j.data.text : ('✗ ' + (j.error || 'alınamadı'));
+          pre.style.display = 'block';
+        } finally { btn.disabled = false; }
+      });
     });
   }
 
@@ -947,7 +961,7 @@ async function saveField(key) {
   const status = document.querySelector(`[data-status="${key}"]`);
   const value  = input.value.trim();
 
-  if (!value) { status.textContent = 'Değer boş olamaz'; status.className = 'adm-field-status err'; return; }
+  if (!value && !FIELD_META[key].allowEmpty) { status.textContent = 'Değer boş olamaz'; status.className = 'adm-field-status err'; return; }
 
   btn.disabled = true;
   status.className = 'adm-field-status';

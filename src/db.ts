@@ -59,6 +59,8 @@ export async function initDb(): Promise<void> {
 
     -- users tablosu zaten var olan kurulumlarda yukarıdaki CREATE bir no-op olur —
     -- yeni sütunları var olan tabloya eklemek için ayrıca gerekli.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS morning_summary_phone TEXT;      -- CRM Faz 4: sabah WhatsApp özeti alıcısı (boşsa kapalı)
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS morning_summary_sent_on DATE;    -- aynı gün ikinci gönderimi engeller
     ALTER TABLE users ADD COLUMN IF NOT EXISTS calling_hours_start INT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS calling_hours_end   INT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS elevenlabs_cost_per_1k NUMERIC;

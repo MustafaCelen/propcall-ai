@@ -63,8 +63,11 @@
     <button class="tab-btn rail-item" data-tab="whatsapp">💬 WhatsApp</button>
     <button class="tab-btn rail-item" data-tab="smartPlans">🧠 Akıllı Plan</button>
     <div class="rail-sec">Öğren</div>
+    <button class="tab-btn rail-item" data-tab="funnel">🔻 Huni</button>
     <button class="tab-btn rail-item" data-tab="stats">📈 Raporlar</button>
     <button class="tab-btn rail-item" data-tab="roleplay">🎯 Pratik Yap</button>
+    <div class="rail-sec" id="railTeamSec" style="display:none">Ofis</div>
+    <button class="tab-btn rail-item" data-tab="team" id="railTeamBtn" style="display:none">👥 Ekip</button>
   </nav>
   <div class="left-panel-backdrop" id="leftPanelBackdrop"></div>
 
@@ -74,6 +77,16 @@
     <!-- ── TAB 0: BUGÜN ──────────────────────────────────── -->
     <div class="tab-content active" id="tabToday">
       <div class="today-scroll" id="todayRoot"><div class="today-loading">Yükleniyor…</div></div>
+    </div>
+
+    <!-- ── HUNİ RAPORU (CRM Faz 4) ──────────────────────── -->
+    <div class="tab-content" id="tabFunnel">
+      <div class="today-scroll" id="funnelRoot"><div class="today-loading">Yükleniyor…</div></div>
+    </div>
+
+    <!-- ── EKİP (manager/admin) ─────────────────────────── -->
+    <div class="tab-content" id="tabTeam">
+      <div class="today-scroll" id="teamRoot"><div class="today-loading">Yükleniyor…</div></div>
     </div>
 
     <!-- ── TAB 1: CANLI ──────────────────────────────────── -->
@@ -1289,6 +1302,7 @@
 <script src="terms.js"></script>
 <script src="app.js"></script>
 <script src="today.js"></script>
+<script src="reports.js"></script>
 <script src="leads.js"></script>
 <script src="whatsapp.js"></script>
 <script src="smartPlans.js"></script>

@@ -4,7 +4,10 @@
 import pool from './db';
 import { encryptSecret, decryptSecret } from './crypto';
 
-export type UserRole = 'agent' | 'admin';
+// manager = ofis yöneticisi: kendi panosuna ek olarak ekip görünümünü (/api/team/*) görür,
+// admin paneline (kullanıcı/jeton yönetimi) erişemez.
+export type UserRole = 'agent' | 'manager' | 'admin';
+export const USER_ROLES: readonly UserRole[] = ['agent', 'manager', 'admin'];
 
 export interface UserRow {
   id: string;
@@ -122,6 +125,18 @@ export async function listUsers(): Promise<UserRow[]> {
 
 export async function setUserActive(id: string, active: boolean): Promise<void> {
   await pool.query(`UPDATE users SET is_active = $2 WHERE id = $1`, [id, active]);
+}
+
+export async function setUserRole(id: string, role: UserRole): Promise<void> {
+  if (!USER_ROLES.includes(role)) throw new Error('Geçersiz rol');
+  await pool.query(`UPDATE users SET role = $2 WHERE id = $1`, [id, role]);
+}
+
+// Sabah özeti alıcı numarası (E.164). Boş string = kapat.
+export async function setUserMorningSummaryPhone(id: string, phone: string): Promise<void> {
+  const v = phone.trim();
+  if (v && !/^\+?\d{10,15}$/.test(v.replace(/[\s()-]/g, ''))) throw new Error('Telefon numarası geçersiz (örn. +905321234567)');
+  await pool.query(`UPDATE users SET morning_summary_phone = $2, morning_summary_sent_on = NULL WHERE id = $1`, [id, v ? v.replace(/[\s()-]/g, '') : null]);
 }
 
 export async function setUserPassword(id: string, passwordHash: string): Promise<void> {
@@ -543,12 +558,13 @@ export interface UserSettingsView {
   anthropicApiKey: UserSettingField;
   assistantName: UserSettingField;
   name: UserSettingField;
+  morningSummaryPhone: UserSettingField;
 }
 
 export async function getSettingsForUser(userId: string): Promise<UserSettingsView> {
   const { rows } = await pool.query(
     `SELECT vapi_api_key_enc, vapi_public_key, vapi_phone_number_id, vapi_assistant_id,
-            elevenlabs_api_key_enc, anthropic_api_key_enc, assistant_name, name
+            elevenlabs_api_key_enc, anthropic_api_key_enc, assistant_name, name, morning_summary_phone
      FROM users WHERE id = $1`,
     [userId],
   );
@@ -569,6 +585,7 @@ export async function getSettingsForUser(userId: string): Promise<UserSettingsVi
     anthropicApiKey: secretField(r.anthropic_api_key_enc),
     assistantName: plainField(r.assistant_name || 'Deniz'),
     name: plainField(r.name),
+    morningSummaryPhone: plainField(r.morning_summary_phone),
   };
 }
 

@@ -71,7 +71,7 @@ import {
   getUserVapiCredentials, getUserWebhookVerification, getUserElevenLabsKey, getUserAnthropicKey, resolveVapiCreds, getUserById,
   getUserVapiApiKey, resolveVapiCredsForAssistant,
   getUserBalance, adjustUserBalance, chargeForCall, listCreditTransactions, CALL_MINUTE_RATE_TRY,
-  setUserAssistantName, setUserName, createPendingFonzipTopup, creditFonzipTopup,
+  setUserAssistantName, setUserName, setUserRole, setUserMorningSummaryPhone, createPendingFonzipTopup, creditFonzipTopup,
   setUserMetaConfig, clearUserMetaConfig, getUserMetaConfig, getUserIdByMetaPageId,
   setUserWhatsappConfig, clearUserWhatsappConfig, getUserWhatsappConfig,
   recordTermsAcceptance,
@@ -81,7 +81,8 @@ import {
   getDebtAmount, getDebtDetails, verifyWebhookAuthToken, ensureWebhookRegistered,
   findPendingTopup, cleanupStalePendingTopups,
 } from './fonzip';
-import { hashPassword, verifyPassword, login, logout, getSessionUser, requireUserAuth, requireAdmin, CURRENT_TERMS_VERSION, cleanupExpiredSessions } from './auth';
+import { hashPassword, verifyPassword, login, logout, getSessionUser, requireUserAuth, requireAdmin, requireManager, CURRENT_TERMS_VERSION, cleanupExpiredSessions } from './auth';
+import { getFunnelReport, getTeamOverview, buildMorningSummaryText, runMorningSummaries } from './reports';
 import rateLimit from 'express-rate-limit';
 import { generateVapiPrompt, PromptGenInput } from './promptgen';
 import { getScriptRules, setScriptRules, lintGeneratedPrompt, rulesToSystemPromptAddendum } from './scriptRules';
@@ -232,11 +233,13 @@ async function provisionWebhookIfReady(userId: string): Promise<void> {
 app.put('/api/settings', requireUserAuth, async (req: Request, res: Response) => {
   try {
     const { key, value } = req.body as { key: string; value: string };
-    if (typeof value !== 'string' || !value.trim()) {
+    // morningSummaryPhone boş bırakılabilir (= sabah özetini kapat); diğerleri zorunlu.
+    if (typeof value !== 'string' || (!value.trim() && key !== 'morningSummaryPhone')) {
       return res.status(400).json({ success: false, error: 'Değer boş olamaz' });
     }
     const v = value.trim();
     switch (key) {
+      case 'morningSummaryPhone': await setUserMorningSummaryPhone(req.userId!, v); break;
       case 'vapiApiKey':          await setUserVapiCredentials(req.userId!, { apiKey: v }); break;
       case 'vapiPublicKey':       await setUserVapiCredentials(req.userId!, { publicKey: v }); break;
       case 'vapiPhoneNumberId':   await setUserVapiCredentials(req.userId!, { phoneNumberId: v }); break;
@@ -537,10 +540,16 @@ app.post('/api/admin/users', requireAdmin, async (req: Request, res: Response) =
 
 app.patch('/api/admin/users/:id', requireAdmin, async (req: Request, res: Response) => {
   try {
-    const { isActive, password, maxConcurrentCalls, name } = req.body as {
-      isActive?: boolean; password?: string; maxConcurrentCalls?: number; name?: string;
+    const { isActive, password, maxConcurrentCalls, name, role } = req.body as {
+      isActive?: boolean; password?: string; maxConcurrentCalls?: number; name?: string; role?: string;
     };
     if (isActive !== undefined) await setUserActive(req.params.id, isActive);
+    if (role !== undefined) {
+      // Admin rolü buradan verilmez/alınmaz (bootstrap ile tek admin); sadece danışman ↔ yönetici.
+      if (role !== 'agent' && role !== 'manager') return res.status(400).json({ success: false, error: 'Rol agent veya manager olmalı' });
+      if (req.params.id === req.userId) return res.status(400).json({ success: false, error: 'Kendi rolünüzü değiştiremezsiniz' });
+      await setUserRole(req.params.id, role);
+    }
     if (password?.trim())      await setUserPassword(req.params.id, hashPassword(password));
     if (maxConcurrentCalls !== undefined) {
       // 0/negatif girilirse kampanya motoru hiç slot açamaz ve kampanya sessizce
@@ -1734,6 +1743,32 @@ app.delete('/api/leads/:id', requireUserAuth, async (req: Request, res: Response
   } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
+// ─── CRM Faz 4: huni raporu + ekip görünümü ────────────────────────────────
+app.get('/api/reports/funnel', requireUserAuth, async (req: Request, res: Response) => {
+  try {
+    const days = Number(req.query.days) || 30;
+    return res.json({ success: true, data: await getFunnelReport(req.userId!, days) });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+app.get('/api/team/overview', requireManager, async (_req: Request, res: Response) => {
+  try { return res.json({ success: true, data: await getTeamOverview() }); }
+  catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+app.get('/api/team/funnel/:userId', requireManager, async (req: Request, res: Response) => {
+  try {
+    const days = Number(req.query.days) || 30;
+    return res.json({ success: true, data: await getFunnelReport(req.params.userId, days) });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+// Sabah özetinin metnini önizle (göndermeden) — ayarlar sayfasındaki "Örnek gör" için.
+app.get('/api/reports/morning-preview', requireUserAuth, async (req: Request, res: Response) => {
+  try { return res.json({ success: true, data: { text: await buildMorningSummaryText(req.userId!, req.user?.name ?? null) } }); }
+  catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
 app.get('/api/leads/:id/timeline', requireUserAuth, async (req: Request, res: Response) => {
   try {
     const events = await getLeadTimeline(req.userId!, req.params.id);
@@ -2637,6 +2672,12 @@ initDb()
         if (n > 0) console.log(`[Reconcile] Periyodik tarama: ${n} eski "in-progress" arama kapatıldı`);
       } catch (err) { console.error('[Reconcile] Periyodik tarama hatası:', err); }
     }, 15 * 60_000).unref();
+
+    // CRM Faz 4: sabah WhatsApp özeti — her dakika bakar, 08:30–09:00 İstanbul
+    // penceresinde ve o gün gönderilmemişse yollar (bkz. src/reports.ts).
+    setInterval(() => {
+      runMorningSummaries().catch(err => console.error('[Sabah] Özet işi hatası:', err));
+    }, 60_000).unref();
 
     // Vapi bilgileri tam ama henüz webhook secret'ı üretilmemiş kullanıcılar için
     // (örn. eski global ayarlardan taşınan bootstrap admin) otomatik kurulum tamamla.

@@ -413,7 +413,7 @@ function renderUsers(users) {
     <tr data-id="${u.id}">
       <td>${esc(u.email)}</td>
       <td>${esc(u.name || '—')}</td>
-      <td><span class="adm-role-tag ${u.role}">${u.role === 'admin' ? 'Admin' : 'Danışman'}</span></td>
+      <td><span class="adm-role-tag ${u.role}">${u.role === 'admin' ? 'Admin' : u.role === 'manager' ? 'Yönetici' : 'Danışman'}</span></td>
       <td><span class="adm-status-tag ${u.isActive ? 'active' : 'inactive'}">${u.isActive ? 'Aktif' : 'Pasif'}</span></td>
       <td class="adm-balance" data-balance>${Number(u.balanceTry || 0).toFixed(2)} TL</td>
       <td>${fmtDate(u.lastLoginAt)}</td>
@@ -422,6 +422,7 @@ function renderUsers(users) {
           <button class="adm-mini-btn" data-action="edit-name">Adı Düzenle</button>
           <button class="adm-mini-btn" data-action="topup">Jeton Yükle</button>
           <button class="adm-mini-btn" data-action="toggle">${u.isActive ? 'Devre Dışı Bırak' : 'Aktifleştir'}</button>
+          ${u.role !== 'admin' ? `<button class="adm-mini-btn" data-action="role" data-role="${u.role === 'manager' ? 'agent' : 'manager'}">${u.role === 'manager' ? 'Danışman Yap' : 'Yönetici Yap'}</button>` : ''}
           <button class="adm-mini-btn" data-action="reset-pw">Şifre Sıfırla</button>
         </div>
       </td>
@@ -433,6 +434,20 @@ function renderUsers(users) {
   });
   tbody.querySelectorAll('[data-action="toggle"]').forEach(btn => {
     btn.addEventListener('click', () => toggleActive(btn.closest('tr').dataset.id, btn));
+  });
+  // Danışman ↔ Yönetici (ofis yöneticisi ekip görünümünü görür, admin paneline giremez)
+  tbody.querySelectorAll('[data-action="role"]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        const r = await fetch('/api/admin/users/' + btn.closest('tr').dataset.id, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role: btn.dataset.role }),
+        });
+        const j = await r.json();
+        if (!j.success) throw new Error(j.error || 'Rol değiştirilemedi');
+        loadUsers();
+      } catch (err) { alert('✗ ' + err.message); btn.disabled = false; }
+    });
   });
   tbody.querySelectorAll('[data-action="reset-pw"]').forEach(btn => {
     btn.addEventListener('click', () => resetPassword(btn.closest('tr').dataset.id));

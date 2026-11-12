@@ -161,6 +161,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     CURRENT_USER_ID = session.data?.id || null;
     window.CURRENT_USER_NAME = session.data?.name || '';
     if (session.data?.role === 'admin' && $('linkUsers')) $('linkUsers').style.display = '';
+    window.CURRENT_USER_ROLE = session.data?.role || 'agent';
+    if (session.data?.role === 'admin' || session.data?.role === 'manager') {
+      if ($('railTeamSec')) $('railTeamSec').style.display = '';
+      if ($('railTeamBtn')) $('railTeamBtn').style.display = '';
+    }
     if (session.data && session.data.termsAcceptedVersion !== CURRENT_TERMS_VERSION) {
       showTermsGate();
       return; // Onaylanana kadar uygulamanın geri kalanı kurulmaz — kısmi/tutarsız
@@ -370,10 +375,14 @@ function switchTab(name) {
                   (name === 'leads'           && c.id === 'tabLeads')           ||
                   (name === 'whatsapp'        && c.id === 'tabWhatsapp')        ||
                   (name === 'smartPlans'      && c.id === 'tabSmartPlans')      ||
-                  (name === 'roleplay'        && c.id === 'tabRoleplay');
+                  (name === 'roleplay'        && c.id === 'tabRoleplay')        ||
+                  (name === 'funnel'          && c.id === 'tabFunnel')          ||
+                  (name === 'team'            && c.id === 'tabTeam');
     c.classList.toggle('active', match);
   });
   if (name === 'today' && typeof loadToday === 'function') loadToday();
+  if (name === 'funnel' && typeof loadFunnel === 'function') loadFunnel();
+  if (name === 'team' && typeof loadTeam === 'function') loadTeam();
   if (name === 'campaignHistory') loadCampaignHistory();
   if (name === 'history') loadHistory();
   // Dar ekranda menü çekmecesi seçimden sonra kapanır.
