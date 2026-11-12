@@ -95,6 +95,19 @@
   </details>
 
   <details class="adm-card">
+    <summary class="adm-section-title">📶 Vapi Hesapları ve Hat Kapasitesi <span style="font-weight:400;color:var(--txm);font-size:11px">(eşzamanlı arama tavanı hesap başına)</span></summary>
+    <div class="adm-field-hint" style="margin-bottom:14px">Vapi eşzamanlı arama sınırını danışman başına değil <strong>hesap (API anahtarı) başına</strong> uygular (standart plan: 10 hat). Aynı anahtarı kullanan danışmanlar otomatik olarak aynı hesapta gruplanır; kampanya motoru hesabın hatlarını o an kampanya çalıştıran danışmanlar arasında adil paylaştırır. Yeni bir Vapi hesabı açıldığında danışmanın anahtarını Ayarlarım'dan değiştirmesi yeterlidir — burada kendiliğinden yeni satır oluşur.</div>
+    <table class="adm-table">
+      <thead>
+        <tr><th>Hesap</th><th>Anahtar</th><th class="adm-num">Hat Tavanı</th><th class="adm-num">Şu an aktif</th><th>Danışmanlar</th><th>İşlem</th></tr>
+      </thead>
+      <tbody id="vapiAccBody">
+        <tr><td colspan="6" class="adm-table-empty">Yükleniyor...</td></tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details class="adm-card">
     <summary class="adm-section-title">⛔ Ret Listesi (Beni Aramayın) <span style="font-weight:400;color:var(--txm);font-size:11px">(tüm danışmanları etkiler — global)</span></summary>
     <div class="adm-field-hint" style="margin-bottom:14px">Bir müşteri görüşme sırasında açıkça "bir daha aramayın" dediğinde AI bunu otomatik tespit edip buraya ekler — bu numara artık HİÇBİR danışman tarafından aranamaz. Yanlış bir tespit görürsen aşağıdan kaldırabilirsin. Elle de numara ekleyebilirsin.</div>
     <div class="adm-form-row">
@@ -151,6 +164,52 @@ async function checkSession() {
   loadAdminStats();
   loadScriptRules();
   loadDncList();
+  loadVapiAccounts();
+}
+
+async function loadVapiAccounts() {
+  try {
+    const r = await fetch('/api/admin/vapi-accounts');
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error);
+    renderVapiAccounts(j.data);
+  } catch (err) {
+    $('vapiAccBody').innerHTML = '<tr><td colspan="6" class="adm-table-empty">Hata: ' + esc(err.message) + '</td></tr>';
+  }
+}
+
+function renderVapiAccounts(rows) {
+  const tbody = $('vapiAccBody');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="adm-table-empty">Henüz Vapi anahtarı tanımlı danışman yok</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(a => `
+    <tr data-key="${esc(a.key)}">
+      <td><input type="text" class="va-label" value="${esc(a.label || '')}" placeholder="Hesap ${esc(a.apiKeyHint)}" style="width:150px" /></td>
+      <td style="font-family:monospace">${esc(a.apiKeyHint)}</td>
+      <td class="adm-num"><input type="number" class="va-cap" min="1" max="100" value="${a.maxConcurrent}" style="width:64px" /></td>
+      <td class="adm-num">${a.live.active} / ${a.maxConcurrent}</td>
+      <td>${a.users.length
+        ? a.users.map(u => `<span title="${esc(u.email)} · kişisel tavan ${u.maxConcurrentCalls}" style="${u.isActive ? '' : 'opacity:.5;text-decoration:line-through'}">${esc(u.name || u.email)}${a.live.byUser[u.id] ? ` <strong>(${a.live.byUser[u.id]} aktif)</strong>` : ''}</span>`).join(', ')
+        : '<span style="color:var(--txm)">— (bu anahtarı kullanan danışman kalmadı)</span>'}</td>
+      <td><button class="adm-btn va-save">Kaydet</button></td>
+    </tr>
+  `).join('');
+  tbody.querySelectorAll('tr[data-key]').forEach(tr => {
+    tr.querySelector('.va-save').addEventListener('click', async () => {
+      try {
+        const r = await fetch('/api/admin/vapi-accounts/' + encodeURIComponent(tr.dataset.key), {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label: tr.querySelector('.va-label').value, maxConcurrent: Number(tr.querySelector('.va-cap').value) }),
+        });
+        const j = await r.json();
+        if (!j.success) throw new Error(j.error);
+        toast('✓ Hesap güncellendi', 'success');
+        loadVapiAccounts();
+      } catch (err) { toast('✗ ' + err.message, 'error'); }
+    });
+  });
 }
 
 async function loadAdminStats() {

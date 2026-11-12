@@ -101,6 +101,18 @@ export async function initDb(): Promise<void> {
       created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    -- Vapi HESAPLARI (API anahtarı bazlı) — eşzamanlı arama tavanı hesap başına
+    -- uygulanır ve hesabı paylaşan danışmanlar arasında adil bölüşülür (bkz.
+    -- src/vapiAccounts.ts, campaign.ts fairShareAllocation). Anahtarın kendisi
+    -- tutulmaz; account_key = sha256(anahtar)[0:16], api_key_hint = son 4 karakter.
+    CREATE TABLE IF NOT EXISTS vapi_accounts (
+      account_key    TEXT PRIMARY KEY,
+      label          TEXT,
+      api_key_hint   TEXT,
+      max_concurrent INT NOT NULL DEFAULT 10,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     -- Jeton (TL) hareketleri — her yükleme/ücretlendirme kalıcı bir satır. balance_try
     -- hızlı okunabilir güncel bakiye, buradaki kayıtlar denetim/geçmiş içindir.
     CREATE TABLE IF NOT EXISTS credit_transactions (

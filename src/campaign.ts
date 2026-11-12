@@ -23,6 +23,7 @@ import { getScenario } from './scenarios';
 import { pickOpeningVariant, buildCallPrompt, nameVariableValues, resolveWaitForGreeting } from './opening';
 import { resolveVapiCreds, getUserById, getUserElevenLabsKey, CALL_MINUTE_RATE_TRY } from './users';
 import { CustomerInfo, CallSummary } from './types';
+import { resolveVapiAccountForUser, DEFAULT_VAPI_ACCOUNT_MAX_CONCURRENT } from './vapiAccounts';
 import {
   CampaignContact, CampaignRecord, CampaignStatus, SkipKind,
   createCampaign, getAllActiveCampaigns, isSkipResumable, isLimitSkip,
@@ -72,6 +73,10 @@ interface CampaignEngineEntry {
   // autoHeld'den FARKLI: o kendiliğinden kalkar, bu kalkmaz — danışmanın limiti
   // yükseltmesi ya da kampanyayı bitirmesi gerekir.
   limitReached?: 'call' | 'answered';
+  // Hesap bazlı kapasite paylaşımı için her tick'te tazelenen önbellek (bkz.
+  // fillQueue → resolveVapiAccountForUser). 'none' = kullanıcının Vapi anahtarı yok.
+  vapiAccountKey?: string;
+  userCeiling?: number;
 }
 
 // Dışa açık görünüm — bugünkü frontend'in beklediği şekle birebir uyar.
@@ -929,20 +934,107 @@ function countUserActiveCalls(userId: string): number {
   return total;
 }
 
-// Vapi hesabındaki TÜM danışmanlar arası PAYLAŞILAN eşzamanlı-arama tavanı (Vapi
-// plan/telefon numarası limiti — hesap başına, kullanıcı başına değil). Kullanıcı
-// bazlı maxConcurrentCalls bunun farkında değil: 3 danışman kendi tavanına kadar
-// (örn. 5+5+5) aramaya çalışırsa toplam bu hesap limitini kolayca aşabilir. Vapi
-// aşımı 429/"concurrent" hatasıyla reddeder ve o kişi hiç denenmeden "başarısız"
-// yakılırdı — burada tüm kullanıcılar genelinde toplam aktif aramayı sayıp fillQueue
-// içinde ek bir tavan olarak uygulayarak, reddedilecek istekleri hiç göndermeyip
-// slotu doğal olarak diğer danışmana bırakıyoruz (kuyruk/load-balance, retry değil).
-const VAPI_ACCOUNT_MAX_CONCURRENT = 10;
+// Vapi HESABINDAKİ (aynı API anahtarını kullanan) TÜM danışmanlar arası PAYLAŞILAN
+// eşzamanlı-arama tavanı (Vapi plan limiti — hesap başına, kullanıcı başına değil).
+// Kullanıcı bazlı maxConcurrentCalls bunun farkında değil: 3 danışman kendi tavanına
+// kadar (örn. 5+5+5) aramaya çalışırsa toplam hesap limitini kolayca aşar. Vapi aşımı
+// 429/"concurrent" hatasıyla reddeder ve o kişi hiç denenmeden "başarısız" yakılırdı.
+//
+// Burada iki şey yapılır:
+//  1) Hesap genelinde aktif arama sayılır, tavan aşılacaksa istek hiç gönderilmez
+//     (kişi 'bekliyor'da kalır, hat boşalınca sonraki tick'te denenir).
+//  2) Tavan, o an talebi olan danışmanlar arasında MAX-MIN ADİL bölüşülür
+//     (fairShareAllocation): 10 hatlık hesapta 2 danışman çalışıyorsa 5+5, biri
+//     sadece 2 istiyorsa 2+8. Önceden ilk başlayan tüm hatları kapıp diğerini
+//     süresiz bekletebiliyordu.
+// Hesap tavanı admin panelinden hesap başına ayarlanır (bkz. src/vapiAccounts.ts).
+const NO_ACCOUNT = 'none';
 
-function countAccountActiveCalls(): number {
+function accountEngines(accountKey: string): CampaignEngineEntry[] {
+  return [...engines.values()].filter(e => (e.vapiAccountKey ?? NO_ACCOUNT) === accountKey);
+}
+
+function countActive(e: CampaignEngineEntry): number {
+  return e.contacts.filter(c => c.status === 'arıyor').length;
+}
+
+function countAccountActiveCalls(accountKey: string): number {
   let total = 0;
-  for (const e of engines.values()) total += e.contacts.filter(c => c.status === 'arıyor').length;
+  for (const e of accountEngines(accountKey)) total += countActive(e);
   return total;
+}
+
+// Bir kampanyanın ŞU AN hat talebi: aktif aramalar + sıradaki aranabilir kişiler,
+// kampanyanın kendi maxConcurrent'ıyla sınırlı. Çalışmayan/duraklatılmış/arama
+// saati dışındaki kampanyalar talep etmez.
+function engineDemand(e: CampaignEngineEntry, now: number): number {
+  if (!e.running || e.paused || e.autoHeld === 'calling-hours') return 0;
+  const startIdx = e.startFromIndex ?? 0;
+  let runnable = 0;
+  for (let i = startIdx; i < e.contacts.length; i++) {
+    const c = e.contacts[i];
+    if (c.status === 'bekliyor') runnable++;
+    else if (c.status === 'tekrar-planlandı' && c.nextRetryAt && new Date(c.nextRetryAt).getTime() <= now) runnable++;
+  }
+  return Math.min(e.maxConcurrent, countActive(e) + runnable);
+}
+
+// Max-min adil paylaşım (water-filling): talebi küçükten büyüğe sıralanan
+// danışmanlara sırayla "kalan / kalan kişi" kadar verilir; az isteyenin artığı
+// çok isteyenlere kalır. Bölünemeyen artık slot sıralamada sondaki danışmana düşer
+// (userId'ye göre deterministik — tick'ler arasında zıplamaz).
+export function fairShareAllocation(cap: number, demands: Map<string, number>): Map<string, number> {
+  const alloc = new Map<string, number>();
+  const sorted = [...demands.entries()].sort((a, b) => (a[1] - b[1]) || (a[0] < b[0] ? -1 : 1));
+  let remaining = Math.max(0, cap);
+  let left = sorted.length;
+  for (const [uid, d] of sorted) {
+    const give = Math.min(d, Math.floor(remaining / left));
+    alloc.set(uid, give);
+    remaining -= give;
+    left--;
+  }
+  return alloc;
+}
+
+// Bu kullanıcının, bulunduğu Vapi hesabında ŞU AN açabileceği ek slot sayısı.
+// Hem adil paya (alloc - kendi aktifleri) hem de hesabın ham boşluğuna (cap -
+// hesap aktifleri) bakılır: başkası payından fazlasını tutuyorsa bile tavan aşılmaz,
+// o aramalar bittikçe bu kullanıcı kendi payına yükselir.
+function accountSlotsFor(entry: CampaignEngineEntry, cap: number): number {
+  const accountKey = entry.vapiAccountKey ?? NO_ACCOUNT;
+  const now = Date.now();
+  const demands = new Map<string, number>();
+  const ceilings = new Map<string, number>();
+  for (const e of accountEngines(accountKey)) {
+    const d = engineDemand(e, now);
+    if (d <= 0 && e.userId !== entry.userId) continue;
+    demands.set(e.userId, (demands.get(e.userId) ?? 0) + d);
+    if (e.userCeiling) ceilings.set(e.userId, e.userCeiling);
+  }
+  for (const [uid, d] of demands) {
+    const ceil = ceilings.get(uid);
+    if (ceil) demands.set(uid, Math.min(d, ceil));
+  }
+  const alloc = fairShareAllocation(cap, demands);
+  const mine = alloc.get(entry.userId) ?? 0;
+  const byShare = mine - countUserActiveCalls(entry.userId);
+  const byCap   = cap - countAccountActiveCalls(accountKey);
+  return Math.max(0, Math.min(byShare, byCap));
+}
+
+// Admin paneli: hesap başına canlı aktif arama sayısı (danışman kırılımıyla).
+export function getLiveAccountStats(): Record<string, { active: number; byUser: Record<string, number> }> {
+  const out: Record<string, { active: number; byUser: Record<string, number> }> = {};
+  for (const e of engines.values()) {
+    const key = e.vapiAccountKey ?? NO_ACCOUNT;
+    const n = countActive(e);
+    if (!n) continue;
+    const row = out[key] ?? (out[key] = { active: 0, byUser: {} });
+    row.active += n;
+    row.byUser[e.userId] = (row.byUser[e.userId] ?? 0) + n;
+  }
+  return out;
 }
 
 // Türkiye tek dilim (Europe/Istanbul, DST yok 2016'dan beri) — danışman bazlı
@@ -1139,13 +1231,15 @@ async function fillQueue(entry: CampaignEngineEntry): Promise<void> {
     slots = Math.min(slots, capped);
   }
 
-  // Hesap-genelinde (TÜM danışmanlar) paylaşılan Vapi tavanı — kullanıcı tavanının
-  // içinde kalsa bile başka danışmanların aktif aramaları toplamı hesap limitine
-  // çarpabilir. Burada slotu daraltıyoruz, kimseyi reddetmiyoruz: kalan kişi
+  // Vapi hesabı genelinde (aynı anahtarı kullanan TÜM danışmanlar) paylaşılan tavan
+  // ve adil pay — bkz. accountSlotsFor. Slot daraltılır, kimse reddedilmez: kalan kişi
   // 'bekliyor'da kalır, bir sonraki tick'te (5-15sn) hat boşalınca otomatik denenir.
+  const account = await resolveVapiAccountForUser(entry.userId);
+  entry.vapiAccountKey = account?.key ?? 'none';
+  entry.userCeiling    = user?.maxConcurrentCalls ?? 3;
+  const accountCap = account?.maxConcurrent ?? DEFAULT_VAPI_ACCOUNT_MAX_CONCURRENT;
   if (slots > 0) {
-    const accountActive = countAccountActiveCalls();
-    const accountCapped = Math.max(0, VAPI_ACCOUNT_MAX_CONCURRENT - accountActive);
+    const accountCapped = accountSlotsFor(entry, accountCap);
     if (accountCapped < slots) concurrencyLimited = true;
     slots = Math.min(slots, accountCapped);
   }
@@ -1208,6 +1302,11 @@ async function fillQueue(entry: CampaignEngineEntry): Promise<void> {
       continue;
     }
 
+    // Yukarıdaki await'ler sırasında (ret listesi / tekrar arama kontrolü) aynı
+    // hesaptaki başka bir kampanyanın fillQueue'su paralel slot açmış olabilir
+    // (tickAll kampanyaları paralel işler). Aramayı göndermeden hemen önce hesap
+    // boşluğunu senkron olarak yeniden doğrula — Vapi'den 429 yemektense bekle.
+    if (accountSlotsFor(entry, accountCap) <= 0) { concurrencyLimited = true; break; }
     callContact(entry, i);
     started++;
   }

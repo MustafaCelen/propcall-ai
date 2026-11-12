@@ -58,7 +58,9 @@ import {
   campaignLoad, campaignStart, campaignResume, campaignPause, campaignStop, campaignClear,
   campaignRetryFailed, campaignDismissLimitNotice, onCampaignCallEnded, onCampaignSummaryReady,
   resyncCampaignSummaries, campaignDiscardDraft, campaignRerun, RERUN_SCOPES, RerunScope,
+  getLiveAccountStats,
 } from './campaign';
+import { listVapiAccountsForAdmin, updateVapiAccount } from './vapiAccounts';
 import { listCampaigns, getCampaign, deleteCampaignRecord } from './campaigns';
 import { translateDialError, toClientError } from './campaignErrors';
 import {
@@ -2113,6 +2115,33 @@ app.delete('/api/admin/dnc-list/:phone', requireAdmin, async (req: Request, res:
   try {
     const removed = await removeFromDoNotCallList(decodeURIComponent(req.params.phone));
     if (!removed) return res.status(404).json({ success: false, error: 'Numara ret listesinde bulunamadı' });
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+// Vapi hesapları ve hat kapasitesi (bkz. src/vapiAccounts.ts). Tavan hesap başına;
+// hesabı paylaşan danışmanlar arasında kampanya motoru adil bölüştürür.
+app.get('/api/admin/vapi-accounts', requireAdmin, async (_req: Request, res: Response) => {
+  try {
+    const accounts = await listVapiAccountsForAdmin();
+    const live = getLiveAccountStats();
+    return res.json({ success: true, data: accounts.map(a => ({ ...a, live: live[a.key] ?? { active: 0, byUser: {} } })) });
+  } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
+});
+
+app.patch('/api/admin/vapi-accounts/:key', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const { label, maxConcurrent } = req.body as { label?: string | null; maxConcurrent?: number };
+    let cap: number | undefined;
+    if (maxConcurrent !== undefined) {
+      const n = Number(maxConcurrent);
+      if (!Number.isFinite(n) || n < 1 || n > 100) {
+        return res.status(400).json({ success: false, error: 'Hesap hat sayısı 1 ile 100 arasında olmalı' });
+      }
+      cap = Math.round(n);
+    }
+    const ok = await updateVapiAccount(req.params.key, { label, maxConcurrent: cap });
+    if (!ok) return res.status(404).json({ success: false, error: 'Hesap bulunamadı' });
     return res.json({ success: true });
   } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
