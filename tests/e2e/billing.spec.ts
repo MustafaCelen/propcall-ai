@@ -43,19 +43,23 @@ test.describe('Jeton / bakiye', () => {
     expect(addRes.ok()).toBeTruthy();
     expect((await addRes.json()).success).toBeTruthy();
 
-    const afterAdd = await getBalance(request);
-    expect(afterAdd).toBeCloseTo(before + 7, 2);
+    // Ekleme başarılı olduktan sonra ne olursa olsun geri alınmalı — aradaki bir
+    // assertion patlarsa staging bakiyesi +7 TL şişmiş kalmasın.
+    try {
+      const afterAdd = await getBalance(request);
+      expect(afterAdd).toBeCloseTo(before + 7, 2);
 
-    // Hareket kaydı listede görünmeli — bakiye değişti ama iz bırakmadıysa
-    // muhasebe tutmaz.
-    const billing = await (await request.get('/api/billing')).json();
-    expect(billing.data.transactions.some((t: any) => t.note === note)).toBeTruthy();
-
-    // Geri al — staging bakiyesini başladığı yere döndür.
-    const undoRes = await request.post(`/api/admin/users/${userId}/balance`, {
-      data: { amount: -7, note: note + ' (geri alma)' },
-    });
-    expect(undoRes.ok()).toBeTruthy();
+      // Hareket kaydı listede görünmeli — bakiye değişti ama iz bırakmadıysa
+      // muhasebe tutmaz.
+      const billing = await (await request.get('/api/billing')).json();
+      expect(billing.data.transactions.some((t: any) => t.note === note)).toBeTruthy();
+    } finally {
+      // Geri al — staging bakiyesini başladığı yere döndür.
+      const undoRes = await request.post(`/api/admin/users/${userId}/balance`, {
+        data: { amount: -7, note: note + ' (geri alma)' },
+      });
+      expect(undoRes.ok()).toBeTruthy();
+    }
     expect(await getBalance(request)).toBeCloseTo(before, 2);
   });
 

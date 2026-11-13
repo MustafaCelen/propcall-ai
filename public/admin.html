@@ -47,7 +47,7 @@
       </div>
       <button class="adm-btn" id="btnCreate">Ekle</button>
     </div>
-    <div class="adm-form-hint">Danışman ilk girişten sonra şifresini kendi değiştiremez henüz — gerekirse buradan sıfırlayabilirsin. Vapi/ElevenLabs/Anthropic ve varsayılan senaryo otomatik atanır (tanımlıysa) — sadece telefon numarasını danışman kendisi Ayarlarım'dan seçmeli.</div>
+    <div class="adm-form-hint">Danışman şifresini daha sonra Ayarlar &gt; Şifre Değiştir'den kendisi değiştirebilir — gerekirse buradan da sıfırlayabilirsin. Vapi/ElevenLabs/Anthropic ve varsayılan senaryo otomatik atanır (tanımlıysa) — sadece telefon numarasını danışman kendisi Ayarlarım'dan seçmeli.</div>
   </div>
 
   <div class="adm-card">
@@ -310,7 +310,7 @@ async function runHealthCheck() {
 
     if (j.data.saglikli) {
       tbody.innerHTML += '<tr><td colspan="3" style="padding-top:10px;color:var(--primary)">' +
-        'Tum kontroller temiz — mantiksal olarak tutarsiz kayit yok.</td></tr>';
+        'Tüm kontroller temiz — mantıksal olarak tutarsız kayıt yok.</td></tr>';
     }
   } catch (err) {
     tbody.innerHTML = '<tr><td colspan="3" class="adm-table-empty">Hata: ' + esc(err.message) + '</td></tr>';
@@ -527,22 +527,35 @@ async function toggleActive(id, btn) {
     if (!sure) return;
   }
   btn.disabled = true;
-  await fetch('/api/admin/users/' + id, {
-    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ isActive: !isActive }),
-  });
-  toast(isActive ? 'Danışman devre dışı bırakıldı' : 'Danışman aktifleştirildi', 'info');
+  try {
+    const r = await fetch('/api/admin/users/' + id, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isActive: !isActive }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.success) throw new Error(j.error || ('HTTP ' + r.status));
+    toast(isActive ? 'Danışman devre dışı bırakıldı' : 'Danışman aktifleştirildi', 'info');
+  } catch (err) {
+    toast('Hata: ' + err.message, 'error');
+    btn.disabled = false;
+  }
   loadUsers();
 }
 
 async function resetPassword(id) {
   const pw = await uiPrompt('Yeni geçici şifre girin:', { title: 'Şifre Sıfırla', placeholder: 'yeni şifre' });
   if (!pw || !pw.trim()) return;
-  await fetch('/api/admin/users/' + id, {
-    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password: pw.trim() }),
-  });
-  toast('Şifre güncellendi', 'success');
+  try {
+    const r = await fetch('/api/admin/users/' + id, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pw.trim() }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.success) throw new Error(j.error || ('HTTP ' + r.status));
+    toast('Şifre güncellendi', 'success');
+  } catch (err) {
+    toast('Hata: ' + err.message, 'error');
+  }
 }
 
 $('btnCreate').addEventListener('click', async () => {
@@ -561,12 +574,18 @@ $('btnCreate').addEventListener('click', async () => {
   }
 
   $('btnCreate').disabled = true;
-  const r = await fetch('/api/admin/users', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, name, password }),
-  });
-  const j = await r.json();
-  $('btnCreate').disabled = false;
+  let j;
+  try {
+    const r = await fetch('/api/admin/users', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, name, password }),
+    });
+    j = await r.json().catch(() => ({ success: false, error: 'HTTP ' + r.status }));
+  } catch (err) {
+    j = { success: false, error: err.message };
+  } finally {
+    $('btnCreate').disabled = false;
+  }
 
   if (!j.success) {
     errEl.textContent = j.error || 'Eklenemedi';

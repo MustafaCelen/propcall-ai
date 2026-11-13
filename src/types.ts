@@ -49,6 +49,9 @@ export interface CallRecord {
   endTime?: string;
   duration?: number;
   transcript: VapiTranscriptEntry[];
+  // Sadece liste (GET /api/calls) yanıtında: transkript metni listede taşınmaz,
+  // yerine mesaj sayısı gelir (bkz. calls.ts getAllCalls).
+  transcriptCount?: number;
   costs: CallCosts;
   summary?: CallSummary;
   recordingUrl?: string;
@@ -185,6 +188,7 @@ export interface CallFilters {
   aksiyon?: string;
   status?: string;
   scenarioId?: string;
+  limit?: number; // liste üst sınırı (varsayılan 500, en çok 2000 — bkz. calls.ts getAllCalls)
 }
 
 export interface ApiResponse<T = unknown> {

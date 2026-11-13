@@ -14,33 +14,39 @@ async function pausePlan(request: any, id: string) {
 test.describe('Akıllı Plan — oluşturma (asla otomatik tetiklenmeden)', () => {
   test('STATIC_LIST kuralıyla plan oluşur, hemen duraklatılır, listede görünür', async ({ request }) => {
     const lead = await createTestLead(request, { firstName: 'Smart Plan Target ' + Date.now() });
+    let planId: string | undefined;
 
-    const createRes = await request.post('/api/smart-plans', {
-      data: {
-        name: 'E2E Smart Plan ' + Date.now(),
-        daysOfWeek: [1, 2, 3, 4, 5],
-        windowStartHour: 9,
-        windowEndHour: 18,
-        maxConcurrent: 1,
-        dailyCallCap: 0,
-        segmentRule: { type: 'STATIC_LIST', leadIds: [lead.id] },
-      },
-    });
-    expect(createRes.ok()).toBeTruthy();
-    const plan = (await createRes.json()).data;
-    expect(plan.status).toBe('active');
+    // Bir assertion patlasa bile plan (aktif kalırsa scheduler tetikleyebilir!) ve
+    // aday staging'de kalmasın.
+    try {
+      const createRes = await request.post('/api/smart-plans', {
+        data: {
+          name: 'E2E Smart Plan ' + Date.now(),
+          daysOfWeek: [1, 2, 3, 4, 5],
+          windowStartHour: 9,
+          windowEndHour: 18,
+          maxConcurrent: 1,
+          dailyCallCap: 0,
+          segmentRule: { type: 'STATIC_LIST', leadIds: [lead.id] },
+        },
+      });
+      expect(createRes.ok()).toBeTruthy();
+      const plan = (await createRes.json()).data;
+      planId = plan.id;
 
-    // Otomatik tetiklenme riskini sıfırla — scheduler artık bu planı görmez.
-    await pausePlan(request, plan.id);
+      // Otomatik tetiklenme riskini sıfırla — scheduler artık bu planı görmez.
+      await pausePlan(request, plan.id);
+      expect(plan.status).toBe('active');
 
-    const listRes = await request.get('/api/smart-plans');
-    const list = (await listRes.json()).data;
-    const found = list.find((p: any) => p.id === plan.id);
-    expect(found).toBeTruthy();
-    expect(found.status).toBe('paused');
-
-    await deleteSmartPlan(request, plan.id);
-    await deleteLead(request, lead.id);
+      const listRes = await request.get('/api/smart-plans');
+      const list = (await listRes.json()).data;
+      const found = list.find((p: any) => p.id === plan.id);
+      expect(found).toBeTruthy();
+      expect(found.status).toBe('paused');
+    } finally {
+      if (planId) await deleteSmartPlan(request, planId);
+      await deleteLead(request, lead.id);
+    }
   });
 
   test('segment önizleme (preview-segment) gerçek sayı döner', async ({ request }) => {

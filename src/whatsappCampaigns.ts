@@ -8,6 +8,7 @@ import { WhatsappMessage, WhatsappCampaign, WhatsappCampaignFilter, Lead, normal
 import { getUserWhatsappConfig } from './users';
 import { sendWhatsAppMessage } from './whatsapp';
 import { getTemplate } from './whatsappTemplates';
+import { isPhoneBlocked } from './dncList';
 
 function newId(prefix: string): string {
   return prefix + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
@@ -95,6 +96,10 @@ export async function sendSingleMessage(
   const { rows: leadRows } = await pool.query(`SELECT data FROM leads WHERE id = $1 AND user_id = $2`, [leadId, userId]);
   const lead = leadRows[0]?.data as Lead | undefined;
   if (!lead?.phone) throw new Error('Adayın telefon numarası yok');
+  // "Beni bir daha aramayın/yazmayın" korumaları — arama motoruyla (campaign.ts fillQueue)
+  // aynı ret listesi; whatsappIgnored ise danışmanın bu kişi için koyduğu sessizlik bayrağı.
+  if (lead.whatsappIgnored) throw new Error('Bu aday WhatsApp yazışmalarından muaf tutulmuş — mesaj gönderilmedi.');
+  if (await isPhoneBlocked(lead.phone)) throw new Error('Bu numara ret listesinde — "bir daha aramayın" talebinde bulunmuş, mesaj gönderilmedi.');
 
   const id = newId('wam');
   try {
@@ -140,9 +145,14 @@ export async function sendSingleMessage(
 // diye. timestamp verilmezse (Twilio'da olduğu gibi) DB'nin NOW()'ı kullanılır; Baileys
 // hem canlı hem GEÇMİŞ mesajlar için gerçek WhatsApp zaman damgasını verir — bunsuz
 // geçmiş mesajlar hep "şimdi" ile kaydedilip sıralama bozulurdu.
+//
+// isHistory: Baileys ilk eşleşmedeki geçmiş senkronundan gelen mesaj — eşleşen bir aday
+// YOKSA yeni aday AÇILMAZ (yıllara yayılan sohbet geçmişi yüzlerce alakasız "aday"
+// üretiyordu); mesaj da kaydedilmez. Canlı mesajlarda (isHistory=false) davranış aynı:
+// aday yoksa oluşturulur, hiçbir canlı mesaj kaybolmaz.
 export async function recordChannelMessage(userId: string, params: {
   fromPhone: string; body: string; externalId: string; channel: 'TWILIO' | 'PERSONAL';
-  direction?: 'IN' | 'OUT'; contactName?: string; timestamp?: Date;
+  direction?: 'IN' | 'OUT'; contactName?: string; timestamp?: Date; isHistory?: boolean;
 }): Promise<void> {
   const { fromPhone, body, externalId, channel } = params;
   const direction = params.direction ?? 'IN';
@@ -158,6 +168,8 @@ export async function recordChannelMessage(userId: string, params: {
     console.warn(`[whatsapp] Geçersiz telefon formatı, mesaj atlandı: "${fromPhone}" (${channel})`);
     return;
   }
+  // WHERE ifadesi db.ts'teki idx_leads_phone_norm indeksiyle BİREBİR aynı
+  // (user_id, regexp_replace(data->>'phone', '\D', '', 'g')) — değiştirilirse indeks kullanılmaz.
   const { rows: leadRows } = await pool.query(
     `SELECT id, stage, data->>'firstName' AS "firstName", data->>'lastName' AS "lastName",
             (data->>'whatsappIgnored')::boolean AS "whatsappIgnored"
@@ -175,6 +187,7 @@ export async function recordChannelMessage(userId: string, params: {
     whatsappIgnored = !!leadRows[0].whatsappIgnored;
     customerName = [leadRows[0].firstName, leadRows[0].lastName].filter(Boolean).join(' ') || customerName;
   } else {
+    if (params.isHistory) return; // geçmiş içe aktarımı — tanınmayan numara için aday açma
     const { createLead } = await import('./leads');
     const created = await createLead(userId, {
       firstName: customerName,
@@ -242,7 +255,17 @@ export async function getAllCampaigns(userId: string): Promise<WhatsappCampaign[
 }
 
 async function getLeadsForCampaign(userId: string, filter: WhatsappCampaignFilter): Promise<Array<{ id: string; phone: string; firstName: string }>> {
-  const conditions = ['user_id = $1', `data->>'phone' IS NOT NULL`, `data->>'phone' != ''`];
+  const conditions = [
+    'user_id = $1', `data->>'phone' IS NOT NULL`, `data->>'phone' != ''`,
+    // Danışmanın "WhatsApp'tan muaf" işaretlediği adaylar toplu gönderime girmez.
+    `COALESCE((data->>'whatsappIgnored')::boolean, false) = false`,
+    // Global ret listesi (bkz. dncList.ts) — iki taraf da rakam-normalize karşılaştırılır,
+    // liste E.164 ("+90555…") tutarken aday kaydı "0555…" olabilir.
+    `NOT EXISTS (
+       SELECT 1 FROM do_not_call_list d
+       WHERE regexp_replace(d.phone, '\\D', '', 'g') = regexp_replace(leads.data->>'phone', '\\D', '', 'g')
+     )`,
+  ];
   const vals: unknown[] = [userId];
   // Eski kampanya filtreleri QUALIFIED/VIEWING/OFFER diyebilir — yeni huni koduna çevir.
   if (filter.stages?.length) { vals.push([...new Set(filter.stages.map(normalizeLeadStage))]); conditions.push(`stage = ANY($${vals.length})`); }
@@ -287,7 +310,14 @@ export async function sendCampaign(userId: string, campaignId: string): Promise<
   const leads = await getLeadsForCampaign(userId, campaign.filter || {});
   if (!leads.length) throw new Error('Seçilen filtreye uygun telefon numaralı aday bulunamadı');
 
-  await pool.query(`UPDATE whatsapp_campaigns SET status = 'RUNNING' WHERE id = $1`, [campaignId]);
+  // ATOMİK kilit: aynı kampanyaya iki kez (çift tık / iki sekme) "Gönder" denirse
+  // yalnızca biri DRAFT→RUNNING geçişini kazanır; diğeri 0 satır görüp reddedilir.
+  // Önceden SELECT + UPDATE ayrıydı, iki istek de DRAFT görüp herkese çift mesaj atıyordu.
+  const claimed = await pool.query(
+    `UPDATE whatsapp_campaigns SET status = 'RUNNING' WHERE id = $1 AND user_id = $2 AND status = 'DRAFT'`,
+    [campaignId, userId],
+  );
+  if (!claimed.rowCount) throw new Error('Sadece taslak kampanyalar gönderilebilir');
 
   let sent = 0, failed = 0;
   const variableMap = campaign.variable_map || {};
@@ -300,12 +330,20 @@ export async function sendCampaign(userId: string, campaignId: string): Promise<
       }
       const body = renderTemplate(template.body, vars);
       const recipientId = newId('wcr');
+      // Alıcı satırı Twilio'ya gitmeden ÖNCE (PENDING) açılır — süreç tam gönderim
+      // anında çökerse bile kişi "gönderildi mi?" belirsizliğinde kalmaz ve aynı
+      // kampanyada zaten satırı olan bir kişiye (ON CONFLICT → 0 satır) tekrar gidilmez.
+      const claimedRecipient = await pool.query(
+        `INSERT INTO whatsapp_campaign_recipients (id, campaign_id, lead_id, status) VALUES ($1, $2, $3, 'PENDING')
+         ON CONFLICT (campaign_id, lead_id) DO NOTHING RETURNING id`,
+        [recipientId, campaignId, lead.id],
+      );
+      if (!claimedRecipient.rowCount) continue;
       try {
         const result = await sendWhatsAppMessage(config, lead.phone, body, { statusCallbackUrl });
         await pool.query(
-          `INSERT INTO whatsapp_campaign_recipients (id, campaign_id, lead_id, status, sent_at) VALUES ($1, $2, $3, 'SENT', NOW())
-           ON CONFLICT (campaign_id, lead_id) DO NOTHING`,
-          [recipientId, campaignId, lead.id],
+          `UPDATE whatsapp_campaign_recipients SET status = 'SENT', sent_at = NOW() WHERE id = $1`,
+          [recipientId],
         );
         await pool.query(
           `INSERT INTO whatsapp_messages (id, user_id, lead_id, twilio_sid, direction, status, body, template_id, campaign_id)
@@ -315,9 +353,8 @@ export async function sendCampaign(userId: string, campaignId: string): Promise<
         sent++;
       } catch (err) {
         await pool.query(
-          `INSERT INTO whatsapp_campaign_recipients (id, campaign_id, lead_id, status, error_msg) VALUES ($1, $2, $3, 'FAILED', $4)
-           ON CONFLICT (campaign_id, lead_id) DO NOTHING`,
-          [recipientId, campaignId, lead.id, String((err as Error).message || err)],
+          `UPDATE whatsapp_campaign_recipients SET status = 'FAILED', error_msg = $2 WHERE id = $1`,
+          [recipientId, String((err as Error).message || err)],
         );
         failed++;
       }

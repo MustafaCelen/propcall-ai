@@ -235,7 +235,9 @@ export async function getOrCreateWebhookAuthToken(): Promise<string> {
 export async function verifyWebhookAuthToken(headerToken: string | undefined): Promise<boolean> {
   if (!headerToken) return false;
   const expected = await getOrCreateWebhookAuthToken();
-  return headerToken === expected;
+  const a = Buffer.from(headerToken, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 // Ödeme tamamlandığında bize bildirim gelmesi için webhook kaydeder — aynı URL
@@ -272,7 +274,7 @@ export async function ensureWebhookRegistered(callbackUrl: string): Promise<void
 export async function findPendingTopup(userId: string): Promise<{ fonzipDebtId: string } | null> {
   const { rows } = await pool.query(
     `SELECT fonzip_debt_id FROM credit_transactions
-     WHERE user_id = $1 AND type = 'card_topup' AND amount = 0
+     WHERE user_id = $1 AND type = 'card_topup' AND amount = 0 AND COALESCE(note, '') <> 'cancelled'
        AND created_at > NOW() - INTERVAL '1 hour'
      ORDER BY created_at DESC LIMIT 1`,
     [userId],
@@ -288,7 +290,8 @@ export async function findPendingTopup(userId: string): Promise<{ fonzipDebtId: 
 export async function cleanupStalePendingTopups(): Promise<{ healedUserIds: string[]; cancelled: number; errors: number }> {
   const { rows } = await pool.query(
     `SELECT id, fonzip_debt_id, user_id FROM credit_transactions
-     WHERE type = 'card_topup' AND amount = 0 AND created_at < NOW() - INTERVAL '1 hour'`,
+     WHERE type = 'card_topup' AND amount = 0 AND COALESCE(note, '') <> 'cancelled'
+       AND created_at < NOW() - INTERVAL '1 hour'`,
   );
   if (!rows.length) return { healedUserIds: [], cancelled: 0, errors: 0 };
 
@@ -299,13 +302,24 @@ export async function cleanupStalePendingTopups(): Promise<{ healedUserIds: stri
 
   for (const row of rows) {
     try {
-      const details = await getDebtDetails(row.fonzip_debt_id);
+      let details = await getDebtDetails(row.fonzip_debt_id);
       if (!details || details.status !== 8) {
         // Hâlâ ödenmemiş (ya da Fonzip'te artık bulunamıyor) — gerçekten terk edilmiş.
-        if (details) await cancelDebt(row.fonzip_debt_id);
-        await pool.query(`DELETE FROM credit_transactions WHERE id = $1`, [row.id]);
-        cancelled++;
-        continue;
+        if (details) {
+          await cancelDebt(row.fonzip_debt_id);
+          // İptal ile ödeme yarışabilir: iptal isteği giderken danışman tam o anda
+          // ödemiş olabilir. İptalden sonra durumu bir kez daha oku — ödenmişse
+          // (status 8) aşağıdaki normal kredi yoluna düş, kaydı asla silme.
+          details = await getDebtDetails(row.fonzip_debt_id);
+        }
+        if (!details || details.status !== 8) {
+          // Satır SİLİNMEZ (audit izi + geç gelen webhook'un neye düştüğü görülsün);
+          // amount 0 kalır, not 'cancelled' olur — findPendingTopup/cleanup artık
+          // amount=0 AND note NOT LIKE 'cancelled%' ile bunu bekleyen saymaz.
+          await pool.query(`UPDATE credit_transactions SET note = $2 WHERE id = $1`, [row.id, 'cancelled']);
+          cancelled++;
+          continue;
+        }
       }
       // status === 8: ödenmiş ama webhook kaçırılmış — bakiyeyi şimdi düzelt.
       const result = await creditFonzipTopup(row.fonzip_debt_id, details.amount);

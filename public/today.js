@@ -27,7 +27,7 @@
     return Math.round(h / 24) + ' gün önce';
   }
   function waLink(phone) {
-    const digits = String(phone || '').replace(/\D/g, '');
+    const digits = typeof waDigits === 'function' ? waDigits(phone) : String(phone || '').replace(/\D/g, '');
     return digits ? 'https://wa.me/' + digits : null;
   }
   function kindIcon(kind) {
@@ -50,8 +50,15 @@
   }
 
   function taskRow(t) {
-    const late = t.status === 'open' && new Date(t.dueAt) < new Date() && !isSameIstanbulDay(t.dueAt, 0) ? true
-               : t.status === 'open' && new Date(t.dueAt) < new Date();
+    // Gecikti: vade geçmiş VE (vade bugünden önceki bir gün YA DA bugün için açıkça
+    // bir saat verilmiş ve o saat geçmiş). dueAt tek bir zaman damgası; "tüm gün"
+    // görevi İstanbul saatiyle 00:00'a denk gelen vadeyle temsil edilir — o görev
+    // gün bitene kadar "gecikti" sayılmaz.
+    const dueMs = new Date(t.dueAt).getTime();
+    const hasExplicitTime = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit', hour12: false })
+      .format(new Date(t.dueAt)) !== '00:00';
+    const late = t.status === 'open' && dueMs < Date.now() &&
+                 (!isSameIstanbulDay(t.dueAt, 0) || hasExplicitTime);
     const when = isSameIstanbulDay(t.dueAt, 0) ? fmtTime(t.dueAt) : fmtDay(t.dueAt);
     const pill = t.kind === 'meeting' ? '<span class="td-pill ok">randevu</span>'
                : late ? '<span class="td-pill late">gecikti</span>'
@@ -90,9 +97,9 @@
     root.innerHTML =
       '<div class="td-top"><div><h2>' + esc(greeting()) + '</h2><div class="td-sub">' + esc(d.dateLabel) + ' · ' +
         (dueTasks.length ? dueTasks.length + ' görev' : 'görev yok') + ', ' + c.meetings + ' randevu, ' + c.awaitingWhatsapp + ' cevapsız mesaj</div></div>' +
-        '<div class="td-actions"><button class="td-btn ghost" data-go="campaign">Liste yükle</button><button class="td-btn" data-go="campaign">Kampanya başlat</button></div></div>' +
+        '<div class="td-actions"><button class="td-btn" data-go="campaign">Kampanya başlat</button></div></div>' +
       '<div class="td-kpis">' +
-        '<button class="td-kpi" data-go="#tasks"><b' + (c.overdue ? ' class="warn"' : '') + '>' + dueTasks.length + '</b><span>Bugün aranacak' + (c.overdue ? ' · ' + c.overdue + ' gecikmiş' : '') + '</span></button>' +
+        '<button class="td-kpi" data-go="#tasks"><b' + (c.overdue ? ' class="warn"' : '') + '>' + dueTasks.length + '</b><span>Bugünkü görevler' + (c.overdue ? ' · ' + c.overdue + ' gecikmiş' : '') + '</span></button>' +
         '<button class="td-kpi" data-go="#meetings"><b>' + c.meetings + '</b><span>Randevu (7 gün)</span></button>' +
         '<button class="td-kpi" data-go="whatsapp"><b>' + c.awaitingWhatsapp + '</b><span>Yanıt bekleyen WhatsApp</span></button>' +
         '<button class="td-kpi" data-go="#hot"><b>' + c.untouchedHot + '</b><span>48 saattir dokunulmayan sıcak fırsat</span></button>' +

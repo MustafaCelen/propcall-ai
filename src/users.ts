@@ -125,6 +125,19 @@ export async function listUsers(): Promise<UserRow[]> {
 
 export async function setUserActive(id: string, active: boolean): Promise<void> {
   await pool.query(`UPDATE users SET is_active = $2 WHERE id = $1`, [id, active]);
+  // Devre dışı bırakılan hesabın açık oturumları anında düşsün — resolveSession
+  // zaten is_active'e bakıyor ama satırlar boşuna 30 gün kalmasın.
+  if (!active) await deleteUserSessions(id);
+}
+
+// Bir kullanıcının oturumlarını siler; exceptSessionId verilirse o oturum (örn.
+// şifresini değiştiren kullanıcının kendi tarayıcısı) açık kalır.
+export async function deleteUserSessions(userId: string, exceptSessionId?: string): Promise<void> {
+  if (exceptSessionId) {
+    await pool.query(`DELETE FROM user_sessions WHERE user_id = $1 AND id <> $2`, [userId, exceptSessionId]);
+  } else {
+    await pool.query(`DELETE FROM user_sessions WHERE user_id = $1`, [userId]);
+  }
 }
 
 export async function setUserRole(id: string, role: UserRole): Promise<void> {
@@ -139,8 +152,12 @@ export async function setUserMorningSummaryPhone(id: string, phone: string): Pro
   await pool.query(`UPDATE users SET morning_summary_phone = $2, morning_summary_sent_on = NULL WHERE id = $1`, [id, v ? v.replace(/[\s()-]/g, '') : null]);
 }
 
-export async function setUserPassword(id: string, passwordHash: string): Promise<void> {
+// Şifre değişince diğer tüm oturumlar kapanır (çalınmış bir oturum şifre
+// sıfırlamadan sonra yaşamaya devam etmesin). keepSessionId: değişikliği yapan
+// kullanıcının kendi oturumu — admin sıfırlamasında verilmez, hepsi düşer.
+export async function setUserPassword(id: string, passwordHash: string, keepSessionId?: string): Promise<void> {
   await pool.query(`UPDATE users SET password_hash = $2 WHERE id = $1`, [id, passwordHash]);
+  await deleteUserSessions(id, keepSessionId);
 }
 
 export async function touchLastLogin(id: string): Promise<void> {
@@ -185,6 +202,14 @@ export async function setUserElevenLabsRate(id: string, costPer1k: number | null
 // yukarı yuvarlanır. Her bakiye değişikliği credit_transactions'a kalıcı bir satır
 // olarak yazılır — balance_try sadece hızlı okunabilir güncel toplam.
 export const CALL_MINUTE_RATE_TRY = 10;
+
+// Bakiyenin karşılayabileceği azami arama süresi (saniye). Vapi'ye maxDurationSeconds
+// olarak verilir — arama, bakiyenin ödeyemeyeceği bir dakikaya hiç giremez (eksi
+// bakiye oluşmaz). En az 60 sn: ön-kontrol zaten 1 dakikalık bakiye şartını koyuyor.
+export function maxAffordableSeconds(balanceTry: number): number {
+  const minutes = Math.floor((Number.isFinite(balanceTry) ? balanceTry : 0) / CALL_MINUTE_RATE_TRY);
+  return Math.max(60, minutes * 60);
+}
 
 function newTxId(): string {
   return 'tx_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
@@ -316,6 +341,10 @@ export async function creditFonzipTopup(fonzipDebtId: string, amountTry: number)
     );
     if (updated.rowCount === 0) {
       await client.query('ROLLBACK');
+      // Ya bize ait olmayan bir borç ya da zaten kredilenmiş bir tekrar — ama
+      // "bekleyen kaydı silinmiş/iptal edilmiş sonra ödenmiş" durumunu destek
+      // elle mutabakat yapabilsin diye açıkça logla.
+      console.error(`[Fonzip] Eşleşen bekleyen yükleme kaydı yok: debtId=${fonzipDebtId} tutar=${amountTry} TL — bakiyeye yazılmadı, elle kontrol gerekebilir`);
       return { credited: false };
     }
     const userId = updated.rows[0].user_id;
@@ -595,7 +624,7 @@ export async function getSettingsForUser(userId: string): Promise<UserSettingsVi
 // key'lerini ona taşır (aynı şifreleme anahtarı kullanıldığı için API key
 // ciphertext'leri çöz/tekrar-şifrele yapılmadan direkt kopyalanabilir —
 // sadece phone_number_id/assistant_id düz metin sütunlar olduğu için çözülür).
-export async function ensureBootstrapAdmin(hashPassword: (pw: string) => string): Promise<UserRow> {
+export async function ensureBootstrapAdmin(hashPassword: (pw: string) => string | Promise<string>): Promise<UserRow> {
   const { rows: countRows } = await pool.query(`SELECT COUNT(*)::int AS n FROM users`);
   if (countRows[0].n > 0) {
     const { rows } = await pool.query(
@@ -610,7 +639,7 @@ export async function ensureBootstrapAdmin(hashPassword: (pw: string) => string)
     throw new Error('İlk kurulum: BOOTSTRAP_ADMIN_EMAIL ve BOOTSTRAP_ADMIN_PASSWORD .env dosyasında tanımlı olmalı');
   }
 
-  const admin = await createUser({ email, passwordHash: hashPassword(password), name: 'Admin', role: 'admin' });
+  const admin = await createUser({ email, passwordHash: await hashPassword(password), name: 'Admin', role: 'admin' });
 
   const { rows: settingsRows } = await pool.query(`SELECT key, value_enc FROM app_settings`);
   const legacyEnc = new Map<string, string>(settingsRows.map((r: any) => [r.key, r.value_enc]));

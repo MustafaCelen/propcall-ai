@@ -33,7 +33,7 @@ async function loadInbox() {
     waState.inbox = j.data;
     renderInboxList();
   } catch (err) {
-    list.innerHTML = `<div class="drawer-error">✗ ${err.message}</div>`;
+    list.innerHTML = `<div class="drawer-error">✗ ${esc(err.message)}</div>`;
   }
 }
 
@@ -80,7 +80,13 @@ async function openInboxThread(leadId) {
     </div>
   `;
   thread.querySelectorAll('[data-channel]').forEach(btn => {
-    btn.addEventListener('click', () => { waState.replyChannel = btn.dataset.channel; openInboxThread(leadId); });
+    btn.addEventListener('click', async () => {
+      // Kanal değişince alt bar yeniden çizilir — yazılmakta olan metin kaybolmasın.
+      const draft = $('waInboxReplyInput') ? $('waInboxReplyInput').value : '';
+      waState.replyChannel = btn.dataset.channel;
+      await openInboxThread(leadId);
+      if ($('waInboxReplyInput')) $('waInboxReplyInput').value = draft;
+    });
   });
   $('waInboxReplySend').addEventListener('click', () => sendInboxReply(leadId));
   $('waIgnoreToggle').addEventListener('click', () => toggleWhatsappIgnore(leadId, !entry?.whatsappIgnored));
@@ -130,7 +136,7 @@ async function loadInboxThreadMessages(leadId) {
     `).join('') : '<div class="lead-column-empty">Henüz mesaj yok</div>';
     body.scrollTop = body.scrollHeight;
   } catch (err) {
-    body.innerHTML = `<div class="drawer-error">✗ ${err.message}</div>`;
+    body.innerHTML = `<div class="drawer-error">✗ ${esc(err.message)}</div>`;
   }
 }
 
@@ -176,7 +182,7 @@ async function loadTemplates() {
     renderTemplates();
     renderTemplateSelect();
   } catch (err) {
-    box.innerHTML = `<div class="drawer-error">✗ ${err.message}</div>`;
+    box.innerHTML = `<div class="drawer-error">✗ ${esc(err.message)}</div>`;
   }
 }
 
@@ -237,18 +243,30 @@ async function deleteTemplateConfirm(id) {
   }
 }
 
+// Filtre ya da şablon değişince eski önizleme sayısı artık geçerli değil —
+// "Gönder" yeniden önizleme yapılana kadar kapalı kalır.
+function invalidateWaPreview() {
+  waState.previewedCount = null;
+  $('btnWaSend').disabled = true;
+  $('waPreviewCount').textContent = '';
+}
+
 function renderStageChecks() {
   const box = $('waStageChecks');
+  // Seçim Set'ten geri yüklenir — sekme yeniden açıldığında işaretler kaybolmasın.
   box.innerHTML = WA_STAGES.map(s => `
-    <label class="wa-stage-check"><input type="checkbox" data-stage-check="${s}" /> ${WA_STAGE_LABELS[s]}</label>
+    <label class="wa-stage-check"><input type="checkbox" data-stage-check="${s}"${waState.selectedStages.has(s) ? ' checked' : ''} /> ${WA_STAGE_LABELS[s]}</label>
   `).join('');
   box.querySelectorAll('[data-stage-check]').forEach(cb => {
     cb.addEventListener('change', () => {
       if (cb.checked) waState.selectedStages.add(cb.dataset.stageCheck);
       else waState.selectedStages.delete(cb.dataset.stageCheck);
+      invalidateWaPreview();
     });
   });
 }
+
+$('waCampTemplate').addEventListener('change', invalidateWaPreview);
 
 $('btnWaPreview').addEventListener('click', async () => {
   try {
@@ -273,6 +291,10 @@ $('btnWaSend').addEventListener('click', async () => {
   if (!name || !templateId) { toast('✗ Kampanya adı ve şablon zorunlu', 'error'); return; }
   if (!await uiConfirm(`${waState.previewedCount ?? '?'} adaya WhatsApp mesajı gönderilecek. Emin misiniz?`, { confirmLabel: 'Evet, gönder' })) return;
 
+  const sendBtn = $('btnWaSend');
+  if (sendBtn.dataset.busy) return; // tek uçuş — çift tık iki kampanya oluşturmasın
+  sendBtn.dataset.busy = '1';
+  sendBtn.disabled = true;
   status.textContent = 'Gönderiliyor...'; status.className = 'adm-field-status';
   try {
     const createResp = await fetch('/api/whatsapp/campaigns', {
@@ -289,12 +311,16 @@ $('btnWaSend').addEventListener('click', async () => {
     status.textContent = `✓ ${sent.data.sent} gönderildi, ${sent.data.failed} başarısız`;
     status.className = 'adm-field-status ok';
     $('waCampName').value = '';
-    $('btnWaSend').disabled = true;
-    $('waPreviewCount').textContent = '';
+    invalidateWaPreview();
     loadCampaignHistoryWa();
   } catch (err) {
     status.textContent = '✗ ' + err.message;
     status.className = 'adm-field-status err';
+  } finally {
+    delete sendBtn.dataset.busy;
+    // Gönderim bittiyse önizleme sıfırlandı (kapalı kalır); hata olduysa sayı
+    // hâlâ geçerli — tekrar denenebilsin.
+    sendBtn.disabled = !(waState.previewedCount > 0);
   }
 });
 
@@ -311,7 +337,7 @@ async function loadCampaignHistoryWa() {
       </div>
     `).join('');
   } catch (err) {
-    box.innerHTML = `<div class="drawer-error">✗ ${err.message}</div>`;
+    box.innerHTML = `<div class="drawer-error">✗ ${esc(err.message)}</div>`;
   }
 }
 

@@ -370,8 +370,8 @@ var SETTINGS_TOUR_STEPS = [
   },
   {
     target: '#tourSettingsTabs',
-    title: '2. Üç Sekme',
-    body: '<b>Hesap Bağlantıları</b>: API key\'leriniz · <b>Asistan Ayarları</b>: ses, model ve konuşma davranışı · <b>Arama Kuralları</b>: hangi saatlerde arama yapılacağı ve aynı numaranın kaç gün tekrar aranmayacağı.',
+    title: '2. Dört Sekme',
+    body: '<b>Hesap Bağlantıları</b>: API key\'leriniz · <b>Asistan Ayarları</b>: ses, model ve konuşma davranışı · <b>Arama Kuralları</b>: hangi saatlerde arama yapılacağı ve aynı numaranın kaç gün tekrar aranmayacağı · <b>CRM Entegrasyonları</b>: Meta lead formları ve WhatsApp bağlantıları.',
     placement: 'bottom',
   },
   {
@@ -549,7 +549,8 @@ $('btnSyncMetaNow').addEventListener('click', async () => {
 
 $('btnDisconnectMeta').addEventListener('click', async () => {
   if (!await uiConfirm('Meta bağlantısını kesmek istediğinize emin misiniz?')) return;
-  await fetch('/api/settings/meta', { method: 'DELETE' });
+  const res = await fetch('/api/settings/meta', { method: 'DELETE' });
+  if (!res.ok) { const j = await res.json().catch(() => ({})); toast('✗ ' + (j.error || 'Bağlantı kesilemedi'), 'error'); }
   loadCrmSettings();
 });
 
@@ -579,7 +580,8 @@ $('btnSaveWhatsapp').addEventListener('click', async () => {
 
 $('btnDisconnectWhatsapp').addEventListener('click', async () => {
   if (!await uiConfirm('WhatsApp bağlantısını kesmek istediğinize emin misiniz?')) return;
-  await fetch('/api/settings/whatsapp', { method: 'DELETE' });
+  const res = await fetch('/api/settings/whatsapp', { method: 'DELETE' });
+  if (!res.ok) { const j = await res.json().catch(() => ({})); toast('✗ ' + (j.error || 'Bağlantı kesilemedi'), 'error'); }
   loadCrmSettings();
 });
 
@@ -598,6 +600,9 @@ function renderPersonalWaStatus(data) {
   } else if (data.status === 'qr_pending' && data.qrDataUrl) {
     qr.style.display = 'block';
     $('waPersonalQrImg').src = data.qrDataUrl;
+    // Sayfa QR beklerken açıldıysa (örn. yenileme) QR tazelenmesi/bağlantı için
+    // kendiliğinden yoklamaya başla — yoksa ekran eski QR'da takılı kalır.
+    if (!personalWaPollTimer) startPersonalWaPolling();
   } else {
     disc.style.display = 'block';
     $('btnConnectPersonalWa').disabled = false;
@@ -645,7 +650,8 @@ $('btnConnectPersonalWa').addEventListener('click', async () => {
 $('btnDisconnectPersonalWa').addEventListener('click', async () => {
   if (!await uiConfirm('Şahsi WhatsApp bağlantısını kesmek istediğinize emin misiniz?')) return;
   stopPersonalWaPolling();
-  await fetch('/api/whatsapp/personal/disconnect', { method: 'POST' });
+  const res = await fetch('/api/whatsapp/personal/disconnect', { method: 'POST' });
+  if (!res.ok) { const j = await res.json().catch(() => ({})); toast('✗ ' + (j.error || 'Bağlantı kesilemedi'), 'error'); }
   pollPersonalWaStatus();
 });
 
@@ -984,24 +990,27 @@ async function saveField(key) {
   }
 
   btn.textContent = 'Kaydediliyor...';
-  const r = await fetch('/api/settings', {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ key, value }),
-  });
-  const j = await r.json();
-  btn.disabled = false;
-  btn.textContent = 'Kaydet';
+  try {
+    const r = await fetch('/api/settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, value }),
+    });
+    // 409 (asistan/numara başka kullanıcıya bağlı) dahil — sunucunun metni aynen gösterilir.
+    const j = await r.json().catch(() => ({ success: false, error: 'HTTP ' + r.status }));
+    if (!r.ok || !j.success) throw new Error(j.error || 'Kaydedilemedi');
 
-  if (!j.success) {
-    status.textContent = '✗ ' + (j.error || 'Kaydedilemedi');
+    status.textContent = '✓ Kaydedildi, anında geçerli';
+    status.className = 'adm-field-status ok';
+    input.value = '';
+    loadSettings(); // maskeli değeri tazele
+  } catch (err) {
+    status.textContent = '✗ ' + err.message;
     status.className = 'adm-field-status err';
-    return;
+    toast('✗ ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Kaydet';
   }
-
-  status.textContent = '✓ Kaydedildi, anında geçerli';
-  status.className = 'adm-field-status ok';
-  input.value = '';
-  loadSettings(); // maskeli değeri tazele
 }
 
 // ─── ASİSTAN AYARLARI (model / ses / transkripsiyon / davranış) ────────────
@@ -1116,7 +1125,7 @@ async function loadVoices(selectedVoiceId) {
     if (!j.success) throw new Error(j.error);
     const voices = j.data;
     sel.innerHTML = voices.map(v =>
-      `<option value="${v.voiceId}"${v.voiceId === selectedVoiceId ? ' selected' : ''}>${v.name}${v.category ? ' — ' + v.category : ''}</option>`
+      `<option value="${esc(v.voiceId)}"${v.voiceId === selectedVoiceId ? ' selected' : ''}>${esc(v.name)}${v.category ? ' — ' + esc(v.category) : ''}</option>`
     ).join('');
     if (selectedVoiceId && !voices.some(v => v.voiceId === selectedVoiceId)) {
       sel.insertAdjacentHTML('afterbegin', `<option value="${selectedVoiceId}" selected>Mevcut ses (${selectedVoiceId})</option>`);

@@ -1,4 +1,14 @@
-import express, { Request, Response } from 'express';
+// Küresel fetch zaman aşımı — çağıran signal vermediyse 30 sn. Vapi/ElevenLabs/
+// Anthropic/Fonzip'e giden bir istek askıda kalınca webhook/kampanya akışı sonsuza
+// dek bekliyordu. import'lar CommonJS'te sırayla require edildiği için bu sarmalayıcı
+// diğer modüller yüklenmeden ÖNCE kurulur (fonksiyonlar fetch'i çağrı anında çözer).
+{
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = ((input: any, init?: any) =>
+    origFetch(input, init?.signal ? init : { ...(init || {}), signal: AbortSignal.timeout(30_000) })) as typeof fetch;
+}
+
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import path from 'path';
@@ -16,8 +26,9 @@ import {
   createVapiCall, endVapiCall, getVapiCredit, getAssistantSystemPrompt, updateAssistantSystemPrompt,
   getSignedRecordingUrl, verifyVapiApiKey, getAssistantConfig, updateAssistantConfig, updateAssistantServer,
   listAssistants, listPhoneNumbers, importAssistant, createDefaultAssistant, AssistantConfigPatch,
-  buildRoleplayAssistantOverrides,
+  buildRoleplayAssistantOverrides, getAssistantMaxDurationSeconds,
 } from './vapi';
+import { setShuttingDown } from './lifecycle';
 import { getElevenLabsCredit, listElevenLabsVoices, estimateTtsCost, generateVoicePreview } from './elevenlabs';
 import { getAllAppointments, saveAppointment, deleteAppointment, setAppointmentOutcome } from './appointments';
 import {
@@ -50,12 +61,12 @@ import {
   getAllCalls, readCall, readCallForUser, createCall, updateCall, updateCallForUser,
   appendTranscript, stripAudioTags, updateCosts, saveCallSummary, getCallOwnerUserId, getCallCountsByPhone,
   endedReasonToStatus, getStats, exportCSV, getCampaignStats, reconcileStaleCalls, getAdminUserComparison, getDataHealth,
-  getCallsForScenario,
+  getCallsForScenario, assertDateParam,
 } from './calls';
 import { VapiCallRequest, VapiWebhookPayload, VapiCostItem, CallFilters, CallRecord, CallCosts, LEAD_STAGES, LOST_REASONS, normalizeLeadStage, isKnownLeadStage, Lead, CustomerInfo, ScenarioVoiceModel, SCENARIO_VOICE_MODELS } from './types';
 import {
   initCampaignRunner, loadAllActiveCampaigns, getCampaignState,
-  campaignLoad, campaignStart, campaignResume, campaignPause, campaignStop, campaignClear,
+  campaignLoad, campaignStart, campaignResume, campaignPause, campaignTogglePause, campaignStop, campaignClear,
   campaignRetryFailed, campaignDismissLimitNotice, onCampaignCallEnded, onCampaignSummaryReady,
   resyncCampaignSummaries, campaignDiscardDraft, campaignRerun, RERUN_SCOPES, RerunScope,
   getLiveAccountStats,
@@ -70,7 +81,7 @@ import {
   setUserElevenLabsRate, setUserVapiCredentials, setUserElevenLabsKey, setUserAnthropicKey,
   getUserVapiCredentials, getUserWebhookVerification, getUserElevenLabsKey, getUserAnthropicKey, resolveVapiCreds, getUserById,
   getUserVapiApiKey, resolveVapiCredsForAssistant,
-  getUserBalance, adjustUserBalance, chargeForCall, listCreditTransactions, CALL_MINUTE_RATE_TRY,
+  getUserBalance, adjustUserBalance, chargeForCall, listCreditTransactions, CALL_MINUTE_RATE_TRY, maxAffordableSeconds,
   setUserAssistantName, setUserName, setUserRole, setUserMorningSummaryPhone, createPendingFonzipTopup, creditFonzipTopup,
   setUserMetaConfig, clearUserMetaConfig, getUserMetaConfig, getUserIdByMetaPageId,
   setUserWhatsappConfig, clearUserWhatsappConfig, getUserWhatsappConfig,
@@ -81,7 +92,7 @@ import {
   getDebtAmount, getDebtDetails, verifyWebhookAuthToken, ensureWebhookRegistered,
   findPendingTopup, cleanupStalePendingTopups,
 } from './fonzip';
-import { hashPassword, verifyPassword, login, logout, getSessionUser, requireUserAuth, requireAdmin, requireManager, CURRENT_TERMS_VERSION, cleanupExpiredSessions } from './auth';
+import { hashPassword, verifyPassword, login, logout, getSessionUser, requireUserAuth, requireAdmin, requireManager, CURRENT_TERMS_VERSION, cleanupExpiredSessions, getSessionIdFromRequest } from './auth';
 import { getFunnelReport, getTeamOverview, buildMorningSummaryText, runMorningSummaries } from './reports';
 import rateLimit from 'express-rate-limit';
 import { generateVapiPrompt, PromptGenInput } from './promptgen';
@@ -93,6 +104,24 @@ const PORT = process.env.PORT || 5000;
 const HOST = '0.0.0.0';
 let httpServer: ReturnType<typeof app.listen> | undefined;
 
+// Yakalanmamış hata = süreç çökmesi = o anda devam eden tüm aramaların webhook'ları
+// kayıp. Sadece logla, çıkma — Railway zaten sağlık kontrolüyle gerçekten bozulmuş
+// bir süreci yeniden başlatır (bkz. railway.json).
+process.on('unhandledRejection', (r) => console.error('[Unhandled rejection]', r));
+process.on('uncaughtException', (e) => console.error('[Uncaught exception]', e));
+
+// try/catch'i olmayan async handler'lar için: reddedilen promise Express'in hata
+// middleware'ine düşer (Express 4 bunu kendiliğinden yapmaz — istek askıda kalırdı).
+type AsyncHandler = (req: Request, res: Response, next: NextFunction) => Promise<unknown>;
+const wrap = (fn: AsyncHandler) => (req: Request, res: Response, next: NextFunction) =>
+  Promise.resolve(fn(req, res, next)).catch(next);
+
+// Telefon numarasını loglarda maskele — son 4 hane kalır (KVKK: loglar kişisel veri taşımasın).
+function maskPhone(phone: string | undefined | null): string {
+  const p = String(phone || '');
+  return p.length <= 4 ? p : `***${p.slice(-4)}`;
+}
+
 // Railway trafiği kendi edge proxy'sinden geçiriyor — bu olmadan req.ip her zaman
 // Railway'in iç proxy adresini gösterir, gerçek istemci IP'sini asla göremeyiz.
 // IP bazlı rate limiting (aşağıdaki login limiter gibi) bunsuz işe yaramaz — ya
@@ -101,7 +130,18 @@ app.set('trust proxy', 1);
 
 app.use(cors());
 app.use(cookieParser());
-app.use(express.json({ limit: '10mb' }));
+// Gövde sınırı: varsayılan 256kb. Sadece büyük listelerin geldiği uçlar (aday içe
+// aktarma, kampanya yükleme) 10mb alır. Meta webhook'u ham gövdeyi de saklar —
+// X-Hub-Signature-256 doğrulaması parse edilmemiş baytlar üzerinde yapılır.
+const jsonSmall = express.json({ limit: '256kb' });
+const jsonLarge = express.json({ limit: '10mb' });
+const jsonMeta  = express.json({ limit: '256kb', verify: (req, _res, buf) => { (req as any).rawBody = buf; } });
+const LARGE_BODY_PATHS = new Set(['/api/leads/import/preview', '/api/leads/import/commit', '/api/campaign/load']);
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (LARGE_BODY_PATHS.has(req.path)) return jsonLarge(req, res, next);
+  if (req.path === '/webhook/meta') return jsonMeta(req, res, next);
+  return jsonSmall(req, res, next);
+});
 // Twilio webhook'ları (WhatsApp inbound) application/x-www-form-urlencoded gönderir —
 // express.json() bunu parse etmez, req.body boş kalır webhook.ts sessizce hiçbir şey yapmaz.
 app.use(express.urlencoded({ extended: false }));
@@ -128,13 +168,19 @@ app.use(express.static(path.join(__dirname, '..', 'public'), {
 // İSTEKTE değişen Railway edge node IP'si) — ama Express'in trust-proxy sayısal hop
 // mantığı (`trust proxy: 1`) burada rightmost'u seçiyor, yani DEĞİŞEN edge IP'sini "istemci"
 // sanıyor. Bunun sonucu: sayaç asla tutarlı artmıyordu, limiter fiilen işe yaramıyordu
-// (her istek "yeni" bir IP'den geliyormuş gibi görünüyordu). O yüzden req.ip yerine
-// X-Forwarded-For'un EN SOLUNDAKİ (gerçek orijinal istemci) değerini elle okuyoruz.
+// (her istek "yeni" bir IP'den geliyormuş gibi görünüyordu).
+//
+// EN SOLDAKİ değer de güvenilmez: istemci kendi X-Forwarded-For header'ını gönderirse
+// Railway onu silmez, önüne ekler — saldırgan her istekte farklı sahte IP yazıp
+// limiti tamamen atlatabilirdi. Güvenilir olan, Railway edge'in kendi EKLEDİĞİ
+// değerin hemen solundaki giriş: yani sağdan İKİNCİ. İki girişten azsa header'a
+// hiç güvenme, soket adresine düş.
 function realClientIp(req: Request): string {
   const xff = req.headers['x-forwarded-for'];
-  const first = Array.isArray(xff) ? xff[0] : xff;
-  const leftmost = first?.split(',')[0]?.trim();
-  return leftmost || req.socket.remoteAddress || 'unknown';
+  const raw = Array.isArray(xff) ? xff.join(',') : xff;
+  const parts = (raw || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (parts.length >= 2) return parts[parts.length - 2];
+  return req.socket.remoteAddress || 'unknown';
 }
 
 const loginLimiter = rateLimit({
@@ -151,7 +197,34 @@ const loginLimiter = rateLimit({
   message: { success: false, error: 'Çok fazla başarısız giriş denemesi — 15 dakika sonra tekrar deneyin.' },
 });
 
-app.post('/api/auth/login',  loginLimiter, login);
+// İkinci katman: hesap (e-posta) bazlı. IP limiti dağıtık saldırıda (her denemede
+// farklı IP) işe yaramaz; aynı hesaba 15 dakikada 10'dan fazla başarısız deneme
+// hangi IP'den gelirse gelsin kilitlenir.
+const loginEmailLimiter = rateLimit({
+  windowMs: 15 * 60_000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: Request) => {
+    const email = (req.body as { email?: unknown })?.email;
+    return typeof email === 'string' && email.trim() ? `email:${email.trim().toLowerCase()}` : `ip:${realClientIp(req)}`;
+  },
+  skipSuccessfulRequests: true,
+  message: { success: false, error: 'Bu hesap için çok fazla başarısız giriş denemesi — 15 dakika sonra tekrar deneyin.' },
+});
+
+// Kullanıcı başına dakikada 10 — Anthropic/ElevenLabs'e para harcayan uçlar
+// (prompt üretimi/simülasyonu, özet, ses önizleme) döngüye sokulamasın.
+const perUserAiLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: Request) => String(req.userId || realClientIp(req)),
+  message: { success: false, error: 'Çok sık istek — lütfen bir dakika bekleyip tekrar deneyin.' },
+});
+
+app.post('/api/auth/login',  loginLimiter, loginEmailLimiter, login);
 app.post('/api/auth/logout', logout);
 app.get('/api/auth/session', getSessionUser);
 
@@ -179,11 +252,18 @@ app.post('/api/auth/change-password', requireUserAuth, loginLimiter, async (req:
       return res.status(400).json({ success: false, error: 'Yeni şifre en az 8 karakter olmalı' });
     }
     const record = await getAuthRecord(req.user!.email);
-    if (!record || !verifyPassword(currentPassword, record.passwordHash)) {
+    if (!record || !(await verifyPassword(currentPassword, record.passwordHash))) {
       return res.status(401).json({ success: false, error: 'Mevcut şifre yanlış' });
     }
-    await setUserPassword(req.userId!, hashPassword(newPassword));
-    return res.json({ success: true });
+    // Diğer tüm oturumlar düşer; bu tarayıcınınki (varsa) korunur.
+    const keepSid = getSessionIdFromRequest(req);
+    await setUserPassword(req.userId!, await hashPassword(newPassword), keepSid);
+    return res.json({
+      success: true,
+      message: keepSid
+        ? 'Şifreniz güncellendi — diğer cihazlardaki oturumlarınız kapatıldı.'
+        : 'Şifreniz güncellendi — lütfen tekrar giriş yapın.',
+    });
   } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
@@ -221,13 +301,38 @@ async function provisionWebhookIfReady(userId: string): Promise<void> {
   const appUrl = process.env.APP_URL;
   if (!appUrl) { console.warn('[Webhook] APP_URL tanımlı değil — otomatik webhook kurulumu atlandı'); return; }
 
+  // Önce Vapi'ye yaz, BAŞARILIYSA DB'ye kaydet. Ters sırada Vapi çağrısı patlarsa
+  // DB'de yeni, Vapi'de eski secret kalıyor ve o kullanıcının TÜM webhook'ları
+  // "SPOOF ATTEMPT" diye düşüyordu (ücretlendirme/özet/transkript sessizce durur).
   const secret = crypto.randomBytes(24).toString('base64url');
+  try {
+    await updateAssistantServer(creds.apiKey, creds.assistantId, {
+      url: `${appUrl}/webhook/${userId}`,
+      secret,
+    });
+  } catch (err) {
+    console.warn(`[Webhook] Vapi assistant.server güncellenemedi (userId=${userId}) — eski secret korundu:`, err);
+    throw err;
+  }
   await setUserVapiCredentials(userId, { serverSecret: secret });
-  await updateAssistantServer(creds.apiKey, creds.assistantId, {
-    url: `${appUrl}/webhook/${userId}`,
-    secret,
-  });
   console.log(`[Webhook] Otomatik kuruldu: userId=${userId} → ${appUrl}/webhook/${userId}`);
+}
+
+// Paylaşımlı Vapi hesabı (DEFAULT_VAPI_API_KEY ile herkes aynı hesapta) — bir
+// danışman başkasının asistan/numara ID'sini seçerse o kişinin aramaları/webhook'ları
+// karışır. Aynı ID iki kullanıcıda olamaz.
+const VAPI_ID_COLUMNS: Record<string, string> = {
+  vapiAssistantId: 'vapi_assistant_id',
+  vapiPhoneNumberId: 'vapi_phone_number_id',
+};
+async function isVapiIdClaimedByOther(key: 'vapiAssistantId' | 'vapiPhoneNumberId', value: string, userId: string): Promise<boolean> {
+  const { rows } = await pool.query(`SELECT id FROM users WHERE ${VAPI_ID_COLUMNS[key]} = $1 AND id <> $2 LIMIT 1`, [value, userId]);
+  return rows.length > 0;
+}
+async function idsClaimedByOthers(key: 'vapiAssistantId' | 'vapiPhoneNumberId', userId: string): Promise<Set<string>> {
+  const col = VAPI_ID_COLUMNS[key];
+  const { rows } = await pool.query(`SELECT ${col} AS v FROM users WHERE ${col} IS NOT NULL AND ${col} <> '' AND id <> $1`, [userId]);
+  return new Set(rows.map(r => String(r.v)));
 }
 
 app.put('/api/settings', requireUserAuth, async (req: Request, res: Response) => {
@@ -238,6 +343,9 @@ app.put('/api/settings', requireUserAuth, async (req: Request, res: Response) =>
       return res.status(400).json({ success: false, error: 'Değer boş olamaz' });
     }
     const v = value.trim();
+    if ((key === 'vapiAssistantId' || key === 'vapiPhoneNumberId') && v && await isVapiIdClaimedByOther(key, v, req.userId!)) {
+      return res.status(409).json({ success: false, error: 'Bu asistan/numara başka bir kullanıcıya bağlı' });
+    }
     switch (key) {
       case 'morningSummaryPhone': await setUserMorningSummaryPhone(req.userId!, v); break;
       case 'vapiApiKey':          await setUserVapiCredentials(req.userId!, { apiKey: v }); break;
@@ -285,7 +393,9 @@ async function resolveApiKeyForListing(req: Request): Promise<string> {
 app.post('/api/settings/vapi-assistants', requireUserAuth, async (req: Request, res: Response) => {
   try {
     const apiKey = await resolveApiKeyForListing(req);
-    return res.json({ success: true, data: await listAssistants(apiKey) });
+    const [assistants, claimed] = await Promise.all([listAssistants(apiKey), idsClaimedByOthers('vapiAssistantId', req.userId!)]);
+    // Başka bir danışmana bağlı asistanlar listede hiç görünmesin.
+    return res.json({ success: true, data: (assistants as Array<{ id: string }>).filter(a => !claimed.has(String(a.id))) });
   } catch (err) {
     return res.status(500).json({ success: false, error: toClientError(err) });
   }
@@ -294,7 +404,8 @@ app.post('/api/settings/vapi-assistants', requireUserAuth, async (req: Request, 
 app.post('/api/settings/vapi-phone-numbers', requireUserAuth, async (req: Request, res: Response) => {
   try {
     const apiKey = await resolveApiKeyForListing(req);
-    return res.json({ success: true, data: await listPhoneNumbers(apiKey) });
+    const [numbers, claimed] = await Promise.all([listPhoneNumbers(apiKey), idsClaimedByOthers('vapiPhoneNumberId', req.userId!)]);
+    return res.json({ success: true, data: (numbers as Array<{ id: string }>).filter(n => !claimed.has(String(n.id))) });
   } catch (err) {
     return res.status(500).json({ success: false, error: toClientError(err) });
   }
@@ -426,7 +537,7 @@ app.get('/api/settings/elevenlabs-voices', requireUserAuth, async (req: Request,
 
 // Danışmanın seçtiği sesi, KENDİ script metniyle seslendirip döner — API key
 // sunucuda kalır, tarayıcı sadece ses baytlarını alır (audio/mpeg).
-app.post('/api/settings/voice-preview', requireUserAuth, async (req: Request, res: Response) => {
+app.post('/api/settings/voice-preview', requireUserAuth, perUserAiLimiter, async (req: Request, res: Response) => {
   try {
     const { voiceId, text } = req.body as { voiceId?: string; text?: string };
     if (!voiceId?.trim() || !text?.trim()) {
@@ -470,6 +581,8 @@ app.get('/api/admin/stats', requireAdmin, async (req: Request, res: Response) =>
   try {
     const dateFrom = typeof req.query.dateFrom === 'string' ? req.query.dateFrom : undefined;
     const dateTo   = typeof req.query.dateTo   === 'string' ? req.query.dateTo   : undefined;
+    try { assertDateParam(dateFrom, 'dateFrom'); assertDateParam(dateTo, 'dateTo'); }
+    catch (err) { return res.status(400).json({ success: false, error: toClientError(err) }); }
     const [rows, users] = await Promise.all([getAdminUserComparison(dateFrom, dateTo), listUsers()]);
     const userMap = new Map(users.map(u => [u.id, u]));
     const data = rows.map(r => ({
@@ -532,7 +645,11 @@ app.post('/api/admin/users', requireAdmin, async (req: Request, res: Response) =
     if (!email?.trim() || !password?.trim()) {
       return res.status(400).json({ success: false, error: 'E-posta ve geçici şifre zorunlu' });
     }
-    const user = await createUser({ email, name, passwordHash: hashPassword(password), role });
+    // Admin rolü buradan verilmez (bootstrap ile tek admin) — sadece danışman/yönetici.
+    if (role !== undefined && role !== 'agent' && (role as string) !== 'manager') {
+      return res.status(400).json({ success: false, error: 'Rol agent veya manager olmalı' });
+    }
+    const user = await createUser({ email, name, passwordHash: await hashPassword(password), role });
     await provisionNewUserDefaults(user.id, user.name || undefined);
     return res.status(201).json({ success: true, data: await getUserById(user.id) });
   } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
@@ -550,7 +667,7 @@ app.patch('/api/admin/users/:id', requireAdmin, async (req: Request, res: Respon
       if (req.params.id === req.userId) return res.status(400).json({ success: false, error: 'Kendi rolünüzü değiştiremezsiniz' });
       await setUserRole(req.params.id, role);
     }
-    if (password?.trim())      await setUserPassword(req.params.id, hashPassword(password));
+    if (password?.trim())      await setUserPassword(req.params.id, await hashPassword(password));
     if (maxConcurrentCalls !== undefined) {
       // 0/negatif girilirse kampanya motoru hiç slot açamaz ve kampanya sessizce
       // hiç ilerlemez; aşırı büyük değer Vapi hesap limitine çarpıp istekleri
@@ -653,16 +770,20 @@ app.post('/api/call', requireUserAuth, async (req: Request, res: Response) => {
     // Açılış A/B varyantı — kampanya akışıyla aynı mantık (bkz. campaign.ts callContact).
     const opening = pickOpeningVariant(scenario);
     const agentName = user?.assistantName || 'Asistan';
+    // Bakiye tavanı: arama, bakiyenin karşılayamayacağı dakikaya giremez.
+    const affordable = maxAffordableSeconds(balance);
+    const configured = await getAssistantMaxDurationSeconds(creds.apiKey, creds.assistantId);
     const vapiCall = await createVapiCall(creds, customer, buildCallPrompt(scenario, opening), {
       agentName,
       voiceModel: scenario?.voiceModel,
       waitForGreeting: resolveWaitForGreeting(scenario, opening),
       variableOverrides: nameVariableValues(scenario, customer.name, agentName),
+      maxDurationSeconds: affordable < configured ? affordable : undefined,
     });
     const record   = await createCall(req.userId!, vapiCall.id, customer, scenario?.id, scenario?.name,
       undefined, undefined, undefined, undefined, { openingVariantId: opening?.id });
 
-    console.log(`[Vapi] Arama başlatıldı: ${vapiCall.id} → ${customer.phone}`);
+    console.log(`[Vapi] Arama başlatıldı: ${vapiCall.id} → ${maskPhone(customer.phone)}`);
     return res.json({ success: true, data: { callId: vapiCall.id, recordId: record.callId } });
   } catch (err) {
     console.error('[API] /call hatası:', err);
@@ -683,7 +804,7 @@ app.post('/api/call', requireUserAuth, async (req: Request, res: Response) => {
 // bu değişken TANIMSIZ bırakılır — orada pratik normal şekilde ücretlendirilir.
 const ROLEPLAY_FREE = process.env.ROLEPLAY_FREE === 'true';
 
-app.get('/api/roleplay/personas', requireUserAuth, async (_req: Request, res: Response) => {
+app.get('/api/roleplay/personas', requireUserAuth, wrap(async (_req: Request, res: Response) => {
   // systemPrompt BİLEREK response'a dahil edilmez — persona sürprizi bozulmasın
   // ve gerçek prompt sadece sunucu tarafında (assistant-overrides ucunda) kullanılsın.
   // briefing ise TAM TERSİNE danışmanın görüşme ÖNCESİ görmesi gereken hazırlık
@@ -691,18 +812,20 @@ app.get('/api/roleplay/personas', requireUserAuth, async (_req: Request, res: Re
   const personas = ROLEPLAY_PERSONAS.map(({ id, family, difficulty, label, description, briefing }) =>
     ({ id, family, difficulty, label, description, briefing }));
   return res.json({ success: true, data: { personas, ratePerMinute: CALL_MINUTE_RATE_TRY } });
-});
+}));
 
 app.get('/api/roleplay/assistant-overrides/:personaId', requireUserAuth, async (req: Request, res: Response) => {
   try {
     const persona = getRoleplayPersona(req.params.personaId);
     if (!persona) return res.status(404).json({ success: false, error: 'Persona bulunamadı' });
 
+    let affordableSeconds: number | undefined;
     if (!ROLEPLAY_FREE) {
       const balance = await getUserBalance(req.userId!);
       if (balance < CALL_MINUTE_RATE_TRY) {
         return res.status(402).json({ success: false, error: `Jeton bakiyeniz yetersiz (kalan: ${balance.toFixed(2)} TL) — en az ${CALL_MINUTE_RATE_TRY} TL gerekli` });
       }
+      affordableSeconds = maxAffordableSeconds(balance);
     }
 
     // Roleplay telefon numarası çevirmiyor — resolveVapiCreds (phoneNumberId dahil
@@ -712,7 +835,7 @@ app.get('/api/roleplay/assistant-overrides/:personaId', requireUserAuth, async (
     // kurulumunda (provisionWebhookIfReady) düzeltilen aynı hata, burada da vardı.
     const creds = await resolveVapiCredsForAssistant(req.userId!);
     const user  = await getUserById(req.userId!);
-    const assistantOverrides = await buildRoleplayAssistantOverrides(creds, persona.systemPrompt, user?.assistantName || undefined, persona.gender);
+    const assistantOverrides = await buildRoleplayAssistantOverrides(creds, persona.systemPrompt, user?.assistantName || undefined, persona.gender, affordableSeconds);
     return res.json({ success: true, data: { assistantId: creds.assistantId, assistantOverrides } });
   } catch (err) {
     console.error('[Roleplay] assistant-overrides hatası:', err);
@@ -821,7 +944,26 @@ app.post('/webhook/fonzip', async (req: Request, res: Response) => {
 // (2) payload'daki assistantId, o kullanıcının kayıtlı assistantId'siyle eşleşmeli
 // İkisi de tutmazsa istek sessizce (ama loglanarak) düşürülür — sahte istek başka
 // bir danışmanın verisine yazamaz.
+// META_APP_SECRET tanımlıysa X-Hub-Signature-256 ham gövde üzerinde doğrulanır;
+// tanımlı değilse eski davranış (doğrulamasız) sürer, açılışta bir kez uyarılır.
+const META_APP_SECRET = process.env.META_APP_SECRET?.trim() || '';
+if (!META_APP_SECRET) {
+  console.warn('[Webhook] META_APP_SECRET tanımlı değil — /webhook/meta imza doğrulaması YAPILMIYOR (sahte bildirim gereksiz senkron tetikleyebilir)');
+}
+function verifyMetaSignature(req: Request): boolean {
+  const header = req.get('X-Hub-Signature-256') || '';
+  const rawBody = (req as any).rawBody as Buffer | undefined;
+  if (!header.startsWith('sha256=') || !rawBody) return false;
+  const expected = Buffer.from(crypto.createHmac('sha256', META_APP_SECRET).update(rawBody).digest('hex'), 'utf8');
+  const given = Buffer.from(header.slice('sha256='.length), 'utf8');
+  return expected.length === given.length && crypto.timingSafeEqual(expected, given);
+}
+
 app.post('/webhook/meta', async (req: Request, res: Response) => {
+  if (META_APP_SECRET && !verifyMetaSignature(req)) {
+    console.warn('[Webhook] Meta SPOOF ATTEMPT (X-Hub-Signature-256 uyuşmuyor)');
+    return res.sendStatus(403);
+  }
   res.sendStatus(200);
   try {
     const entries = (req.body as any)?.entry as Array<{ id: string }> | undefined;
@@ -844,7 +986,6 @@ app.post('/webhook/meta', async (req: Request, res: Response) => {
 const RESERVED_WEBHOOK_NAMES = new Set(['fonzip', 'meta']);
 
 app.post('/webhook/:userId', async (req: Request, res: Response) => {
-  res.sendStatus(200);
   const routeUserId = req.params.userId;
   const payload = req.body as VapiWebhookPayload;
 
@@ -854,9 +995,12 @@ app.post('/webhook/:userId', async (req: Request, res: Response) => {
     console.error(
       `[Webhook] ROTA SIRASI HATASI: '/webhook/${routeUserId}' istegi ':userId' rotasina dustu. ` +
       `'/webhook/${routeUserId}' tanimi '/webhook/:userId'den ONCE gelmeli (src/server.ts).`);
-    return;
+    return res.sendStatus(200);
   }
 
+  // Doğrulama 200'den ÖNCE: sahte istek 403 alır (sessiz 200 değil). Doğrulama tek
+  // bir DB okuması — Vapi'nin zaman aşımına girmesi için çok kısa; gerçek işleme
+  // (özet, ücretlendirme) 200 döndükten sonra arka planda devam eder.
   try {
     // getUserVapiCredentials DEĞİL: o phoneNumberId'yi de zorunlu tutup yoksa null
     // döner. Telefon numarası seçmemiş (sadece Roleplay Pratik yapan) bir danışmanın
@@ -866,30 +1010,33 @@ app.post('/webhook/:userId', async (req: Request, res: Response) => {
     const secretHeader = req.get('X-Vapi-Secret') || '';
     const assistantId = (payload?.message?.call as any)?.assistantId;
 
-    if (!creds || !creds.serverSecret || secretHeader !== creds.serverSecret) {
+    if (!creds || !creds.serverSecret || !timingSafeEqualStr(secretHeader, creds.serverSecret)) {
       console.warn(`[Webhook] SPOOF ATTEMPT (secret uyuşmuyor): userId=${routeUserId}`);
-      return;
+      return res.sendStatus(403);
     }
     if (assistantId && creds.assistantId && assistantId !== creds.assistantId) {
       console.warn(`[Webhook] SPOOF ATTEMPT (assistantId uyuşmuyor): userId=${routeUserId} assistantId=${assistantId}`);
-      return;
+      return res.sendStatus(403);
     }
   } catch (err) {
     console.error('[Webhook] Doğrulama hatası:', err);
-    return;
+    return res.sendStatus(500);
   }
-
-  trackWebhook(handleWebhook(payload).catch(console.error));
-});
-
-// Geriye dönük uyumluluk — henüz /webhook/:userId'ye taşınmamış eski assistant
-// ayarları için. assistantId'den sahibi bulmaya çalışır, doğrulama yapmaz (zayıf).
-// Her danışman Ayarlarım'dan Vapi bilgilerini kaydettiğinde otomatik olarak
-// /webhook/:userId'ye geçer — bu rota zamanla kullanılmaz hale gelmeli.
-app.post('/webhook', (req: Request, res: Response) => {
   res.sendStatus(200);
-  trackWebhook(handleWebhook(req.body as VapiWebhookPayload).catch(console.error));
+
+  trackWebhook(handleWebhook(payload, routeUserId).catch(console.error));
 });
+
+// Eski, doğrulamasız POST /webhook rotası KALDIRILDI — her danışmanın asistanı
+// provisionWebhookIfReady ile /webhook/:userId'ye bağlı; sahipsiz/imzasız bir
+// webhook'un başkasının kaydına yazabilmesi kabul edilemezdi.
+
+// Sabit zamanlı string karşılaştırması (uzunluk farklıysa da sızdırmaz).
+function timingSafeEqualStr(a: string, b: string): boolean {
+  const ba = Buffer.from(a, 'utf8');
+  const bb = Buffer.from(b, 'utf8');
+  return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
+}
 
 // ─── Graceful shutdown ───────────────────────────────────────────────────────
 // Webhook'lar Vapi'ye hızlı yanıt vermek için hemen 200 dönüyor, DB yazımı
@@ -909,6 +1056,7 @@ let shuttingDown = false;
 async function gracefulShutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
+  setShuttingDown(); // kampanya motoru (fillQueue) yeni arama başlatmayı bırakır
   console.log(`\n[Shutdown] ${signal} alındı — ${inFlightWebhooks.size} bekleyen webhook işlemi tamamlanana kadar bekleniyor...`);
   httpServer?.close();
 
@@ -925,12 +1073,18 @@ async function gracefulShutdown(signal: string): Promise<void> {
   } else {
     console.log('[Shutdown] Tüm işlemler tamamlandı, kapatılıyor.');
   }
+  // Havuzu düzgün kapat — yarım kalan bağlantı Postgres tarafında "idle in
+  // transaction" olarak asılı kalmasın. Takılırsa 3 sn sonra yine de çık.
+  await Promise.race([
+    pool.end().catch(err => console.warn('[Shutdown] pool.end hatası:', err)),
+    new Promise<void>(resolve => setTimeout(resolve, 3_000)),
+  ]);
   process.exit(0);
 }
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 
-async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
+async function handleWebhook(payload: VapiWebhookPayload, routeUserId: string): Promise<void> {
   const msg = payload?.message;
   if (!msg?.type) return;
 
@@ -938,7 +1092,26 @@ async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
   console.log(`[Webhook] ${msg.type}${vapiCallId ? ` | ${vapiCallId}` : ''}`);
 
   // SSE yayını kullanıcı bazlı olduğu için aramanın sahibini bir kez çözüyoruz.
-  const ownerId = vapiCallId ? await getCallOwnerUserId(vapiCallId) : null;
+  let ownerId = vapiCallId ? await getCallOwnerUserId(vapiCallId) : null;
+
+  // Kiracı izolasyonu: /webhook/A rotasından gelen bir istek, B'ye ait bir arama
+  // kaydına (aynı Vapi hesabı paylaşılıyorsa olabilir) ASLA yazamaz.
+  if (ownerId && ownerId !== routeUserId) {
+    console.warn(`[Webhook] Kiracı uyuşmazlığı: call=${vapiCallId} sahibi=${ownerId} rota=${routeUserId} — yok sayıldı`);
+    return;
+  }
+
+  // Roleplay Pratik web araması tarayıcıdan başlar; register-call isteği (ağ/sekme
+  // kapanması) hiç gelmemişse kayıt yok demektir. Rapor geldiğinde kaydı rota
+  // kullanıcısı adına pratik olarak oluştur — aksi halde konuşulan dakikalar HİÇ
+  // ücretlendirilmiyordu (bakiye düşmeden pratik yapılabiliyordu).
+  if (msg.type === 'end-of-call-report' && vapiCallId && !ownerId) {
+    const placeholder: CustomerInfo = { name: 'Pratik', phone: '', region: '', notes: '', reference: '' };
+    await createCall(routeUserId, vapiCallId, placeholder, undefined, undefined, undefined, undefined, true);
+    ownerId = routeUserId;
+    console.log(`[Webhook] Kayıtsız arama ${vapiCallId} pratik olarak user=${routeUserId} adına oluşturuldu`);
+  }
+
   const emit = (event: string, data: unknown) => { if (ownerId) broadcast(ownerId, event, data); };
 
   switch (msg.type) {
@@ -981,13 +1154,28 @@ async function handleWebhook(payload: VapiWebhookPayload): Promise<void> {
       const existing = await readCall(vapiCallId);
       const existingTranscriptLen = existing?.transcript?.length ?? 0;
 
+      // Tekrar eden rapor (Vapi retry / deploy sırasında çift teslim): kayıt zaten
+      // bu rapor tarafından sonuçlandırılmışsa HİÇBİR ŞEYİ yeniden işleme — özet
+      // tekrar üretilmesin, aday/kampanya tekrar güncellenmesin, ücretlendirme
+      // denenmesin. "Bu rapor tarafından" ayrımı önemli: call-ended fallback'i ya da
+      // danışmanın elle kapatması (DELETE /api/call/:id) da endTime+status yazar ama
+      // endedReason/duration yazmaz — o durumda asıl rapor yine işlenmeli (ücret!).
+      if (existing?.endTime && existing.status && existing.status !== 'in-progress'
+          && ((existing as { endedReason?: string }).endedReason != null || existing.duration != null)) {
+        console.log(`[Webhook] end-of-call-report: ${vapiCallId} zaten sonuçlanmış (${existing.status}), tekrar işlenmedi`);
+        break;
+      }
+
       // Vapi'nin kendi duration alanı güvenilir gelmiyor (neredeyse hiç dolu gelmiyor) —
       // başlangıç/bitiş saatlerinden hesaplayıp fallback kullanıyoruz. Bu değer artık
       // sadece istatistiklerde değil, dakika bazlı jeton ücretlendirmesinde de kullanılıyor,
-      // bu yüzden güvenilir olması kritik.
+      // bu yüzden güvenilir olması kritik. Vapi'nin startedAt'i (gerçek bağlantı anı)
+      // bizim kayıt anımızdan (startTime = REST isteği) daha doğru — çalma süresi
+      // ücretlendirilmesin.
       let duration = msg.call?.duration;
-      if (!duration && existing?.startTime) {
-        duration = Math.max(0, Math.round((new Date(endedAt).getTime() - new Date(existing.startTime).getTime()) / 1000));
+      const startRef = msg.call?.startedAt || existing?.startTime;
+      if (!duration && startRef) {
+        duration = Math.max(0, Math.round((new Date(endedAt).getTime() - new Date(startRef).getTime()) / 1000));
       }
 
       // hasUserSpeech: artifact.messages'ta veya streaming transcript'te user rolünde mesaj var mı?
@@ -1252,7 +1440,7 @@ async function generateSummaryForCall(vapiCallId: string, attempt = 1): Promise<
     if (matched) {
       addToDoNotCallList(record.customerPhone, `Müşteri: "${matched}"`, 'keyword_detected', ownerId, vapiCallId)
         .then(() => {
-          console.warn(`[DNC] ${record.customerPhone} global ret listesine eklendi (kalıp tespiti, arama: ${vapiCallId})`);
+          console.warn(`[DNC] ${maskPhone(record.customerPhone)} global ret listesine eklendi (kalıp tespiti, arama: ${vapiCallId})`);
           broadcast(ownerId, 'dnc-added', { phone: record.customerPhone, vapiCallId });
         })
         .catch(err => console.error('[DNC] Ret listesine ekleme hatası:', err));
@@ -1267,21 +1455,31 @@ async function generateSummaryForCall(vapiCallId: string, attempt = 1): Promise<
     await saveCallSummary(vapiCallId, summary);
     await applyDerivedCosts(vapiCallId, ownerId, record, usage);
     broadcast(ownerId, 'summary-ready', { vapiCallId, summary });
-    onCampaignSummaryReady(vapiCallId, summary).catch(console.error);
+    // Kampanya kişisi bir Aday'a (leadId) bağlıysa onCampaignSummaryReady sonucu
+    // doğrudan o lead'e yazar — aşağıdaki telefon-eşleştirmeli upsert'i atla, yoksa
+    // aynı arama için ikinci/bağlantısız bir aday oluşuyordu.
+    let leadHandledByCampaign = false;
+    try {
+      leadHandledByCampaign = await onCampaignSummaryReady(vapiCallId, summary);
+    } catch (err) { console.error('[Campaign] onCampaignSummaryReady hatası:', err); }
     if (summary.beni_aramayin_talebi) {
       addToDoNotCallList(record.customerPhone, summary.ret_nedeni || summary.ozet, 'ai_detected', ownerId, vapiCallId)
         .then(() => {
-          console.warn(`[DNC] ${record.customerPhone} global ret listesine eklendi (AI tespiti, arama: ${vapiCallId})`);
+          console.warn(`[DNC] ${maskPhone(record.customerPhone)} global ret listesine eklendi (AI tespiti, arama: ${vapiCallId})`);
           broadcast(ownerId, 'dnc-added', { phone: record.customerPhone, vapiCallId });
         })
         .catch(err => console.error('[DNC] Ret listesine ekleme hatası:', err));
     }
     // RLM birleşimi Faz 5: arama sonucu → Aday (Lead) — bkz. leads.ts
     // upsertLeadFromCallOutcome'daki asimetrik-risk yorumu (sadece ileri taşır).
-    upsertLeadFromCallOutcome(
-      ownerId, record.customerPhone, record.customerName, vapiCallId,
-      summary.randevu_alindi, summary.ilgi_seviyesi, summary.ozet, summary.mulk_tipi,
-    ).catch(err => console.error('[Leads] Arama sonucu → aday birleşimi hatası:', err));
+    // Pratik görüşmelerinin (telefon yok) ve lead'e bağlı kampanya kişilerinin aday
+    // oluşturmasına gerek yok.
+    if (!leadHandledByCampaign && !record.isPractice && record.customerPhone) {
+      upsertLeadFromCallOutcome(
+        ownerId, record.customerPhone, record.customerName, vapiCallId,
+        summary.randevu_alindi, summary.ilgi_seviyesi, summary.ozet, summary.mulk_tipi,
+      ).catch(err => console.error('[Leads] Arama sonucu → aday birleşimi hatası:', err));
+    }
     console.log(`[AI] Özet hazır: ${vapiCallId} (Anthropic: $${usage.costUsd.toFixed(4)})`);
   } catch (err) {
     console.error(`[AI] Özet hatası (deneme ${attempt}/3):`, err);
@@ -1480,19 +1678,23 @@ app.get('/api/followup', requireUserAuth, async (req: Request, res: Response) =>
 
 app.get('/api/calls', requireUserAuth, async (req: Request, res: Response) => {
   try {
-    const { dateFrom, dateTo, randevu, ilgi, aksiyon, status, scenarioId } = req.query as Record<string, string>;
-    const filters: CallFilters = { dateFrom, dateTo, randevu, ilgi, aksiyon, status, scenarioId };
+    const { dateFrom, dateTo, randevu, ilgi, aksiyon, status, scenarioId, limit } = req.query as Record<string, string>;
+    try { assertDateParam(dateFrom, 'dateFrom'); assertDateParam(dateTo, 'dateTo'); }
+    catch (err) { return res.status(400).json({ success: false, error: toClientError(err) }); }
+    // Liste transkript metnini taşımaz (transcriptCount döner) ve en çok `limit`
+    // (varsayılan 500, üst sınır 2000) kayıt getirir — bkz. calls.ts getAllCalls.
+    const filters: CallFilters = { dateFrom, dateTo, randevu, ilgi, aksiyon, status, scenarioId, limit: limit ? Number(limit) : undefined };
     return res.json({ success: true, data: await getAllCalls(req.userId!, filters) });
   } catch (err) {
     return res.status(500).json({ success: false, error: toClientError(err) });
   }
 });
 
-app.get('/api/calls/:id', requireUserAuth, async (req: Request, res: Response) => {
+app.get('/api/calls/:id', requireUserAuth, wrap(async (req: Request, res: Response) => {
   const record = await readCallForUser(req.userId!, req.params.id);
   if (!record) return res.status(404).json({ success: false, error: 'Arama bulunamadı' });
   return res.json({ success: true, data: record });
-});
+}));
 
 app.patch('/api/calls/:id', requireUserAuth, async (req: Request, res: Response) => {
   try {
@@ -1508,7 +1710,7 @@ app.patch('/api/calls/:id', requireUserAuth, async (req: Request, res: Response)
   }
 });
 
-app.post('/api/generate-summary', requireUserAuth, async (req: Request, res: Response) => {
+app.post('/api/generate-summary', requireUserAuth, perUserAiLimiter, async (req: Request, res: Response) => {
   try {
     const { vapiCallId } = req.body as { vapiCallId: string };
     const record = await readCallForUser(req.userId!, vapiCallId);
@@ -1532,6 +1734,8 @@ app.get('/api/stats', requireUserAuth, async (req: Request, res: Response) => {
     const dateFrom   = typeof req.query.dateFrom   === 'string' ? req.query.dateFrom   : undefined;
     const dateTo     = typeof req.query.dateTo     === 'string' ? req.query.dateTo     : undefined;
     const scenarioId = typeof req.query.scenarioId === 'string' ? req.query.scenarioId : undefined;
+    try { assertDateParam(dateFrom, 'dateFrom'); assertDateParam(dateTo, 'dateTo'); }
+    catch (err) { return res.status(400).json({ success: false, error: toClientError(err) }); }
     return res.json({ success: true, data: await getStats(req.userId!, { dateFrom, dateTo, scenarioId }) });
   } catch (err) {
     return res.status(500).json({ success: false, error: toClientError(err) });
@@ -1539,14 +1743,14 @@ app.get('/api/stats', requireUserAuth, async (req: Request, res: Response) => {
 });
 
 // ─── Kredi / abonelik bilgisi (Vapi + ElevenLabs) ─────────────────────────────
-app.get('/api/credits', requireUserAuth, async (req: Request, res: Response) => {
+app.get('/api/credits', requireUserAuth, wrap(async (req: Request, res: Response) => {
   const elevenlabsKey = await getUserElevenLabsKey(req.userId!);
   const [vapi, elevenlabs] = await Promise.all([
     getVapiCredit(),
     getElevenLabsCredit(elevenlabsKey),
   ]);
   return res.json({ success: true, data: { vapi, elevenlabs } });
-});
+}));
 
 // ─── JETON (TL bakiyesi) ──────────────────────────────────────────────────────
 app.get('/api/billing', requireUserAuth, async (req: Request, res: Response) => {
@@ -2053,7 +2257,32 @@ app.post('/api/whatsapp/campaigns/:id/send', requireUserAuth, async (req: Reques
 // Twilio inbound webhook — Twilio WhatsApp Sender ayarında bu URL kayıtlı olmalı.
 // Vapi webhook'undaki gibi userId URL'de — Twilio'nun tek bir global callback'i
 // desteklememesi (her numara kendi webhook URL'ini alabilir) buna izin veriyor.
+// Twilio imza doğrulaması: X-Twilio-Signature = base64(HMAC-SHA1(authToken,
+// tamUrl + sıralı(formAlanı+değer)...)). Doğrulama yapılmadan önce HERKES
+// /webhook/whatsapp/<userId>'ye sahte gelen mesaj/teslimat durumu yazabiliyordu.
+// URL, Twilio'nun çağırdığı URL ile birebir aynı olmalı — proxy arkasında
+// req.protocol/host güvenilmez, APP_URL varsa o kullanılır.
+async function verifyTwilioSignature(req: Request, userId: string): Promise<boolean> {
+  const config = await getUserWhatsappConfig(userId);
+  if (!config?.authToken) return false; // yapılandırılmamış kullanıcı için webhook kabul edilmez
+  const header = req.get('X-Twilio-Signature') || '';
+  if (!header) return false;
+  const base = process.env.APP_URL?.replace(/\/+$/, '') || `https://${req.get('host')}`;
+  const fullUrl = `${base}${req.originalUrl}`;
+  const body = (req.body && typeof req.body === 'object') ? req.body as Record<string, unknown> : {};
+  const payload = fullUrl + Object.keys(body).sort().map(k => k + String(body[k] ?? '')).join('');
+  const expected = Buffer.from(crypto.createHmac('sha1', config.authToken).update(payload, 'utf8').digest('base64'), 'utf8');
+  const given = Buffer.from(header, 'utf8');
+  return expected.length === given.length && crypto.timingSafeEqual(expected, given);
+}
+
 app.post('/webhook/whatsapp/:userId', async (req: Request, res: Response) => {
+  try {
+    if (!(await verifyTwilioSignature(req, req.params.userId))) {
+      console.warn(`[Webhook] WhatsApp inbound SPOOF ATTEMPT (Twilio imzası uyuşmuyor): userId=${req.params.userId}`);
+      return res.sendStatus(403);
+    }
+  } catch (err) { console.error('[Webhook] WhatsApp imza doğrulama hatası:', err); return res.sendStatus(403); }
   res.sendStatus(200);
   try {
     const { From, Body, MessageSid } = req.body as { From?: string; Body?: string; MessageSid?: string };
@@ -2067,6 +2296,12 @@ app.post('/webhook/whatsapp/:userId', async (req: Request, res: Response) => {
 // read/undelivered/failed — büyük harfe çevrilip whatsapp_messages.status'a yazılır.
 // userId gövdede değil URL'de olduğu için tenant izolasyonu WHERE user_id = $ ile korunur.
 app.post('/webhook/whatsapp/status/:userId', async (req: Request, res: Response) => {
+  try {
+    if (!(await verifyTwilioSignature(req, req.params.userId))) {
+      console.warn(`[Webhook] WhatsApp status SPOOF ATTEMPT (Twilio imzası uyuşmuyor): userId=${req.params.userId}`);
+      return res.sendStatus(403);
+    }
+  } catch (err) { console.error('[Webhook] WhatsApp imza doğrulama hatası:', err); return res.sendStatus(403); }
   res.sendStatus(200);
   try {
     const { MessageSid, MessageStatus, ErrorMessage } = req.body as {
@@ -2203,7 +2438,7 @@ app.put('/api/vapi/assistant-prompt', requireUserAuth, async (req: Request, res)
 
 // AI ile Vapi sistem promptu üret — Vapi'nin public API'sinde bu özellik
 // olmadığı için (doğrulandı) kendi Anthropic entegrasyonumuzla sağlanıyor.
-app.post('/api/prompt/generate', requireUserAuth, async (req: Request, res: Response) => {
+app.post('/api/prompt/generate', requireUserAuth, perUserAiLimiter, async (req: Request, res: Response) => {
   try {
     const input = req.body as PromptGenInput;
     const hasRaw = !!input.rawText?.trim();
@@ -2305,7 +2540,7 @@ app.put('/api/admin/script-rules', requireAdmin, async (req: Request, res: Respo
 
 // Bir sistem promptunu gerçek para harcamadan (Vapi araması yapmadan) test et —
 // Claude hem asistanı hem 3 farklı müşteri tepkisini simüle eder.
-app.post('/api/prompt/simulate', requireUserAuth, async (req: Request, res: Response) => {
+app.post('/api/prompt/simulate', requireUserAuth, perUserAiLimiter, async (req: Request, res: Response) => {
   try {
     const { systemPrompt, customerName } = req.body as { systemPrompt: string; customerName?: string };
     if (!systemPrompt?.trim()) {
@@ -2592,7 +2827,7 @@ app.post('/api/campaign/pause', requireUserAuth, async (req: Request, res: Respo
   try {
     const campaignId = requireCampaignId(req, res);
     if (!campaignId) return;
-    const result = await campaignPause(req.userId!, campaignId);
+    const result = await campaignTogglePause(req.userId!, campaignId);
     return res.json({ success: true, ...result });
   } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
@@ -2627,9 +2862,37 @@ app.delete('/api/campaign', requireUserAuth, async (req: Request, res: Response)
   } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
+// ─── SAĞLIK (Railway healthcheck, auth yok) ──────────────────────────────────
+// DB'ye 2 sn içinde SELECT 1 atabiliyorsa 200, değilse 503 — Railway bu uçla
+// bozuk bir süreci yeniden başlatır (bkz. railway.json).
+app.get('/health', async (_req: Request, res: Response) => {
+  try {
+    await Promise.race([
+      pool.query('SELECT 1'),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('db timeout')), 2_000)),
+    ]);
+    return res.status(200).json({ ok: true });
+  } catch (err) {
+    return res.status(503).json({ ok: false, error: 'db' });
+  }
+});
+
 // ─── CATCH-ALL ───────────────────────────────────────────────────────────────
 
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'index.html')));
+
+// Son hata middleware'i — wrap() ile sarılmış async handler'ların reddi, body
+// parser hataları (örn. 256kb aşımı, bozuk JSON) buraya düşer. Express 4 bunsuz
+// bu hataları HTML sayfasıyla (stack dahil) dönüyordu.
+app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
+  console.error('[Express] İşlenmemiş hata:', err);
+  if (res.headersSent) return next(err);
+  const status = typeof err?.status === 'number' && err.status >= 400 && err.status < 600 ? err.status : 500;
+  const error = status === 413 ? 'İstek gövdesi çok büyük'
+    : status === 400 ? 'Geçersiz istek gövdesi'
+    : 'Sunucu hatası';
+  res.status(status).json({ success: false, error });
+});
 
 // ─── BAŞLAT ──────────────────────────────────────────────────────────────────
 

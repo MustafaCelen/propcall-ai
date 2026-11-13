@@ -21,14 +21,18 @@ import {
 } from './calls';
 import { getScenario } from './scenarios';
 import { pickOpeningVariant, buildCallPrompt, nameVariableValues, resolveWaitForGreeting } from './opening';
-import { resolveVapiCreds, getUserById, getUserElevenLabsKey, CALL_MINUTE_RATE_TRY } from './users';
+import { resolveVapiCreds, getUserById, getUserElevenLabsKey, CALL_MINUTE_RATE_TRY, maxAffordableSeconds } from './users';
+import { getAssistantMaxDurationSeconds } from './vapi';
 import { CustomerInfo, CallSummary } from './types';
 import { resolveVapiAccountForUser, DEFAULT_VAPI_ACCOUNT_MAX_CONCURRENT } from './vapiAccounts';
+import { isShuttingDown } from './lifecycle';
 import {
-  CampaignContact, CampaignRecord, CampaignStatus, SkipKind,
-  createCampaign, getAllActiveCampaigns, isSkipResumable, isLimitSkip,
+  CampaignContact, CampaignRecord, CampaignStatus, SkipKind, PauseReason,
+  createCampaign, getAllActiveCampaigns, getCampaign, isSkipResumable, isLimitSkip,
   saveCampaignContacts, setCampaignStatus, updateCampaignSettings, deleteCampaignRecord,
 } from './campaigns';
+
+export type { PauseReason } from './campaigns';
 
 export type { CampaignContact } from './campaigns';
 
@@ -77,6 +81,13 @@ interface CampaignEngineEntry {
   // fillQueue → resolveVapiAccountForUser). 'none' = kullanıcının Vapi anahtarı yok.
   vapiAccountKey?: string;
   userCeiling?: number;
+  // fillQueue yeniden-giriş kilidi: webhook + tick + resume aynı anda tetiklenince
+  // iki fillQueue aynı kişiyi iki kez çevirebiliyordu. Biri çalışırken diğeri hiç girmez.
+  filling?: boolean;
+  // Kampanya NEDEN duraklatıldı — 'user' (danışman), 'credit' (kredi/bakiye bitti),
+  // 'plan' (Akıllı Plan penceresi kapandı). Akıllı Plan SADECE 'plan' ile duraklattığını
+  // tekrar açar; danışmanın elle ya da kredi yüzünden duraklattığına dokunmaz.
+  pauseReason?: PauseReason;
 }
 
 // Dışa açık görünüm — bugünkü frontend'in beklediği şekle birebir uyar.
@@ -101,6 +112,7 @@ export interface CampaignSnapshot {
   // Önceden bu durum hiçbir yerde bildirilmiyordu: danışman sadece satırlarda 🔒
   // ikonu görüyor, ne olduğunu ve ne yapacağını anlamıyordu.
   limitReached?: 'call' | 'answered';
+  pauseReason?: PauseReason;
 }
 
 type BroadcastFn = (userId: string, event: string, data: unknown) => void;
@@ -108,6 +120,11 @@ type BroadcastFn = (userId: string, event: string, data: unknown) => void;
 // ─── Sabitler ─────────────────────────────────────────────────────────────────
 
 const CALL_TIMEOUT_MS      = 5 * 60 * 1000; // 5 dakika
+// Tick uzlaştırması bu yaştan genç aramalara DOKUNMAZ — createCall/webhook yarışında
+// henüz DB'ye yazılmamış ya da webhook'u yoldayken bir aramayı erken "bitti" saymamak için.
+const RECONCILE_MIN_AGE_MS = 60 * 1000;
+// Biten/durdurulan kampanya hafızada bu kadar kalır, sonra motordan düşer (DB'de kalır).
+const ENGINE_EVICT_MS      = 30 * 60 * 1000;
 const TICK_ACTIVE_MS       = 5  * 1000;
 const TICK_RUNNING_MS      = 15 * 1000;
 const TICK_IDLE_MS         = 30 * 1000;
@@ -222,6 +239,7 @@ async function recordToEntry(rec: CampaignRecord): Promise<CampaignEngineEntry> 
     // devam edilebilir — kullanıcının tekrar "Başlat"a basmasını beklemeye gerek yok.
     running: rec.status === 'running',
     paused: rec.status === 'paused',
+    pauseReason: rec.status === 'paused' ? rec.pauseReason : undefined,
     maxConcurrent: rec.maxConcurrent || 1,
     scenarioId: rec.scenarioId,
     startFromIndex: rec.startFromIndex || 0,
@@ -259,6 +277,7 @@ function toSnapshot(e: CampaignEngineEntry | null): CampaignSnapshot {
     retryMaxAttempts: e.retryMaxAttempts, retryDelayMinutes: e.retryDelayMinutes,
     autoHeld: e.autoHeld,
     limitReached: e.limitReached,
+    pauseReason: e.paused ? e.pauseReason : undefined,
   };
 }
 
@@ -267,10 +286,17 @@ function toSnapshot(e: CampaignEngineEntry | null): CampaignSnapshot {
 export async function loadAllActiveCampaigns(): Promise<void> {
   try {
     const records = await getAllActiveCampaigns();
-    const entries = await Promise.all(records.map(rec => recordToEntry(rec)));
-    records.forEach((rec, i) => engines.set(rec.id, entries[i]));
-    if (records.length) {
-      console.log(`[Campaign] ${records.length} aktif kampanya yüklendi: ${records.map(r => `"${r.name}"`).join(', ')}`);
+    // allSettled: tek bir kampanyanın uzlaştırması patlayınca (bozuk JSONB, DB hıçkırığı)
+    // DİĞER danışmanların kampanyaları da yüklenmeden kalıyordu — hepsi birden "kayboluyordu".
+    const results = await Promise.allSettled(records.map(rec => recordToEntry(rec)));
+    const loaded: string[] = [];
+    results.forEach((r, i) => {
+      const rec = records[i];
+      if (r.status === 'fulfilled') { engines.set(rec.id, r.value); loaded.push(`"${rec.name}"`); }
+      else console.error(`[Campaign] Kampanya yüklenemedi (${rec.id} "${rec.name}"):`, r.reason);
+    });
+    if (loaded.length) {
+      console.log(`[Campaign] ${loaded.length}/${records.length} aktif kampanya yüklendi: ${loaded.join(', ')}`);
     }
   } catch (err) {
     console.error('[Campaign] DB yükleme hatası:', err);
@@ -315,6 +341,38 @@ function resolveEntry(userId: string, campaignId?: string): CampaignEngineEntry 
     if (!best || e.createdAt > best.createdAt) best = e;
   }
   return best;
+}
+
+// resolveEntry'nin DB'ye düşen kardeşi — biten/durdurulan kampanyalar bellekten
+// tahliye edildikten (scheduleEviction) sonra da "Yeniden çalıştır" / "Tekrar Dene" /
+// özet senkronu çalışabilsin diye kaydı getCampaign + recordToEntry ile geri yükler ve
+// motora tekrar ekler (çalışmıyorsa 30 dk sonra yine tahliye edilir).
+async function resolveEntryOrLoad(userId: string, campaignId?: string): Promise<CampaignEngineEntry | null> {
+  const inMemory = resolveEntry(userId, campaignId);
+  if (inMemory || !campaignId) return inMemory;
+  const rec = await getCampaign(userId, campaignId);
+  if (!rec) return null;
+  // Yükleme sırasında (await) başka bir yol aynı kaydı eklemiş olabilir — onu kullan.
+  const raced = engines.get(campaignId);
+  if (raced && raced.userId === userId) return raced;
+  const entry = await recordToEntry(rec);
+  engines.set(rec.id, entry);
+  scheduleEviction(entry);
+  return entry;
+}
+
+// Biten/durdurulan kampanya bellekte sonsuza dek kalmasın — her tick onun kişilerini
+// de tarıyordu ve bellek sadece büyüyordu. Sadece 'completed'/'stopped' ve hâlâ
+// çalışmıyorsa düşer; bu arada tekrar çalıştırıldıysa (running) dokunulmaz.
+function scheduleEviction(entry: CampaignEngineEntry): void {
+  setTimeout(() => {
+    const live = engines.get(entry.id);
+    if (live !== entry) return; // bu arada yeniden yüklenmiş — o kopyanın kendi zamanlayıcısı var
+    if (live.running || live.paused) return;
+    if (live.status !== 'completed' && live.status !== 'stopped') return;
+    if (live.contacts.some(c => c.status === 'arıyor')) return;
+    engines.delete(entry.id);
+  }, ENGINE_EVICT_MS).unref();
 }
 
 function findEntryByVapiCallId(vapiCallId: string): { entry: CampaignEngineEntry; idx: number } | null {
@@ -389,7 +447,7 @@ export async function campaignLoad(
 // fonksiyon aynı uzlastirma mantigini (bkz. recordToEntry) TALEP UZERINE, sunucuyu
 // yeniden baslatmadan, tek bir kampanya icin tetikler.
 export async function resyncCampaignSummaries(userId: string, campaignId?: string): Promise<number> {
-  const entry = resolveEntry(userId, campaignId);
+  const entry = await resolveEntryOrLoad(userId, campaignId);
   if (!entry) return 0;
   const bestCalls = await getBestCallsByPhoneForCampaign(userId, entry.id);
   let updated = 0;
@@ -444,12 +502,13 @@ export async function campaignStart(
 
   entry.running   = true;
   entry.paused    = false;
+  entry.pauseReason = undefined;
   entry.status    = 'running';
   entry.limitReached = undefined; // taze başlangıç — eski limit uyarısı taşınmasın
   entry.updatedAt = Date.now();
   await setCampaignStatus(userId, entry.id, 'running', { markStarted: true });
   broadcastFn(userId, 'campaign-update', toSnapshot(entry));
-  fillQueue(entry);
+  void fillQueue(entry).catch(err => console.error('[Campaign] fillQueue hatası', err));
 }
 
 // Yeni bir Excel yüklenirken ekranda zaten bir draft varsa onu çöpe at — aksi
@@ -496,7 +555,7 @@ function requeueSkipped(entry: CampaignEngineEntry, match: (kind: SkipKind) => b
 export async function campaignResume(
   userId: string, campaignId?: string, overrides?: CampaignResumeOverrides,
 ): Promise<void> {
-  const entry = resolveEntry(userId, campaignId);
+  const entry = await resolveEntryOrLoad(userId, campaignId);
   if (!entry || !entry.contacts.length)
     throw new Error('Aranacak kimse yok — tüm kişiler ya tamamlandı ya da listede kimse kalmadı.');
 
@@ -586,6 +645,7 @@ export async function campaignResume(
 
   entry.running   = true;
   entry.paused    = false;
+  entry.pauseReason = undefined;
   entry.updatedAt = Date.now();
   // Kurtarılan kişileri DB'ye yaz — yoksa yalnızca hafızada 'bekliyor' olurlar ve
   // bir deploy/restart hepsini tekrar 'başarısız' olarak geri yüklerdi.
@@ -593,7 +653,7 @@ export async function campaignResume(
   entry.status = 'running';
   await setCampaignStatus(userId, entry.id, 'running');
   broadcastFn(userId, 'campaign-update', toSnapshot(entry));
-  fillQueue(entry);
+  void fillQueue(entry).catch(err => console.error('[Campaign] fillQueue hatası', err));
 }
 
 // "başarısız" durumundaki kişileri "bekliyor"a geri alır — campaignResume'un
@@ -627,7 +687,7 @@ export function rerunMatches(c: CampaignContact, scope: RerunScope): boolean {
 export async function campaignRerun(
   userId: string, campaignId: string, scope: RerunScope,
 ): Promise<{ requeued: number }> {
-  const entry = resolveEntry(userId, campaignId);
+  const entry = await resolveEntryOrLoad(userId, campaignId);
   if (!entry) throw new Error('Kampanya bulunamadı');
   if (entry.running && !entry.paused) {
     throw new Error('Kampanya şu an çalışıyor — yeniden çalıştırmak için önce bitmesini bekleyin ya da duraklatın.');
@@ -653,7 +713,7 @@ export async function campaignRerun(
 }
 
 export async function campaignRetryFailed(userId: string, campaignId?: string): Promise<{ retried: number }> {
-  const entry = resolveEntry(userId, campaignId);
+  const entry = await resolveEntryOrLoad(userId, campaignId);
   if (!entry) return { retried: 0 };
   let retried = 0;
   entry.contacts.forEach(c => {
@@ -690,16 +750,48 @@ export function campaignDismissLimitNotice(userId: string, campaignId?: string):
   broadcastFn(userId, 'campaign-update', toSnapshot(entry));
 }
 
-export async function campaignPause(userId: string, campaignId?: string): Promise<{ paused: boolean }> {
+// AÇIK duraklatma — eskiden bu fonksiyon bir TOGGLE idi (paused ise devam ettiriyordu).
+// Akıllı Plan pencere kapanınca "duraklat" derken kampanya zaten danışman tarafından
+// duraklatılmışsa onu yanlışlıkla DEVAM ettiriyordu. Artık her zaman duraklatır;
+// devam ettirme campaignResume'un (ve UI toggle'ı için campaignTogglePause'un) işi.
+// reason: 'user' (danışman), 'plan' (Akıllı Plan penceresi) — 'credit' sadece motorun
+// kendi içinden (pauseForCreditExhaustion) yazılır.
+export async function campaignPause(
+  userId: string, campaignId?: string, reason: Exclude<PauseReason, 'credit'> = 'user',
+): Promise<{ paused: boolean }> {
   const entry = resolveEntry(userId, campaignId);
   if (!entry) return { paused: false };
-  entry.paused    = !entry.paused;
-  entry.updatedAt = Date.now();
-  entry.status = entry.paused ? 'paused' : 'running';
-  await setCampaignStatus(userId, entry.id, entry.status);
+  if (!entry.running) return { paused: entry.paused };
+  if (entry.paused) {
+    // Zaten duraklatılmış: sebebi danışman üstleniyorsa ('user') kaydet — kredi
+    // duraklatmasının üstüne plan yazılmasın (plan onu asla geri açmamalı).
+    if (reason === 'user' && entry.pauseReason !== 'user') {
+      entry.pauseReason = 'user';
+      await setCampaignStatus(userId, entry.id, 'paused', { pauseReason: 'user' });
+    }
+    return { paused: true };
+  }
+  entry.paused      = true;
+  entry.pauseReason = reason;
+  entry.autoHeld    = undefined;
+  entry.updatedAt   = Date.now();
+  entry.status      = 'paused';
+  await setCampaignStatus(userId, entry.id, 'paused', { pauseReason: reason });
   broadcastFn(userId, 'campaign-update', toSnapshot(entry));
-  if (!entry.paused) fillQueue(entry);
-  return { paused: entry.paused };
+  return { paused: true };
+}
+
+// UI'daki tek "⏸ Duraklat / ▶ Devam Et" butonu için eski toggle davranışı —
+// server.ts /api/campaign/pause bunu çağırmalı (bkz. public/app.js campaignPause:
+// yanıttaki `paused` alanına göre buton metnini değiştiriyor).
+export async function campaignTogglePause(userId: string, campaignId?: string): Promise<{ paused: boolean }> {
+  const entry = resolveEntry(userId, campaignId);
+  if (!entry) return { paused: false };
+  if (entry.paused) {
+    await campaignResume(userId, entry.id);
+    return { paused: false };
+  }
+  return campaignPause(userId, entry.id, 'user');
 }
 
 export async function campaignStop(userId: string, campaignId?: string): Promise<void> {
@@ -707,6 +799,7 @@ export async function campaignStop(userId: string, campaignId?: string): Promise
   if (!entry) return;
   entry.running   = false;
   entry.paused    = false;
+  entry.pauseReason = undefined;
   entry.updatedAt = Date.now();
   entry.contacts.forEach(c => {
     if (c.status === 'bekliyor' || c.status === 'tekrar-planlandı') {
@@ -723,6 +816,7 @@ export async function campaignStop(userId: string, campaignId?: string): Promise
   entry.status = 'stopped';
   await setCampaignStatus(userId, entry.id, 'stopped');
   broadcastFn(userId, 'campaign-update', toSnapshot(entry));
+  scheduleEviction(entry);
 }
 
 // "Temizle" artık kampanyayı SİLMEZ — geçmişte durur, sadece motordan (canlı takipten) çıkarır.
@@ -750,22 +844,30 @@ export async function campaignClear(userId: string, campaignId?: string): Promis
 // tekrar denemek, kalıcı olarak bozuk numaraları sonsuza dek yeniden arayıp durur.
 const TRANSIENT_FAILURE_PATTERN = /sip.*(failed-to-connect|timeout)|providerfault|outbound-sip-\d{3}/i;
 
-export async function onCampaignCallEnded(
-  vapiCallId: string, status: string, duration?: number, endedReason?: string,
-): Promise<void> {
-  const found = findEntryByVapiCallId(vapiCallId);
-  if (!found) return;
-  const { entry, idx } = found;
+// Bir aramanın SONUCUNU kişiye uygular: durum önceliği, süre, ElevenLabs kredi
+// sinyali, hata metni ve otomatik yeniden arama planı. Hem webhook yolu
+// (onCampaignCallEnded) hem tick uzlaştırması (tickOne → readCall) BURADAN geçer —
+// önceden tick yolu retry planlamasını atlıyordu: webhook'u kaybolan bir cevapsız
+// arama "cevapsız"da kalıyor, retry hakkı olduğu halde bir daha aranmıyordu.
+// DB'ye yazmaz, yayın yapmaz — çağıran persist/broadcast eder.
+function applyOutcome(
+  entry: CampaignEngineEntry, idx: number, status: string, duration?: number, endedReason?: string,
+): void {
   const c      = entry.contacts[idx];
   const mapped = callStatusToTurkish(status) as CampaignContact['status'];
+  // Retry planı SADECE 'arıyor' → sonuç geçişinde kurulur. Kişi bu arama için zaten
+  // bir nihai sonuç aldıysa (ikinci webhook: call-ended'dan sonra end-of-call-report)
+  // durum/süre güncellenir ama yeniden planlama tekrarlanmaz — aksi halde aynı arama
+  // attemptCount artmadan iki kez "tekrar denenecek" oluyordu.
+  const wasActive = c.status === 'arıyor';
 
   const currentPriority = STATUS_PRIORITY[c.status] ?? 0;
   const newPriority     = STATUS_PRIORITY[mapped]   ?? 0;
 
-  if (newPriority > currentPriority || c.status === 'arıyor') {
+  if (newPriority > currentPriority || wasActive) {
     c.status = mapped;
   } else {
-    console.log(`[Campaign] onCampaignCallEnded: "${c.name}" ${c.status}→${mapped} düşürme önlendi`);
+    console.log(`[Campaign] applyOutcome: "${c.name}" ${c.status}→${mapped} düşürme önlendi`);
   }
 
   if (duration && (!c.duration || duration > c.duration)) c.duration = duration;
@@ -796,6 +898,7 @@ export async function onCampaignCallEnded(
   // durumda bırakmak yerine bir süre sonra tekrar aranmak üzere kuyruğa geri koy.
   const isTransientFailure = c.status === 'başarısız' && !!endedReason && TRANSIENT_FAILURE_PATTERN.test(endedReason);
   if (
+    wasActive &&
     (c.status === 'cevapsız' || c.status === 'meşgul' || isTransientFailure) &&
     entry.retryMaxAttempts > 1 &&
     (c.attemptCount ?? 1) < entry.retryMaxAttempts
@@ -809,6 +912,22 @@ export async function onCampaignCallEnded(
       : undefined;
     c.nextRetryAt = retryAt;
   }
+}
+
+export async function onCampaignCallEnded(
+  vapiCallId: string, status: string, duration?: number, endedReason?: string,
+): Promise<void> {
+  const found = findEntryByVapiCallId(vapiCallId);
+  if (!found) return;
+  const { entry, idx } = found;
+  const c = entry.contacts[idx];
+
+  // Yinelenen webhook koruması: bu arama için retry zaten planlandıysa ikinci bildirim
+  // (örn. end-of-call-report, call-ended'dan sonra) planı bozmasın, "cevapsız"a geri
+  // düşürmesin ya da nextRetryAt'i ileri atmasın.
+  if (c.vapiCallId === vapiCallId && c.status === 'tekrar-planlandı') return;
+
+  applyOutcome(entry, idx, status, duration, endedReason);
 
   await persistContacts(entry);
   broadcastFn(entry.userId, 'campaign-contact-update', {
@@ -816,14 +935,17 @@ export async function onCampaignCallEnded(
   });
 
   if (isDone(entry)) { await onCampaignComplete(entry); return; }
-  if (entry.running && !entry.paused) fillQueue(entry);
+  if (entry.running && !entry.paused) void fillQueue(entry).catch(err => console.error('[Campaign] fillQueue hatası', err));
 }
 
+// Dönüş: kişi bir Aday'a (leadId) bağlıysa ve sonuç o lead'e yazıldıysa `true` —
+// server.ts bu durumda telefon-eşleştirmeli upsertLeadFromCallOutcome yolunu ATLAR
+// (yoksa aynı arama için iki CALL_COMPLETED aktivitesi + iki görev üretiliyordu).
 export async function onCampaignSummaryReady(
   vapiCallId: string, summary: CallSummary,
-): Promise<void> {
+): Promise<boolean> {
   const found = findEntryByVapiCallId(vapiCallId);
-  if (!found) return;
+  if (!found) return false;
   const { entry, idx } = found;
   const c = entry.contacts[idx];
   c.result = summary;
@@ -837,13 +959,25 @@ export async function onCampaignSummaryReady(
   // yerine doğrudan AYNI lead'e yazılsın — yeni, bağlantısız bir lead oluşmasın.
   if (c.leadId) {
     const { applyCallOutcomeToLeadById } = await import('./leads');
-    applyCallOutcomeToLeadById(
+    await applyCallOutcomeToLeadById(
       entry.userId, c.leadId, vapiCallId, summary.randevu_alindi, summary.ilgi_seviyesi, summary.ozet, summary.mulk_tipi,
     ).catch(err => console.error('[Campaign] applyCallOutcomeToLeadById hatası:', err));
+    return true;
   }
+  return false;
 }
 
 // ─── İç yardımcılar ───────────────────────────────────────────────────────────
+
+// "Arama limiti"ne sayılan kişi: gerçekten çevrilmiş (ya da şu an çevriliyor) olanlar.
+// Hiç aranmadan ATLANANLAR (ret listesi, tekrar-arama koruması, limit/durdurma
+// atlamaları — skipKind dolu 'başarısız') sayılmaz; önceden sayılıyor ve 1000 kişilik
+// listede 400 "duplicate" atlaması "400 arama yapıldı" diye limiti yiyordu.
+function isDialed(c: CampaignContact): boolean {
+  if (c.status === 'bekliyor') return false;
+  if (c.status === 'başarısız' && c.skipKind) return false;
+  return true;
+}
 
 function isDone(entry: CampaignEngineEntry): boolean {
   const startIdx = entry.startFromIndex ?? 0;
@@ -858,7 +992,7 @@ function isDone(entry: CampaignEngineEntry): boolean {
   if (allDone) return true;
 
   if (entry.callLimit && entry.callLimit > 0) {
-    const dialed = scope.filter(c => c.status !== 'bekliyor').length;
+    const dialed = scope.filter(isDialed).length;
     if (dialed >= entry.callLimit) return true;
   }
 
@@ -921,6 +1055,7 @@ async function onCampaignComplete(entry: CampaignEngineEntry): Promise<void> {
     contacts: entry.contacts,
   });
   console.log(`[Campaign] "${entry.name}" tamamlandı — ${randevu}/${entry.contacts.length} randevu`);
+  scheduleEviction(entry);
 }
 
 // Bir kullanıcının TÜM eşzamanlı kampanyalarındaki toplam aktif ('arıyor') arama sayısı —
@@ -1040,7 +1175,9 @@ export function getLiveAccountStats(): Record<string, { active: number; byUser: 
 // Türkiye tek dilim (Europe/Istanbul, DST yok 2016'dan beri) — danışman bazlı
 // ayrı zaman dilimi desteğine şimdilik gerek yok.
 export function currentIstanbulHour(): number {
-  return Number(new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Istanbul', hour: 'numeric', hour12: false }).format(new Date()));
+  // hourCycle:'h23' — hour12:false bazı ICU sürümlerinde gece yarısını "24" döndürüyor
+  // (h24 döngüsü); o zaman 00:xx hiçbir arama penceresine girmiyordu.
+  return Number(new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Istanbul', hour: 'numeric', hourCycle: 'h23' }).format(new Date()));
 }
 
 // 0=Pazar..6=Cumartesi (cron/JS Date.getDay() konvansiyonu) — smartPlans.ts'in
@@ -1116,10 +1253,11 @@ async function hasElevenLabsCreditLeft(userId: string): Promise<boolean> {
 async function pauseForCreditExhaustion(entry: CampaignEngineEntry, reason: string): Promise<void> {
   if (entry.paused) return; // zaten duraklatılmış, tekrar tetikleme
   entry.paused    = true; // running kasıtlı olarak dokunulmuyor — "Devam Et" tekrar fillQueue'yu denesin
+  entry.pauseReason = 'credit';
   entry.autoHeld  = undefined;
   entry.updatedAt = Date.now();
   entry.status = 'paused';
-  await setCampaignStatus(entry.userId, entry.id, 'paused');
+  await setCampaignStatus(entry.userId, entry.id, 'paused', { pauseReason: 'credit' });
   broadcastFn(entry.userId, 'campaign-update', toSnapshot(entry));
   broadcastFn(entry.userId, 'campaign-credit-paused', { campaignId: entry.id, name: entry.name, reason });
   console.warn(`[Campaign] "${entry.name}" kredi tükenmesi nedeniyle duraklatıldı: ${reason}`);
@@ -1127,8 +1265,22 @@ async function pauseForCreditExhaustion(entry: CampaignEngineEntry, reason: stri
 
 const CREDIT_ERROR_PATTERN = /credit|balance|insufficient|payment required|billing|out of funds/i;
 
+// Yeniden-giriş kilidi: webhook, tick ve "Devam Et" aynı anda fillQueue'yu tetikleyebilir;
+// içerideki await'ler (DNC, tekrar-arama kontrolü) sırasında ikinci bir çağrı aynı
+// 'bekliyor' kişiyi görüp ikinci kez çevirebiliyordu. Biri çalışırken diğeri hiç girmez —
+// kaçırılan tetik bir sonraki tick'te (5-15 sn) zaten telafi edilir.
 async function fillQueue(entry: CampaignEngineEntry): Promise<void> {
-  if (!entry.running || entry.paused) return;
+  if (entry.filling) return;
+  entry.filling = true;
+  try {
+    await fillQueueInner(entry);
+  } finally {
+    entry.filling = false;
+  }
+}
+
+async function fillQueueInner(entry: CampaignEngineEntry): Promise<void> {
+  if (!entry.running || entry.paused || isShuttingDown()) return;
 
   const user = await getUserById(entry.userId);
 
@@ -1193,7 +1345,7 @@ async function fillQueue(entry: CampaignEngineEntry): Promise<void> {
   }
 
   if (entry.callLimit && entry.callLimit > 0) {
-    const dialed = entry.contacts.slice(startIdx).filter(c => c.status !== 'bekliyor').length;
+    const dialed = entry.contacts.slice(startIdx).filter(isDialed).length;
     if (dialed >= entry.callLimit) {
       let changed = false;
       entry.contacts.forEach(c => {
@@ -1261,6 +1413,7 @@ async function fillQueue(entry: CampaignEngineEntry): Promise<void> {
   let started = 0;
   let reconciledAny = false;
   const protectionWindowStart = protectionWindowStartIso(user?.duplicateCallProtectionDays ?? 1);
+  const userCeiling = user?.maxConcurrentCalls ?? 3;
   for (let i = startIdx; i < entry.contacts.length && started < slots; i++) {
     const c = entry.contacts[i];
     const retryDue = c.status === 'tekrar-planlandı' && !!c.nextRetryAt && new Date(c.nextRetryAt) <= new Date();
@@ -1306,8 +1459,16 @@ async function fillQueue(entry: CampaignEngineEntry): Promise<void> {
     // hesaptaki başka bir kampanyanın fillQueue'su paralel slot açmış olabilir
     // (tickAll kampanyaları paralel işler). Aramayı göndermeden hemen önce hesap
     // boşluğunu senkron olarak yeniden doğrula — Vapi'den 429 yemektense bekle.
+    // Aynı await'ler sırasında kampanya duraklatılmış/durdurulmuş, sunucu kapanmaya
+    // geçmiş ya da bu kişi (webhook/uzlaştırma ile) başka bir duruma geçmiş olabilir —
+    // çevirmeden hemen önce SENKRON olarak yeniden doğrula.
+    if (!entry.running || entry.paused || isShuttingDown()) break;
+    const stillDue = c.status === 'bekliyor' ||
+      (c.status === 'tekrar-planlandı' && !!c.nextRetryAt && new Date(c.nextRetryAt) <= new Date());
+    if (!stillDue) continue;
+    if (countUserActiveCalls(entry.userId) >= userCeiling) { concurrencyLimited = true; break; }
     if (accountSlotsFor(entry, accountCap) <= 0) { concurrencyLimited = true; break; }
-    callContact(entry, i);
+    void callContact(entry, i).catch(err => console.error(`[Campaign] callContact hatası (${c.name}):`, err));
     started++;
   }
   if (reconciledAny) {
@@ -1354,11 +1515,20 @@ async function callContact(entry: CampaignEngineEntry, idx: number): Promise<voi
     // eklenir; hangi varyantın kullanıldığı arama kaydına yazılır (bkz. src/opening.ts).
     const opening = pickOpeningVariant(scenario);
     const agentName = user?.assistantName || 'Asistan';
+    // Bakiye tavanı: arama en fazla bakiyenin karşılayabileceği süre kadar sürsün —
+    // 10 TL bakiyeyle 10 dakikalık arama yapılıp bakiye -90'a düşmesin.
+    let maxDurationSeconds: number | undefined;
+    try {
+      const affordable = maxAffordableSeconds(user?.balanceTry ?? 0);
+      const configured = await getAssistantMaxDurationSeconds(creds.apiKey, creds.assistantId);
+      if (affordable < configured) maxDurationSeconds = affordable;
+    } catch { /* tavan okunamazsa asistan ayarı geçerli kalır */ }
     const vapiCall = await createVapiCall(creds, customer, buildCallPrompt(scenario, opening), {
       agentName,
       voiceModel: scenario?.voiceModel,
       waitForGreeting: resolveWaitForGreeting(scenario, opening),
       variableOverrides: nameVariableValues(scenario, customer.name, agentName),
+      maxDurationSeconds,
     });
     c.vapiCallId   = vapiCall.id;
 
@@ -1399,13 +1569,18 @@ async function callContact(entry: CampaignEngineEntry, idx: number): Promise<voi
     broadcastFn(entry.userId, 'campaign-contact-update', {
       campaignId: entry.id, index: idx, contact: { ...c }, summary: getCampaignSummary(entry),
     });
-    if (entry.running && !entry.paused) fillQueue(entry);
+    if (entry.running && !entry.paused) void fillQueue(entry).catch(e => console.error('[Campaign] fillQueue hatası', e));
   }
 }
 
 // Tüm aktif kampanyaları PARALEL işler — bkz. dosya başındaki not.
+// Duraklatılmış (ya da yeni durdurulmuş) kampanyaların devam eden aramaları da
+// uzlaştırılır — önceden sadece running && !paused tick'leniyordu: kredi yüzünden
+// duraklatılan bir kampanyanın o an süren 3 araması webhook kaybolursa sonsuza dek
+// 'arıyor'da kalıyor, eşzamanlılık sayaçlarını (countUserActiveCalls) şişiriyordu.
 async function tickAll(): Promise<void> {
-  const entries = [...engines.values()].filter(e => e.running && !e.paused);
+  const entries = [...engines.values()].filter(e =>
+    (e.running && !e.paused) || e.contacts.some(c => c.status === 'arıyor'));
   await Promise.allSettled(entries.map(tickOne));
 }
 
@@ -1414,8 +1589,12 @@ async function tickOne(entry: CampaignEngineEntry): Promise<void> {
   const now     = Date.now();
   let   changed = false;
 
-  for (const c of entry.contacts) {
+  for (let idx = 0; idx < entry.contacts.length; idx++) {
+    const c = entry.contacts[idx];
     if (c.status !== 'arıyor' || !c.vapiCallId) continue;
+    // Çok taze aramalara dokunma — createCall/webhook henüz yoldayken "bitti" sayıp
+    // kişiyi erken sonuçlandırmamak için (callStartTs yoksa eski kabul edilir).
+    if (c.callStartTs && (now - c.callStartTs) < RECONCILE_MIN_AGE_MS) continue;
 
     if (c.callStartTs && (now - c.callStartTs) > CALL_TIMEOUT_MS) {
       console.warn(`[Campaign] Zaman aşımı: ${c.vapiCallId}`);
@@ -1436,9 +1615,9 @@ async function tickOne(entry: CampaignEngineEntry): Promise<void> {
 
     try {
       const record = await readCall(c.vapiCallId);
-      if (record && record.status !== 'in-progress') {
-        c.status = callStatusToTurkish(record.status) as CampaignContact['status'];
-        if (record.duration) c.duration = record.duration;
+      // Webhook yolu (onCampaignCallEnded) ile AYNI sonuç mantığı — retry planı dahil.
+      if (record && record.status !== 'in-progress' && c.status === 'arıyor') {
+        applyOutcome(entry, idx, record.status, record.duration, (record as { endedReason?: string }).endedReason);
         changed = true;
       }
     } catch (err) {
@@ -1451,8 +1630,8 @@ async function tickOne(entry: CampaignEngineEntry): Promise<void> {
   if (changed) {
     await persistContacts(entry);
     broadcastFn(entry.userId, 'campaign-update', toSnapshot(entry));
-    if (isDone(entry)) { await onCampaignComplete(entry); return; }
+    if (entry.running && isDone(entry)) { await onCampaignComplete(entry); return; }
   }
 
-  await fillQueue(entry);
+  if (entry.running && !entry.paused) await fillQueue(entry);
 }

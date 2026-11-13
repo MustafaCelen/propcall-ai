@@ -32,19 +32,23 @@
       overlay.className = 'modal-overlay visible';
       const modal = document.createElement('div');
       modal.className = 'modal modal-sm open';
+      // Başlık ve mesaj düz metin olarak basılır (textContent) — sunucu/kullanıcı
+      // kaynaklı metinler HTML olarak yorumlanmasın.
       modal.innerHTML = `
         <div class="modal-header">
-          <div class="modal-title">${title}</div>
-          <button class="modal-close" data-mm-close type="button">✕</button>
+          <div class="modal-title"></div>
+          <button class="modal-close" data-mm-close type="button" aria-label="Kapat">✕</button>
         </div>
         <div class="modal-body">
-          ${message ? `<div class="modal-message">${message}</div>` : ''}
+          ${message ? '<div class="modal-message"></div>' : ''}
           ${body || ''}
           <div class="modal-actions">
             <button class="btn-modal-cancel" data-mm-cancel type="button">${cancelLabel || 'Vazgeç'}</button>
             <button class="btn-modal-confirm${danger ? ' danger' : ''}" data-mm-confirm type="button">${confirmLabel || 'Tamam'}</button>
           </div>
         </div>`;
+      modal.querySelector('.modal-title').textContent = title || '';
+      if (message) modal.querySelector('.modal-message').textContent = message;
       document.body.appendChild(overlay);
       document.body.appendChild(modal);
 

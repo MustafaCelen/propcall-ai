@@ -190,22 +190,30 @@ export async function getTodayDigest(userId: string): Promise<TodayDigest> {
          AND l.updated_at < NOW() - INTERVAL '48 hours'
          AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.lead_id = l.id AND t.status = 'open')
        ORDER BY l.updated_at ASC LIMIT 20`, [userId]),
+    // Sayımlar SQL'de (jsonb_array_elements) — binlerce kişilik contacts JSONB'sini
+    // sadece 4 sayaç için Node'a çekip JS'te filtrelemek her "Bugün" açılışında
+    // megabaytlarca veriyi boşa taşıyordu.
     pool.query(
-      `SELECT id, name, status, started_at, contacts FROM campaigns
-       WHERE user_id = $1 AND status IN ('running','paused','completed','stopped') AND started_at IS NOT NULL
-       ORDER BY started_at DESC LIMIT 1`, [userId]),
+      `WITH c AS (
+         SELECT id, name, status, started_at, contacts, jsonb_array_length(contacts)::int AS total
+         FROM campaigns
+         WHERE user_id = $1 AND status IN ('running','paused','completed','stopped') AND started_at IS NOT NULL
+         ORDER BY started_at DESC LIMIT 1)
+       SELECT c.id, c.name, c.status, c.started_at, c.total,
+              COUNT(x) FILTER (WHERE x->>'status' = 'tamamlandı')::int AS reached,
+              COUNT(x) FILTER (WHERE x->'result'->>'ilgi_seviyesi' IN ('yüksek','orta'))::int AS hot,
+              COUNT(x) FILTER (WHERE x->'result'->'randevu_alindi' = 'true'::jsonb)::int AS appointments,
+              COUNT(x) FILTER (WHERE x->'result'->'beni_aramayin_talebi' = 'true'::jsonb OR x->>'skipKind' = 'dnc')::int AS dnc
+       FROM c LEFT JOIN LATERAL jsonb_array_elements(c.contacts) AS x ON true
+       GROUP BY c.id, c.name, c.status, c.started_at, c.total`, [userId]),
   ]);
 
   let lastCampaign: TodayDigest['lastCampaign'] = null;
   if (camp.rows[0]) {
     const c = camp.rows[0];
-    const contacts: any[] = Array.isArray(c.contacts) ? c.contacts : [];
-    const reached = contacts.filter(x => x.status === 'tamamlandı').length;
-    const hot = contacts.filter(x => x.result && (x.result.ilgi_seviyesi === 'yüksek' || x.result.ilgi_seviyesi === 'orta')).length;
-    const appointments = contacts.filter(x => x.result && x.result.randevu_alindi === true).length;
-    const dnc = contacts.filter(x => (x.result && x.result.beni_aramayin_talebi === true) || x.skipKind === 'dnc').length;
     lastCampaign = { id: c.id, name: c.name, status: c.status, startedAt: c.started_at ? new Date(c.started_at).toISOString() : null,
-      total: contacts.length, reached, hot, appointments, dnc };
+      total: Number(c.total) || 0, reached: Number(c.reached) || 0, hot: Number(c.hot) || 0,
+      appointments: Number(c.appointments) || 0, dnc: Number(c.dnc) || 0 };
   }
 
   const taskRows = tasks.rows.map(rowToTask);

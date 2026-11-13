@@ -12,11 +12,13 @@ test.describe('Senaryolar — CRUD', () => {
     );
     expect(created.id).toBeTruthy();
 
-    const listRes = await request.get('/api/scenarios');
-    const list = (await listRes.json()).data;
-    expect(list.find((s: any) => s.id === created.id)?.name).toBe(name);
-
-    await deleteScenario(request, created.id);
+    try {
+      const listRes = await request.get('/api/scenarios');
+      const list = (await listRes.json()).data;
+      expect(list.find((s: any) => s.id === created.id)?.name).toBe(name);
+    } finally {
+      await deleteScenario(request, created.id);
+    }
     const afterRes = await request.get('/api/scenarios');
     const after = (await afterRes.json()).data;
     expect(after.find((s: any) => s.id === created.id)).toBeFalsy();

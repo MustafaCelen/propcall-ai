@@ -19,6 +19,7 @@ import QRCode from 'qrcode';
 import { Boom } from '@hapi/boom';
 import pool from './db';
 import { recordChannelMessage } from './whatsappCampaigns';
+import { isPhoneBlocked } from './dncList';
 
 // remoteJid'den (örn. "905321234567:12@s.whatsapp.net") gerçek telefon numarasını
 // çıkarır — jidDecode cihaz sonekini (":12") ve sunucu kısmını (@s.whatsapp.net) temizler.
@@ -76,13 +77,41 @@ function extractMessageText(msg: WAMessage): string {
 }
 
 interface Session {
-  socket: WASocket;
+  // null = yer tutucu: soket henüz kurulmadı (loadDbAuthState bekleniyor) — bkz.
+  // connectPersonalWhatsapp'taki çift-soket koruması.
+  socket: WASocket | null;
   status: 'connecting' | 'qr_pending' | 'connected' | 'disconnected';
   qrDataUrl: string | null;
   phoneNumber: string | null;
 }
 
 const sessions = new Map<string, Session>();
+
+// Otomatik yeniden bağlanma: üstel geri çekilme (2s → 4s → … → 60s tavan), en çok
+// 10 deneme; sonra 'disconnected' bırakılır, danışman Ayarlarım'dan tekrar bağlar.
+// Önceden sabit 2 sn ile sınırsız deneniyordu — WhatsApp tarafı reddettikçe her 2 sn'de
+// yeni soket açılıyor, hem log hem DB (anahtar yazımı) gereksiz yükleniyordu.
+const RECONNECT_BASE_MS   = 2_000;
+const RECONNECT_MAX_MS    = 60_000;
+const RECONNECT_MAX_TRIES = 10;
+const reconnectAttempts = new Map<string, number>();
+
+// Bu kapanış kodlarında oturum KALICI olarak geçersiz — yeniden bağlanmayı denemek
+// aynı hatayı döngüye sokar; durumu temizleyip danışmandan yeni QR istemek gerekir.
+//  401 loggedOut            — telefondan "çıkış yap" denmiş
+//  403 forbidden            — WhatsApp hesabı engellemiş/yasaklamış
+//  411 multideviceMismatch  — telefon tarafı çoklu-cihaz durumu değişmiş
+//  440 connectionReplaced   — aynı oturum başka bir yerden açılmış (bizim kopya öldü)
+//  500 badSession           — creds/keys bozuk, kurtarılamaz
+const FATAL_DISCONNECT_CODES = new Set<number>([
+  DisconnectReason.loggedOut, DisconnectReason.forbidden, DisconnectReason.multideviceMismatch,
+  DisconnectReason.connectionReplaced, DisconnectReason.badSession,
+]);
+
+async function clearPersonalSessionState(userId: string): Promise<void> {
+  await pool.query(`DELETE FROM whatsapp_personal_sessions WHERE user_id = $1`, [userId]);
+  await pool.query(`DELETE FROM whatsapp_personal_keys WHERE user_id = $1`, [userId]);
+}
 
 // creds küçük (birkaç KB, nadiren değişir) — tek JSONB blob olarak kalıyor.
 // keys (Signal protokolü oturum anahtarları) ARTIK whatsapp_personal_keys'te satır
@@ -178,54 +207,85 @@ export async function connectPersonalWhatsapp(userId: string): Promise<void> {
   const existing = sessions.get(userId);
   if (existing && (existing.status === 'connected' || existing.status === 'qr_pending' || existing.status === 'connecting')) return;
 
-  const { state, saveState } = await loadDbAuthState(userId);
-  // syncFullHistory:true — bu olmadan WhatsApp ilk eşleşmede SADECE yakın zamanlı, kısıtlı
-  // bir geçmiş gönderiyor ("mesajlar geçmişle tam yüklenmiyor" şikayetinin sebebi), telefonun
-  // yıllara yayılan tam sohbet geçmişini değil. ÖNEMLİ: bu ayar sadece YENİ bir eşleşmede
-  // (yeni QR okutma) etkilidir — zaten bağlı bir oturum için WhatsApp geçmiş senkron
-  // anlaşmasını ilk eşleşmede tamamlamıştır, geriye dönük olarak daha fazla geçmiş çekmez.
-  const socket = makeWASocket({ auth: state, printQRInTerminal: false, syncFullHistory: true });
-
-  const session: Session = { socket, status: 'connecting', qrDataUrl: null, phoneNumber: null };
+  // Yer tutucuyu İLK await'ten ÖNCE koy — loadDbAuthState beklenirken gelen ikinci çağrı
+  // (çift tık / reconnect yarışı) yukarıdaki erken-çıkışa takılsın; aksi halde iki soket
+  // birden açılıyordu (yukarıdaki çakışan bağlantı notu bunu yalnızca soket kurulduktan
+  // sonra koruyordu, arada ~100-300 ms'lik bir pencere açık kalıyordu).
+  const session: Session = { socket: null, status: 'connecting', qrDataUrl: null, phoneNumber: null };
   sessions.set(userId, session);
 
-  socket.ev.on('creds.update', saveState);
+  let socket: WASocket;
+  let saveState: () => Promise<void>;
+  try {
+    const auth = await loadDbAuthState(userId);
+    saveState = auth.saveState;
+    // syncFullHistory:true — bu olmadan WhatsApp ilk eşleşmede SADECE yakın zamanlı, kısıtlı
+    // bir geçmiş gönderiyor ("mesajlar geçmişle tam yüklenmiyor" şikayetinin sebebi), telefonun
+    // yıllara yayılan tam sohbet geçmişini değil. ÖNEMLİ: bu ayar sadece YENİ bir eşleşmede
+    // (yeni QR okutma) etkilidir — zaten bağlı bir oturum için WhatsApp geçmiş senkron
+    // anlaşmasını ilk eşleşmede tamamlamıştır, geriye dönük olarak daha fazla geçmiş çekmez.
+    socket = makeWASocket({ auth: auth.state, printQRInTerminal: false, syncFullHistory: true });
+  } catch (err) {
+    // Kurulum başarısız — yer tutucu kalırsa bir daha hiç bağlanılamaz.
+    if (sessions.get(userId) === session) sessions.delete(userId);
+    throw err;
+  }
+  session.socket = socket;
+
+  // Her dinleyici gövdesi try/catch içinde: Baileys olay yayıcısı reddedilen bir promise'i
+  // yakalamaz, unhandledRejection olarak süreci düşürebilirdi.
+  socket.ev.on('creds.update', async () => {
+    try { await saveState(); }
+    catch (err) { console.error(`[whatsapp-personal] ${userId} creds kaydedilemedi:`, err); }
+  });
 
   socket.ev.on('connection.update', async (update) => {
-    const { connection, qr, lastDisconnect } = update;
-    if (qr) {
-      session.qrDataUrl = await QRCode.toDataURL(qr);
-      session.status = 'qr_pending';
-      await pool.query(`UPDATE whatsapp_personal_sessions SET status = 'qr_pending' WHERE user_id = $1`, [userId]);
-    }
-    if (connection === 'open') {
-      session.status = 'connected';
-      session.qrDataUrl = null;
-      session.phoneNumber = socket.user?.id?.split(':')[0] || null;
-      await pool.query(
-        `UPDATE whatsapp_personal_sessions SET status = 'connected', phone_number = $2 WHERE user_id = $1`,
-        [userId, session.phoneNumber],
-      );
-      console.log(`[whatsapp-personal] ${userId} bağlandı: ${session.phoneNumber}`);
-    }
-    if (connection === 'close') {
-      const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
-      const loggedOut = statusCode === DisconnectReason.loggedOut;
-      sessions.delete(userId);
-      if (loggedOut) {
-        await pool.query(`DELETE FROM whatsapp_personal_sessions WHERE user_id = $1`, [userId]);
-        await pool.query(`DELETE FROM whatsapp_personal_keys WHERE user_id = $1`, [userId]);
-        console.log(`[whatsapp-personal] ${userId} oturumu kapattı (logged out) — DB temizlendi`);
-      } else {
+    try {
+      const { connection, qr, lastDisconnect } = update;
+      if (qr) {
+        session.qrDataUrl = await QRCode.toDataURL(qr);
+        session.status = 'qr_pending';
+        await pool.query(`UPDATE whatsapp_personal_sessions SET status = 'qr_pending' WHERE user_id = $1`, [userId]);
+      }
+      if (connection === 'open') {
+        session.status = 'connected';
+        session.qrDataUrl = null;
+        session.phoneNumber = socket.user?.id?.split(':')[0] || null;
+        reconnectAttempts.delete(userId);
+        await pool.query(
+          `UPDATE whatsapp_personal_sessions SET status = 'connected', phone_number = $2 WHERE user_id = $1`,
+          [userId, session.phoneNumber],
+        );
+        console.log(`[whatsapp-personal] ${userId} bağlandı: ${session.phoneNumber}`);
+      }
+      if (connection === 'close') {
+        const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
+        if (sessions.get(userId) === session) sessions.delete(userId);
+        if (statusCode !== undefined && FATAL_DISCONNECT_CODES.has(statusCode)) {
+          reconnectAttempts.delete(userId);
+          await clearPersonalSessionState(userId);
+          console.log(`[whatsapp-personal] ${userId} oturumu kalıcı olarak kapandı (kod: ${statusCode}) — DB temizlendi, yeniden QR gerekir`);
+          return;
+        }
         // Kod 515 ("restart required") ilk eşleşmeden hemen sonra Baileys/WhatsApp'ın
         // BEKLENEN, normal davranışıdır — resmi Baileys örnek kodu da bunu logout
         // saymadan otomatik yeniden bağlanarak ele alır. Aksi halde kullanıcı arayüzde
         // "bağlı" görüp saniyeler sonra sessizce "bağlantısız" kalırdı.
         await pool.query(`UPDATE whatsapp_personal_sessions SET status = 'disconnected' WHERE user_id = $1`, [userId]);
-        console.warn(`[whatsapp-personal] ${userId} bağlantısı koptu (kod: ${statusCode}) — otomatik yeniden bağlanılıyor`);
+        const attempt = (reconnectAttempts.get(userId) ?? 0) + 1;
+        if (attempt > RECONNECT_MAX_TRIES) {
+          reconnectAttempts.delete(userId);
+          console.error(`[whatsapp-personal] ${userId} ${RECONNECT_MAX_TRIES} denemede yeniden bağlanamadı (son kod: ${statusCode}) — vazgeçildi, danışman Ayarlarım'dan tekrar bağlamalı`);
+          return;
+        }
+        reconnectAttempts.set(userId, attempt);
+        const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** (attempt - 1));
+        console.warn(`[whatsapp-personal] ${userId} bağlantısı koptu (kod: ${statusCode}) — ${Math.round(delay / 1000)} sn sonra yeniden bağlanılacak (deneme ${attempt}/${RECONNECT_MAX_TRIES})`);
         setTimeout(() => connectPersonalWhatsapp(userId).catch(err =>
-          console.error(`[whatsapp-personal] ${userId} otomatik yeniden bağlanma hatası:`, err)), 2000);
+          console.error(`[whatsapp-personal] ${userId} otomatik yeniden bağlanma hatası:`, err)), delay).unref();
       }
+    } catch (err) {
+      console.error(`[whatsapp-personal] ${userId} connection.update işlenemedi:`, err);
     }
   });
 
@@ -234,25 +294,33 @@ export async function connectPersonalWhatsapp(userId: string): Promise<void> {
   // "giden mesajlar hiç görünmüyor" şikayetinin kaynağı buydu: sadece bu uygulama
   // üzerinden gönderilenler kaydediliyordu, telefondan elle yazılanlar yoktu.
   socket.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify' && type !== 'append') return;
-    for (const msg of messages) {
-      await processPersonalMessage(userId, socket, msg).catch(err =>
-        console.error('[whatsapp-personal] Mesaj kaydı hatası:', err));
+    try {
+      if (type !== 'notify' && type !== 'append') return;
+      for (const msg of messages) {
+        await processPersonalMessage(userId, socket, msg).catch(err =>
+          console.error('[whatsapp-personal] Mesaj kaydı hatası:', err));
+      }
+    } catch (err) {
+      console.error(`[whatsapp-personal] ${userId} messages.upsert işlenemedi:`, err);
     }
   });
 
   // İlk bağlantıda WhatsApp geçmiş sohbetleri tek seferlik gönderir (history sync) —
   // bu olmadan sadece bağlandıktan SONRA gelen mesajlar görünürdü, geçmiş boş kalırdı.
   socket.ev.on('messaging-history.set', async ({ messages }) => {
-    let imported = 0;
-    for (const msg of messages) {
-      const ok = await processPersonalMessage(userId, socket, msg, true).catch(err => {
-        console.error('[whatsapp-personal] Geçmiş mesaj kaydı hatası:', err);
-        return false;
-      });
-      if (ok) imported++;
+    try {
+      let imported = 0;
+      for (const msg of messages) {
+        const ok = await processPersonalMessage(userId, socket, msg, true).catch(err => {
+          console.error('[whatsapp-personal] Geçmiş mesaj kaydı hatası:', err);
+          return false;
+        });
+        if (ok) imported++;
+      }
+      if (imported) console.log(`[whatsapp-personal] ${userId}: ${imported} geçmiş mesaj içe aktarıldı`);
+    } catch (err) {
+      console.error(`[whatsapp-personal] ${userId} messaging-history.set işlenemedi:`, err);
     }
-    if (imported) console.log(`[whatsapp-personal] ${userId}: ${imported} geçmiş mesaj içe aktarıldı`);
   });
 }
 
@@ -267,7 +335,7 @@ async function processPersonalMessage(userId: string, socket: WASocket, msg: WAM
   const externalId = msg.key.id || `personal_${isHistory ? 'hist_' : ''}${fromPhone}_${ts.getTime()}`;
 
   await recordChannelMessage(userId, {
-    fromPhone, body, externalId, channel: 'PERSONAL', direction, timestamp: ts,
+    fromPhone, body, externalId, channel: 'PERSONAL', direction, timestamp: ts, isHistory,
     contactName: direction === 'IN' ? (msg.pushName || undefined) : undefined,
   });
   return true;
@@ -282,18 +350,20 @@ export function getPersonalStatus(userId: string): { status: string; qrDataUrl: 
 export async function disconnectPersonalWhatsapp(userId: string): Promise<void> {
   const s = sessions.get(userId);
   if (s) {
-    try { await s.socket.logout(); } catch (_) { /* zaten kopmuş olabilir */ }
+    try { await s.socket?.logout(); } catch (_) { /* zaten kopmuş olabilir */ }
     sessions.delete(userId);
   }
-  await pool.query(`DELETE FROM whatsapp_personal_sessions WHERE user_id = $1`, [userId]);
-  await pool.query(`DELETE FROM whatsapp_personal_keys WHERE user_id = $1`, [userId]);
+  reconnectAttempts.delete(userId);
+  await clearPersonalSessionState(userId);
 }
 
 // Sadece bire-bir mesaj — BİLİNÇLİ olarak toplu/döngüsel çağrı için tasarlanmadı,
 // bkz. dosya başındaki kısıt notu.
 export async function sendPersonalMessage(userId: string, phone: string, body: string): Promise<void> {
   const s = sessions.get(userId);
-  if (!s || s.status !== 'connected') throw new Error('Şahsi WhatsApp bağlı değil — Ayarlarım sayfasından QR kodu okutun.');
+  if (!s || s.status !== 'connected' || !s.socket) throw new Error('Şahsi WhatsApp bağlı değil — Ayarlarım sayfasından QR kodu okutun.');
+  // Global ret listesi — arama motoruyla aynı koruma, şahsi kanal da muaf değil.
+  if (await isPhoneBlocked(phone)) throw new Error('Bu numara ret listesinde — "bir daha aramayın" talebinde bulunmuş, mesaj gönderilmedi.');
   const jid = phone.replace(/\D/g, '') + '@s.whatsapp.net';
   await s.socket.sendMessage(jid, { text: body });
 }

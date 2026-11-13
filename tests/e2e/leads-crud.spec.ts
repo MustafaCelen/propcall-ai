@@ -41,17 +41,19 @@ test.describe('Adaylar CRUD', () => {
     });
     const created = (await createRes.json()).data;
 
-    const stageRes = await request.patch(`/api/leads/${created.id}/stage`, {
-      data: { stage: 'CONTACTED' },
-    });
-    expect(stageRes.ok()).toBeTruthy();
+    try {
+      const stageRes = await request.patch(`/api/leads/${created.id}/stage`, {
+        data: { stage: 'CONTACTED' },
+      });
+      expect(stageRes.ok()).toBeTruthy();
 
-    await gotoTab(page, 'leads');
-    await expect(page.locator('#tabLeads')).toHaveClass(/active/);
-    const contactedColumn = page.locator('.lead-column[data-stage="CONTACTED"]');
-    await expect(contactedColumn.locator('.lead-card', { hasText: uniqueName })).toBeVisible();
-
-    await deleteLead(request, created.id);
+      await gotoTab(page, 'leads');
+      await expect(page.locator('#tabLeads')).toHaveClass(/active/);
+      const contactedColumn = page.locator('.lead-column[data-stage="CONTACTED"]');
+      await expect(contactedColumn.locator('.lead-card', { hasText: uniqueName })).toBeVisible();
+    } finally {
+      await deleteLead(request, created.id);
+    }
   });
 
   test('aday etiketleri form üzerinden oluşturulup listede/drawer\'da görünür ve kaldırılabilir', async ({ page, request }) => {
@@ -79,11 +81,12 @@ test.describe('Adaylar CRUD', () => {
     await expect(removeBtn).toBeVisible();
     await removeBtn.click();
 
-    await page.waitForTimeout(500);
-    const afterRes = await request.get(`/api/leads`);
-    const afterJson = await afterRes.json();
-    const afterLead = afterJson.data.find((l: any) => l.id === created.id);
-    expect(afterLead.tags).toEqual(['yatirimci']);
+    // Etiket kaldırma arka planda PATCH atar — sabit bekleme yerine sunucudaki
+    // kaydın gerçekten güncellenmesini bekle.
+    await expect.poll(async () => {
+      const afterRes = await request.get(`/api/leads/${created.id}`);
+      return ((await afterRes.json()).data?.tags ?? null) as string[] | null;
+    }).toEqual(['yatirimci']);
 
     await deleteLead(request, created.id);
   });

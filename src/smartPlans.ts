@@ -126,6 +126,16 @@ async function markRanToday(planId: string, ymd: string, activeCampaignId: strin
   );
 }
 
+// Planın kampanya bağını koparır, last_run_date'e DOKUNMAZ. Önceden kampanya bitince
+// last_run_date "bugün"e çekiliyordu: dünden sarkan bir kampanya sabah 10'da bittiğinde
+// plan o günkü hakkını yemiş sayılıyor, akşama kadar yeni kampanya açılmıyordu.
+async function clearActiveCampaign(planId: string): Promise<void> {
+  await pool.query(
+    `UPDATE smart_plans SET active_campaign_id = NULL, updated_at = NOW() WHERE id = $1`,
+    [planId],
+  );
+}
+
 // Tek bir planı değerlendirir — gün/saat penceresi uygun mu, bugün için zaten
 // bir çalışma başlatıldı mı, pencere kapanınca devam eden kampanyayı duraklatma/
 // tekrar açma. Tüm gerçek arama mantığı (kuyruk, eşzamanlılık, kredi, retry)
@@ -136,27 +146,38 @@ async function tickOnePlan(plan: SmartPlan): Promise<void> {
   const dayMatches = plan.daysOfWeek.includes(dayOfWeek);
   const inWindow = dayMatches && isWithinCallingHours(plan.windowStartHour, plan.windowEndHour);
 
-  // Bugün için zaten bir kampanya açılmışsa — devam eden/duraklatılmış işi yönet.
+  // Planın bağlı olduğu bir kampanya varsa — devam eden/duraklatılmış işi yönet.
+  // Gün geçişi mantığı: last_run_date SADECE yeni kampanya AÇILIRKEN yazılır (aşağıda).
+  // Kampanya bittiğinde yalnızca bağ koparılır; böylece
+  //  • aynı gün bitmişse: last_run_date === bugün → yeni kampanya açılmaz (günde 1),
+  //  • ertesi güne sarkıp bitmişse: last_run_date !== bugün → pencere açıksa bir
+  //    sonraki tick'te o günün kampanyası açılır.
   if (plan.activeCampaignId) {
     const camp = await getCampaign(plan.userId, plan.activeCampaignId);
-    if (!camp) { await markRanToday(plan.id, plan.lastRunDate || ymd, null); return; }
+    if (!camp) { await clearActiveCampaign(plan.id); return; }
 
     const stillRunning = camp.status === 'running' || camp.status === 'paused';
     if (!stillRunning) {
-      // Kampanya kendi kendine bitmiş (completed/stopped) — bugün için iş tamam.
-      if (plan.lastRunDate !== ymd) await markRanToday(plan.id, ymd, plan.activeCampaignId);
+      // Kampanya kendi kendine bitmiş (completed/stopped) — bağı kopar, günü ilerletme.
+      await clearActiveCampaign(plan.id);
       return;
     }
 
     if (!inWindow && camp.status === 'running') {
       // Pencere kapandı ama kampanya hâlâ çalışıyor — devam eden aramalar kesilmez,
       // sadece yeni arama başlatma durdurulur (campaign.ts'teki calling-hours
-      // felsefesiyle aynı, bkz. dosya başı yorumu).
-      await campaignPause(plan.userId, plan.activeCampaignId).catch(err =>
+      // felsefesiyle aynı, bkz. dosya başı yorumu). Sebep 'plan': pencere açılınca
+      // yalnızca BU sebeple duraklatılmış kampanya geri açılır.
+      await campaignPause(plan.userId, plan.activeCampaignId, 'plan').catch(err =>
         console.error(`[SmartPlan] "${plan.name}" duraklatma hatası:`, err));
       return;
     }
     if (inWindow && camp.status === 'paused') {
+      // Danışmanın elle ('user') ya da motorun kredi yüzünden ('credit') duraklattığı
+      // kampanyaya DOKUNMA — kredi bitmişken her dakika "devam et" denemek ya da
+      // danışmanın bilinçli duraklatmasını ezmek doğru değil. Sebebi olmayan (eski
+      // kayıt) duraklatmalar geriye dönük uyumluluk için plan duraklatması sayılır.
+      if (camp.pauseReason && camp.pauseReason !== 'plan') return;
       await campaignResume(plan.userId, plan.activeCampaignId).catch(err =>
         console.error(`[SmartPlan] "${plan.name}" devam ettirme hatası:`, err));
       return;
@@ -164,8 +185,8 @@ async function tickOnePlan(plan: SmartPlan): Promise<void> {
     return; // running + inWindow, veya paused + !inWindow — yapacak bir şey yok
   }
 
-  // Henüz bugün için bir kampanya açılmamış — pencere açıksa ve bugün daha önce
-  // çalışmadıysa yeni bir günlük kampanya başlat.
+  // Bağlı kampanya yok — pencere açıksa ve bugün daha önce çalışmadıysa yeni bir
+  // günlük kampanya başlat.
   if (!inWindow || plan.lastRunDate === ymd) return;
 
   const contacts = await resolveSegment(plan.userId, plan.segmentRule);

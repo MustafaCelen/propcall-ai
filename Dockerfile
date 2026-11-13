@@ -1,9 +1,12 @@
 FROM node:20-alpine
 
+ENV NODE_ENV=production
+
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install
+# NODE_ENV=production tek başına devDependencies'i (typescript) atlardı — build için gerekli.
+RUN npm ci --include=dev
 
 COPY . .
 

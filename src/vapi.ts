@@ -74,6 +74,26 @@ async function getAssistantVoiceId(apiKey: string, assistantId: string): Promise
   return (await getAssistantVoice(apiKey, assistantId))?.voiceId ?? null;
 }
 
+// Asistanın kendi maxDurationSeconds ayarı (cache'li) — bakiye tavanıyla (bkz.
+// users.ts maxAffordableSeconds) karşılaştırıp aramaya override vermek için.
+// Okunamazsa Vapi'nin varsayılanı (600) kabul edilir; kampanya motoru da kullanır.
+const VAPI_DEFAULT_MAX_DURATION_SECONDS = 600;
+const maxDurationCache = new Map<string, { seconds: number; cachedAt: number }>();
+export async function getAssistantMaxDurationSeconds(apiKey: string, assistantId: string): Promise<number> {
+  const cached = maxDurationCache.get(assistantId);
+  if (cached && Date.now() - cached.cachedAt < MODEL_CONFIG_TTL_MS) return cached.seconds;
+  let seconds = VAPI_DEFAULT_MAX_DURATION_SECONDS;
+  try {
+    const resp = await fetch(`${VAPI_BASE_URL}/assistant/${assistantId}`, { headers: getHeaders(apiKey) });
+    if (resp.ok) {
+      const data = await resp.json() as { maxDurationSeconds?: number };
+      if (typeof data.maxDurationSeconds === 'number' && data.maxDurationSeconds > 0) seconds = data.maxDurationSeconds;
+    }
+  } catch { /* varsayılan */ }
+  maxDurationCache.set(assistantId, { seconds, cachedAt: Date.now() });
+  return seconds;
+}
+
 // Senaryo bazlı TTS modeli override'ı (bkz. types.ts ScenarioVoiceModel). Asistanın
 // kendi sesini (voiceId) korur, sadece modeli değiştirir. eleven_v4_turbo'da
 // style/speed/SSML YOK — ifade yalnızca stability ve metin içi ses etiketleriyle
@@ -118,6 +138,9 @@ export async function createVapiCall(
     // İsim bayrakları kapalı senaryolarda boş gönderilir (bkz. src/opening.ts
     // nameVariableValues) — undefined ise eski davranış (gerçek değerler).
     variableOverrides?: { customerName?: string; agentName?: string };
+    // Bakiye tavanı: arama bu süreyi aşamaz (bkz. users.ts maxAffordableSeconds).
+    // Verilmezse asistanın kendi maxDurationSeconds ayarı geçerli kalır.
+    maxDurationSeconds?: number;
   },
 ): Promise<VapiCallResponse> {
   const { apiKey, phoneNumberId, assistantId } = creds;
@@ -154,6 +177,10 @@ export async function createVapiCall(
 
   if (personalization?.waitForGreeting) {
     assistantOverrides.firstMessageMode = 'assistant-waits-for-user';
+  }
+
+  if (personalization?.maxDurationSeconds && personalization.maxDurationSeconds > 0) {
+    assistantOverrides.maxDurationSeconds = Math.floor(personalization.maxDurationSeconds);
   }
 
   const body = {
@@ -207,6 +234,8 @@ export async function buildRoleplayAssistantOverrides(
   systemPrompt: string,
   agentName?: string,
   gender: 'kadin' | 'erkek' = 'kadin',
+  // Bakiye tavanı (saniye) — verilirse 600 sn'lik pratik üst sınırıyla min() alınır.
+  maxAffordableSeconds?: number,
 ): Promise<Record<string, unknown>> {
   // Sadece provider'ı asistandan okuyoruz — model'i roleplay için AŞAĞIDA sabit
   // bir değere (ROLEPLAY_MODEL) override ediyoruz, asistanın kendi modelini
@@ -311,8 +340,11 @@ export async function buildRoleplayAssistantOverrides(
       transcriptionEndpointingPlan: { onPunctuationSeconds: 0.3, onNoPunctuationSeconds: 2, onNumberSeconds: 0.5 },
     },
 
-    // Pratik görüşmesi 2 dakikayla sınırlı kalmasın — 10 dakika.
-    maxDurationSeconds: 600,
+    // Pratik görüşmesi 2 dakikayla sınırlı kalmasın — 10 dakika; ama bakiyenin
+    // karşılayamayacağı süreye de izin verme (eksi bakiye oluşmasın).
+    maxDurationSeconds: maxAffordableSeconds && maxAffordableSeconds > 0
+      ? Math.min(600, Math.floor(maxAffordableSeconds))
+      : 600,
 
     // Otomatik kapanma ifadeleri temizleniyor — gerçek aramada "iyi günler" demek
     // görüşmeyi bitirir, ama pratikte danışman bunu senaryo gereği doğal olarak

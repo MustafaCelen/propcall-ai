@@ -57,29 +57,59 @@ export async function reconcileStaleCalls(olderThanMinutes = 30): Promise<number
   return rowCount ?? 0;
 }
 
+// 'YYYY-MM-DD' — tarih filtreleri SQL'e İstanbul günü olarak gömülür; başka bir
+// biçim gelirse sessizce yok sayılmak yerine hata verilir (rota 400'e çevirir).
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+export function assertDateParam(value: string | undefined, name: string): void {
+  if (value !== undefined && !DATE_RE.test(value)) {
+    throw new Error(`Geçersiz tarih (${name}) — YYYY-AA-GG biçiminde olmalı`);
+  }
+}
+
+export const CALL_LIST_DEFAULT_LIMIT = 500;
+export const CALL_LIST_MAX_LIMIT = 2000;
+
 export async function getAllCalls(userId: string, filters?: CallFilters): Promise<CallRecord[]> {
   // is_practice = false — Roleplay Pratik görüşmeleri (bkz. src/personas.ts) gerçek
   // Geçmiş Aramalar listesinde görünmesin, danışmanın gerçek performans geçmişini
   // pratik oturumlarla karıştırmasın (v1'de ayrı bir "Pratik Geçmişi" görünümü yok).
+  //
+  // Liste transkripti TAŞIMAZ (data - 'transcript'): binlerce aramada her satırın
+  // tam konuşma metnini göndermek megabaytlarca gereksiz yük oluşturuyordu. Yerine
+  // transcriptCount (mesaj sayısı) döner; tam metin GET /api/calls/:id'de.
+  // Filtreler SQL'de uygulanır, sonuç LIMIT ile sınırlıdır (varsayılan 500, en çok 2000).
+  assertDateParam(filters?.dateFrom, 'dateFrom');
+  assertDateParam(filters?.dateTo, 'dateTo');
+
+  const params: unknown[] = [userId];
+  const where: string[] = ['user_id = $1', 'is_practice = false'];
+  const add = (v: unknown): string => { params.push(v); return `$${params.length}`; };
+
+  if (filters?.dateFrom) where.push(`start_time >= ${add(`${filters.dateFrom}T00:00:00+03:00`)}::timestamptz`);
+  if (filters?.dateTo)   where.push(`start_time < (${add(`${filters.dateTo}T00:00:00+03:00`)}::timestamptz + interval '1 day')`);
+  if (filters?.randevu === 'evet')  where.push(`(data->'summary'->>'randevu_alindi')::boolean = true`);
+  if (filters?.randevu === 'hayir') where.push(`(data->'summary'->>'randevu_alindi')::boolean = false`);
+  if (filters?.ilgi)    where.push(`data->'summary'->>'ilgi_seviyesi' = ${add(filters.ilgi)}`);
+  if (filters?.aksiyon) where.push(`data->'summary'->>'tavsiye_edilen_aksiyon' = ${add(filters.aksiyon)}`);
+  if (filters?.status)  where.push(`status = ${add(filters.status)}`);
+  if (filters?.scenarioId === '__none__') where.push(`data->>'scenarioId' IS NULL`);
+  else if (filters?.scenarioId) where.push(`data->>'scenarioId' = ${add(filters.scenarioId)}`);
+
+  const rawLimit = Number(filters?.limit);
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0
+    ? Math.min(Math.floor(rawLimit), CALL_LIST_MAX_LIMIT)
+    : CALL_LIST_DEFAULT_LIMIT;
+
   const { rows } = await pool.query(
-    'SELECT data FROM calls WHERE user_id = $1 AND is_practice = false ORDER BY start_time DESC NULLS LAST',
-    [userId],
+    `SELECT (data - 'transcript')
+              || jsonb_build_object('transcriptCount', jsonb_array_length(COALESCE(data->'transcript', '[]'::jsonb))) AS data
+     FROM calls
+     WHERE ${where.join(' AND ')}
+     ORDER BY start_time DESC NULLS LAST
+     LIMIT ${add(limit)}`,
+    params,
   );
-  let calls: CallRecord[] = rows.map(r => r.data as CallRecord);
-
-  if (filters) {
-    if (filters.dateFrom)            calls = calls.filter(c => c.startTime >= filters.dateFrom!);
-    if (filters.dateTo)              calls = calls.filter(c => c.startTime <= filters.dateTo! + 'T23:59:59');
-    if (filters.randevu === 'evet')  calls = calls.filter(c => c.summary?.randevu_alindi === true);
-    if (filters.randevu === 'hayir') calls = calls.filter(c => c.summary?.randevu_alindi === false);
-    if (filters.ilgi)                calls = calls.filter(c => c.summary?.ilgi_seviyesi === filters.ilgi);
-    if (filters.aksiyon)             calls = calls.filter(c => c.summary?.tavsiye_edilen_aksiyon === filters.aksiyon);
-    if (filters.status)              calls = calls.filter(c => c.status === filters.status);
-    if (filters.scenarioId === '__none__') calls = calls.filter(c => !c.scenarioId);
-    else if (filters.scenarioId)     calls = calls.filter(c => c.scenarioId === filters.scenarioId);
-  }
-
-  return calls;
+  return rows.map(r => r.data as CallRecord);
 }
 
 // Açılış A/B istatistiği için — bir senaryonun tüm gerçek aramaları (bkz. src/opening.ts).
@@ -171,30 +201,42 @@ export async function appendTranscript(
   vapiCallId: string,
   entry: VapiTranscriptEntry,
 ): Promise<void> {
-  const record = await readCall(vapiCallId);
-  if (!record) return;
   if (entry.role === 'assistant') entry = { ...entry, text: stripAudioTags(entry.text) };
   if (!entry.text) return; // sadece etiketten oluşan parça — boş balon ekleme
-  record.transcript.push(entry);
-  await writeCall(record);
+  // Atomik ekleme: önceden oku-değiştir-yaz yapılıyordu; aynı anda gelen iki
+  // transcript webhook'u (ya da cost-update ile yarış) birbirinin yazdığını
+  // eziyordu — mesajlar sessizce kayboluyordu. jsonb || tek UPDATE'te çözer.
+  await pool.query(
+    `UPDATE calls
+     SET data = jsonb_set(data, '{transcript}', COALESCE(data->'transcript', '[]'::jsonb) || $2::jsonb)
+     WHERE vapi_call_id = $1`,
+    [vapiCallId, JSON.stringify([entry])],
+  );
 }
 
 export async function updateCosts(
   vapiCallId: string,
   costs: Partial<CallCosts>,
 ): Promise<void> {
-  const record = await readCall(vapiCallId);
-  if (!record) return;
-  const merged = { ...record.costs, ...costs } as CallCosts;
-  // total'ü her zaman parçalardan yeniden hesapla — çağıran taraf hangi alt kalemi
-  // güncellerse güncellesin (Vapi'nin cost-update'i, ya da bizim Anthropic/ElevenLabs
+  // Atomik birleştirme (appendTranscript'teki yarışın aynısı). total her zaman
+  // parçalardan yeniden hesaplanır — çağıran taraf hangi alt kalemi güncellerse
+  // güncellesin (Vapi'nin cost-update'i, ya da bizim Anthropic/ElevenLabs
   // tahminimiz) toplam asla eksik/yanlış kalmasın.
-  merged.total = Math.round(
-    ((merged.vapi || 0) + (merged.twilio || 0) + (merged.llm || 0) +
-     (merged.tts || 0) + (merged.stt || 0) + (merged.anthropic || 0)) * 1e6,
-  ) / 1e6;
-  record.costs = merged;
-  await writeCall(record);
+  const { total: _ignored, ...parts } = costs;
+  void _ignored;
+  await pool.query(
+    `UPDATE calls c
+     SET data = jsonb_set(c.data, '{costs}',
+       m.merged || jsonb_build_object('total', round((
+         COALESCE((m.merged->>'vapi')::numeric, 0) + COALESCE((m.merged->>'twilio')::numeric, 0) +
+         COALESCE((m.merged->>'llm')::numeric, 0)  + COALESCE((m.merged->>'tts')::numeric, 0) +
+         COALESCE((m.merged->>'stt')::numeric, 0)  + COALESCE((m.merged->>'anthropic')::numeric, 0)
+       )::numeric, 6)))
+     FROM (SELECT vapi_call_id, COALESCE(data->'costs', '{}'::jsonb) || $2::jsonb AS merged
+           FROM calls WHERE vapi_call_id = $1) m
+     WHERE c.vapi_call_id = m.vapi_call_id`,
+    [vapiCallId, JSON.stringify(parts)],
+  );
 }
 
 export async function saveCallSummary(
@@ -440,7 +482,7 @@ export async function getCampaignStats(userId: string, campaignId: string): Prom
     ),
     // Saatlik performans — bu kampanyada hangi saatte arayınca daha çok randevu alınıyor
     pool.query<{ hour: string; calls: string; randevu: string }>(
-      `SELECT EXTRACT(HOUR FROM start_time)::int AS hour,
+      `SELECT EXTRACT(HOUR FROM (start_time AT TIME ZONE 'Europe/Istanbul'))::int AS hour,
               COUNT(*)::int AS calls,
               COUNT(*) FILTER (WHERE (data->'summary'->>'randevu_alindi')::boolean = true)::int AS randevu
        FROM calls WHERE data->>'campaignId' = $1 AND user_id = $2 AND start_time IS NOT NULL
@@ -541,9 +583,19 @@ export interface StatsFilters {
   scenarioId?: string; // '__none__' = senaryosuz (varsayılan prompt) aramalar
 }
 
+// generate_series'in ürettiği takvim günü (ds.d) İstanbul günüdür; start_time
+// TIMESTAMPTZ'yi o günün [00:00, 24:00) İstanbul aralığıyla karşılaştırır —
+// önceden ::date UTC'ye göre kesiyordu, 00:00-03:00 arası aramalar bir önceki
+// güne yazılıyordu. Aralık karşılaştırması indeks de kullanabilir.
+const DAY_JOIN = `c.start_time >= (ds.d::timestamp AT TIME ZONE 'Europe/Istanbul')
+         AND c.start_time < ((ds.d + 1)::timestamp AT TIME ZONE 'Europe/Istanbul')`;
+
 export async function getStats(userId: string, filters?: StatsFilters): Promise<StatsData> {
-  const fromTs      = filters?.dateFrom ? `${filters.dateFrom}T00:00:00.000Z` : null;
-  const toTs        = filters?.dateTo   ? `${filters.dateTo}T23:59:59.999Z`   : null;
+  assertDateParam(filters?.dateFrom, 'dateFrom');
+  assertDateParam(filters?.dateTo, 'dateTo');
+  // Sınırlar İstanbul günü: dateTo dahil → ertesi günün 00:00'ından KÜÇÜK.
+  const fromTs      = filters?.dateFrom ? `${filters.dateFrom}T00:00:00+03:00` : null;
+  const toTs        = filters?.dateTo   ? `${filters.dateTo}T00:00:00+03:00`   : null;
   const scenarioId  = filters?.scenarioId || null;
 
   // Günlük grafik penceresi: özel aralık verildiyse aynen o kullanılır (KPI'lar zaten
@@ -567,7 +619,7 @@ export async function getStats(userId: string, filters?: StatsFilters): Promise<
   // hesaplamalar PostgreSQL'de paralel çalışır.
   const RANGE = `
     AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
-    AND ($3::timestamptz IS NULL OR start_time <= $3::timestamptz)
+    AND ($3::timestamptz IS NULL OR start_time < ($3::timestamptz + interval '1 day'))
     AND ($4::text IS NULL OR ($4 = '__none__' AND data->>'scenarioId' IS NULL) OR data->>'scenarioId' = $4)
     AND is_practice = false`;
   const baseParams = [fromTs, userId, toTs, scenarioId];
@@ -618,7 +670,7 @@ export async function getStats(userId: string, filters?: StatsFilters): Promise<
               COALESCE(COUNT(c.vapi_call_id), 0)::int                AS count,
               COALESCE(SUM((c.data->'costs'->>'total')::float), 0)   AS cost
        FROM ds
-       LEFT JOIN calls c ON c.start_time::date = ds.d
+       LEFT JOIN calls c ON ${DAY_JOIN}
          AND c.user_id = $1
          AND ($2::text IS NULL OR ($2 = '__none__' AND c.data->>'scenarioId' IS NULL) OR c.data->>'scenarioId' = $2)
          AND c.is_practice = false
@@ -637,7 +689,7 @@ export async function getStats(userId: string, filters?: StatsFilters): Promise<
                 WHERE (c.data->'summary'->>'randevu_alindi')::boolean = true
               )::int AS alindi
        FROM ds
-       LEFT JOIN calls c ON c.start_time::date = ds.d
+       LEFT JOIN calls c ON ${DAY_JOIN}
          AND c.user_id = $1
          AND ($2::text IS NULL OR ($2 = '__none__' AND c.data->>'scenarioId' IS NULL) OR c.data->>'scenarioId' = $2)
          AND c.is_practice = false
@@ -676,7 +728,7 @@ export async function getStats(userId: string, filters?: StatsFilters): Promise<
 
     // 7 — Saatlik dağılım
     pool.query<{ hour: string; count: string }>(
-      `SELECT EXTRACT(HOUR FROM start_time)::int AS hour, COUNT(*)::int AS count
+      `SELECT EXTRACT(HOUR FROM (start_time AT TIME ZONE 'Europe/Istanbul'))::int AS hour, COUNT(*)::int AS count
        FROM calls
        WHERE user_id = $2 AND start_time IS NOT NULL ${RANGE}
        GROUP BY hour ORDER BY hour`,
@@ -789,8 +841,10 @@ export interface AdminUserComparisonRow {
 // daha çok arama yapıyor, daha yüksek dönüşüm/daha düşük maliyet elde ediyor.
 // getStats ile aynı sorgu deseni, tek fark: user_id'ye göre GROUP BY.
 export async function getAdminUserComparison(dateFrom?: string, dateTo?: string): Promise<AdminUserComparisonRow[]> {
-  const fromTs = dateFrom ? `${dateFrom}T00:00:00.000Z` : null;
-  const toTs   = dateTo   ? `${dateTo}T23:59:59.999Z`   : null;
+  assertDateParam(dateFrom, 'dateFrom');
+  assertDateParam(dateTo, 'dateTo');
+  const fromTs = dateFrom ? `${dateFrom}T00:00:00+03:00` : null;
+  const toTs   = dateTo   ? `${dateTo}T00:00:00+03:00`   : null;
   const { rows } = await pool.query<{
     user_id: string; total_calls: string; completed_calls: string;
     randevu_count: string; with_summary: string; total_cost: string; avg_duration: string;
@@ -806,7 +860,7 @@ export async function getAdminUserComparison(dateFrom?: string, dateTo?: string)
      FROM calls
      WHERE user_id IS NOT NULL
        AND ($1::timestamptz IS NULL OR start_time >= $1::timestamptz)
-       AND ($2::timestamptz IS NULL OR start_time <= $2::timestamptz)
+       AND ($2::timestamptz IS NULL OR start_time < ($2::timestamptz + interval '1 day'))
        AND is_practice = false
      GROUP BY user_id
      ORDER BY total_calls DESC`,
@@ -830,7 +884,8 @@ export async function getAdminUserComparison(dateFrom?: string, dateTo?: string)
 }
 
 export async function exportCSV(userId: string, filters?: CallFilters): Promise<string> {
-  const calls = await getAllCalls(userId, filters);
+  // Dışa aktarım listeden daha geniş olmalı — üst sınırın tamamını kullan.
+  const calls = await getAllCalls(userId, { ...filters, limit: filters?.limit ?? CALL_LIST_MAX_LIMIT });
   const headers = ['Tarih','Ad','Telefon','Süre','Randevu','İlgi','Ret Nedeni','Mülk Tipi','Aksiyon','Geri Dönüş Notu','Özet','Maliyet','Durum','Notlar'];
   const rows = calls.map(c => [
     new Date(c.startTime).toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' }),

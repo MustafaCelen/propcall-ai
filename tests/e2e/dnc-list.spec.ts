@@ -3,18 +3,16 @@
 // doğrular. AI otomatik tespit tarafı (generateCallSummary → beni_aramayin_talebi) gerçek
 // bir Vapi görüşmesi gerektirdiği için burada test edilmiyor — bu test sadece guard'ın
 // (isPhoneBlocked → 403) ve admin CRUD'unun doğru çalıştığını doğrular.
+//
+// KRİTİK SIRA: numara ÖNCE ret listesine eklenir, /api/call ANCAK ondan sonra
+// çağrılır. Böylece guard Vapi'ye hiç ulaşmadan 403 döner — engellenmemiş bir
+// numaraya asla /api/call atılmaz (gerçek bir telefon aramasına dönüşebilirdi).
 
 import { test, expect } from '@playwright/test';
 
 test.describe('Global ret listesi (DNC)', () => {
   test('admin numara ekleyip listeleyip kaldırabilir, engelliyken /api/call 403 döner', async ({ request }) => {
     const phone = `+90555${Math.floor(1000000 + Math.random() * 8999999)}`;
-
-    // Henüz eklenmemişken normal bir arama denemesi ret listesi yüzünden değil,
-    // (muhtemelen Vapi kimlik bilgisi eksikliğinden) başarısız olabilir — burada
-    // sadece 403 DEĞİL olduğunu doğruluyoruz.
-    const beforeRes = await request.post('/api/call', { data: { customer: { name: 'DNC Test', phone } } });
-    expect(beforeRes.status()).not.toBe(403);
 
     const addRes = await request.post('/api/admin/dnc-list', {
       data: { phone, reason: 'e2e test — manuel ekleme' },

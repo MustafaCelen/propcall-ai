@@ -5,20 +5,23 @@ import { deleteLead } from '../helpers/apiHelpers';
 test.describe('Huni raporu ve ekip', () => {
   test('huni raporu: oluşturulan + aşamaya ulaşan + kayıp nedeni sayılır', async ({ request }) => {
     const lead = (await (await request.post('/api/leads', { data: { firstName: 'Huni', lastName: 'Testi', dealType: 'SELLER' } })).json()).data;
-    await request.patch(`/api/leads/${lead.id}/stage`, { data: { stage: 'MEETING' } });
-    await request.patch(`/api/leads/${lead.id}/stage`, { data: { stage: 'LOST', lostReason: 'OTHER_AGENT' } });
+    try {
+      await request.patch(`/api/leads/${lead.id}/stage`, { data: { stage: 'MEETING' } });
+      await request.patch(`/api/leads/${lead.id}/stage`, { data: { stage: 'LOST', lostReason: 'OTHER_AGENT' } });
 
-    const r = await request.get('/api/reports/funnel?days=7');
-    expect(r.ok()).toBeTruthy();
-    const d = (await r.json()).data;
-    expect(d.days).toBe(7);
-    expect(d.created).toBeGreaterThanOrEqual(1);
-    expect(d.reached.MEETING).toBeGreaterThanOrEqual(1);
-    expect(d.reached.LOST).toBeGreaterThanOrEqual(1);
-    expect(d.lostReasons.find((x: any) => x.code === 'OTHER_AGENT')?.count).toBeGreaterThanOrEqual(1);
-    expect(d.byDealType.find((x: any) => x.code === 'SELLER')?.lost).toBeGreaterThanOrEqual(1);
-    expect(d.stageLabels.MEETING).toBe('Randevu');
-    await deleteLead(request, lead.id);
+      const r = await request.get('/api/reports/funnel?days=7');
+      expect(r.ok()).toBeTruthy();
+      const d = (await r.json()).data;
+      expect(d.days).toBe(7);
+      expect(d.created).toBeGreaterThanOrEqual(1);
+      expect(d.reached.MEETING).toBeGreaterThanOrEqual(1);
+      expect(d.reached.LOST).toBeGreaterThanOrEqual(1);
+      expect(d.lostReasons.find((x: any) => x.code === 'OTHER_AGENT')?.count).toBeGreaterThanOrEqual(1);
+      expect(d.byDealType.find((x: any) => x.code === 'SELLER')?.lost).toBeGreaterThanOrEqual(1);
+      expect(d.stageLabels.MEETING).toBe('Randevu');
+    } finally {
+      await deleteLead(request, lead.id);
+    }
   });
 
   test('ekip görünümü rol kapısına göre döner', async ({ request }) => {

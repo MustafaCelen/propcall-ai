@@ -210,6 +210,10 @@ export async function initDb(): Promise<void> {
     -- mevcut kampanyaların kendi değerleri korunur.
     ALTER TABLE campaigns ALTER COLUMN retry_max_attempts  SET DEFAULT 2;
     ALTER TABLE campaigns ALTER COLUMN retry_delay_minutes SET DEFAULT 120;
+    -- Kampanya neden duraklatıldı: 'user' | 'credit' | 'plan' (bkz. campaigns.ts PauseReason).
+    -- Akıllı Plan yalnızca kendi ('plan') duraklatmasını geri açar; danışmanın elle ya da
+    -- kredi tükenmesiyle duraklatılan kampanyaya dokunmaz. status != 'paused' iken NULL.
+    ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS pause_reason TEXT;
 
     -- Lead kaynağı (hangi ilan/reklam/liste) — raporlamada dönüşüm oranını kaynağa göre kırmak için.
     -- customer_phone/scenario_id gibi diğer JSONB alanlar da düz sütun değil, fonksiyonel
@@ -357,6 +361,46 @@ export async function initDb(): Promise<void> {
     -- görüyordu. Elle açılan kampanyalarda NULL kalır.
     ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS smart_plan_id TEXT REFERENCES smart_plans(id) ON DELETE SET NULL;
     CREATE INDEX IF NOT EXISTS idx_campaigns_smart_plan_id ON campaigns (smart_plan_id);
+
+    -- smart_plans.active_campaign_id → campaigns(id) FK'sı ON DELETE SET NULL olmalı:
+    -- eski kurulumlarda düz REFERENCES (NO ACTION) ile yaratıldı, bu yüzden planın
+    -- işaret ettiği kampanya silinmek istenince FK ihlaliyle 500 dönüyordu. İdempotent:
+    -- yalnızca confdeltype 'n' (SET NULL) değilse düşürüp yeniden kurar.
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'smart_plans_active_campaign_id_fkey'
+          AND conrelid = 'smart_plans'::regclass
+          AND confdeltype <> 'n'
+      ) THEN
+        ALTER TABLE smart_plans DROP CONSTRAINT smart_plans_active_campaign_id_fkey;
+      END IF;
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'smart_plans_active_campaign_id_fkey'
+          AND conrelid = 'smart_plans'::regclass
+      ) THEN
+        ALTER TABLE smart_plans
+          ADD CONSTRAINT smart_plans_active_campaign_id_fkey
+          FOREIGN KEY (active_campaign_id) REFERENCES campaigns(id) ON DELETE SET NULL;
+      END IF;
+    END $$;
+
+    -- Sık kullanılan sorgu yolları için bileşik/ifade indeksleri (mevcut veri boyutunda
+    -- CONCURRENTLY gerekmez; boot sırasında saniyeler sürer):
+    --  • calls: danışman + zaman sıralı listeler (Geçmiş Aramalar, istatistikler)
+    --  • leads: danışman + son güncelleme (aday listesi, "dokunulmamış" sorguları)
+    --  • whatsapp_messages: aday sohbet geçmişi + gelen kutusu
+    --  • calls: kampanya bazlı birleşimler (listCampaigns, kampanya analizi)
+    --  • leads: numaranın rakam-normalize eşleşmesi (WhatsApp gelen mesaj → aday).
+    --    İFADE whatsappCampaigns.ts recordChannelMessage'daki WHERE ile BİREBİR aynı
+    --    olmalı — aksi halde planlayıcı indeksi kullanmaz.
+    CREATE INDEX IF NOT EXISTS idx_calls_user_start            ON calls (user_id, start_time DESC);
+    CREATE INDEX IF NOT EXISTS idx_leads_user_updated          ON leads (user_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_wa_msgs_user_lead_created   ON whatsapp_messages (user_id, lead_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_calls_user_campaign         ON calls (user_id, (data->>'campaignId'));
+    CREATE INDEX IF NOT EXISTS idx_leads_phone_norm            ON leads (user_id, regexp_replace(data->>'phone', '\\D', '', 'g'));
 
     -- Meta Lead Ads bağlantısı — danışman Meta Business'tan aldığı Page Access Token'ı
     -- elle yapıştırır (Vapi/ElevenLabs key deseniyle aynı — tam OAuth akışı ayrı bir

@@ -39,7 +39,7 @@
           <span class="credit-val" id="creditBalance">—</span>
           <button class="credit-topup-btn" id="btnTopupBalance" title="Kredi kartıyla jeton yükle" style="display:none">+ Yükle</button>
         </div>
-        <button class="credit-refresh" id="btnCreditRefresh" title="Yenile">↻</button>
+        <button class="credit-refresh" id="btnCreditRefresh" title="Yenile" aria-label="Kredileri yenile">↻</button>
       </div>
       <button class="btn-secondary" id="btnToggleApts" style="display:none">📅 <span class="hdr-lbl">Randevular</span></button>
       <a class="btn-secondary" id="linkUsers" href="/admin" style="display:none;text-decoration:none">👥 <span class="hdr-lbl">Kullanıcılar</span></a>
@@ -265,8 +265,8 @@
         <table class="calls-table">
           <thead>
             <tr>
-              <th class="th-sort" data-sort="startTime">Tarih/Saat</th>
-              <th class="th-sort" data-sort="customerName">Müşteri</th>
+              <th>Tarih/Saat</th>
+              <th>Müşteri</th>
               <th>Durum</th>
               <th class="th-num">Süre</th>
               <th class="th-num" title="Transkript">💬</th>
@@ -836,7 +836,7 @@
 <div class="modal" id="spFormModal">
   <div class="modal-header">
     <div class="modal-title">🧠 Yeni Akıllı Plan</div>
-    <button class="modal-close" id="spFormClose">✕</button>
+    <button class="modal-close" id="spFormClose" aria-label="Kapat">✕</button>
   </div>
   <div class="modal-body">
     <div class="form-group">
@@ -953,7 +953,7 @@
       <div class="modal-title" id="cdTitle">Kampanya Detayı</div>
       <div class="cd-sub" id="cdSub"></div>
     </div>
-    <button class="modal-close" id="campaignDetailClose">✕</button>
+    <button class="modal-close" id="campaignDetailClose" aria-label="Kapat">✕</button>
   </div>
   <div class="modal-body" id="cdBody">
     <div class="drawer-loading">⏳ Yükleniyor...</div>
@@ -968,7 +968,7 @@
       <div class="modal-title">🧪 Örnek Diyalog Önizleme</div>
       <div class="cd-sub">Gerçek arama yapılmadan, promptun 3 farklı müşteri tepkisinde nasıl davranacağının simülasyonu</div>
     </div>
-    <button class="modal-close" id="scenarioTestClose">✕</button>
+    <button class="modal-close" id="scenarioTestClose" aria-label="Kapat">✕</button>
   </div>
   <div class="modal-body" id="scenarioTestBody">
     <div class="drawer-loading">⏳ Oluşturuluyor...</div>
@@ -980,7 +980,7 @@
 <div class="modal modal-md" id="leadFormModal">
   <div class="modal-header">
     <div class="modal-title" id="leadFormTitle">Yeni kişi</div>
-    <button class="modal-close" id="leadFormClose">✕</button>
+    <button class="modal-close" id="leadFormClose" aria-label="Kapat">✕</button>
   </div>
   <div class="modal-body">
     <div class="form-row-2">
@@ -1052,7 +1052,7 @@
 <div class="modal modal-sm" id="leadLostModal">
   <div class="modal-header">
     <div class="modal-title">Neden kaybedildi?</div>
-    <button class="modal-close" id="leadLostClose">✕</button>
+    <button class="modal-close" id="leadLostClose" aria-label="Kapat">✕</button>
   </div>
   <div class="modal-body">
     <div class="td-sub" id="leadLostWho"></div>
@@ -1073,7 +1073,7 @@
 <div class="modal" id="leadImportModal">
   <div class="modal-header">
     <div class="modal-title">📂 Adayları İçe Aktar</div>
-    <button class="modal-close" id="leadImportClose">✕</button>
+    <button class="modal-close" id="leadImportClose" aria-label="Kapat">✕</button>
   </div>
   <div class="modal-body">
     <div id="leadImportSummary"></div>
@@ -1094,7 +1094,7 @@
 <div class="modal modal-sm" id="tplFormModal">
   <div class="modal-header">
     <div class="modal-title">Yeni WhatsApp Şablonu</div>
-    <button class="modal-close" id="tplFormClose">✕</button>
+    <button class="modal-close" id="tplFormClose" aria-label="Kapat">✕</button>
   </div>
   <div class="modal-body">
     <div class="form-group">
@@ -1127,7 +1127,7 @@
       <div class="drawer-title" id="leadDrawerTitle">Aday Detayı</div>
       <div class="drawer-sub" id="leadDrawerSub"></div>
     </div>
-    <button class="drawer-close" id="leadDrawerClose">✕</button>
+    <button class="drawer-close" id="leadDrawerClose" aria-label="Kapat">✕</button>
   </div>
   <div class="drawer-body" id="leadDrawerBody"></div>
 </div>
@@ -1142,7 +1142,7 @@
       <div class="drawer-title" id="drawerTitle">Arama Detayı</div>
       <div class="drawer-sub"  id="drawerSub"></div>
     </div>
-    <button class="drawer-close" id="drawerClose">✕</button>
+    <button class="drawer-close" id="drawerClose" aria-label="Kapat">✕</button>
   </div>
   <div class="drawer-body" id="drawerBody"></div>
 </div>
@@ -1151,7 +1151,7 @@
 <div class="appointments-panel" id="appointmentsPanel">
   <div class="apt-panel-header">
     <div class="apt-panel-title">📅 Randevular</div>
-    <button class="btn-close-apt" id="btnCloseApts">✕</button>
+    <button class="btn-close-apt" id="btnCloseApts" aria-label="Kapat">✕</button>
   </div>
   <div class="apt-list" id="aptList"><div class="apt-empty">Henüz randevu yok</div></div>
 </div>
@@ -1163,7 +1163,7 @@
 <div class="modal" id="scenarioModal">
   <div class="modal-header">
     <div class="modal-title">🎭 Senaryolar</div>
-    <button class="modal-close" id="scenarioModalClose">✕</button>
+    <button class="modal-close" id="scenarioModalClose" aria-label="Kapat">✕</button>
   </div>
   <div class="modal-body">
     <div class="vapi-live-prompt" id="vapiLivePromptBox">
@@ -1250,7 +1250,7 @@
 <div class="modal" id="promptGenModal">
   <div class="modal-header">
     <div class="modal-title">✨ AI ile Prompt Oluştur</div>
-    <button class="modal-close" id="promptGenClose">✕</button>
+    <button class="modal-close" id="promptGenClose" aria-label="Kapat">✕</button>
   </div>
   <div class="modal-body">
     <div class="pg-mode-toggle">
@@ -1352,10 +1352,10 @@ var APP_TOUR_STEPS = [
     },
   },
   {
-    target: '.tab-bar',
-    title: '5. Üst Sekmeler',
-    body: 'Aramalarınızı burada farklı görünümlerde takip edersiniz — şimdi <b>Takip</b> ve <b>İstatistikler</b> sekmelerine birlikte bakalım.',
-    placement: 'bottom',
+    target: '#rail',
+    title: '5. Sol Menü',
+    body: 'Uygulamanın tüm bölümleri soldaki menüde: Bugün, Canlı Görüşme, Toplu Arama, Takip, Pano ve daha fazlası — şimdi <b>Takip</b> ve <b>İstatistikler</b> bölümlerine birlikte bakalım.',
+    placement: 'right',
   },
   {
     target: '.followup-toolbar',

@@ -96,7 +96,7 @@ async function loadLeads() {
     leadsState.leads = j.data;
     renderLeadsView();
   } catch (err) {
-    board.innerHTML = `<div class="drawer-error">✗ ${err.message}</div>`;
+    board.innerHTML = `<div class="drawer-error">✗ ${esc(err.message)}</div>`;
   }
 }
 
@@ -202,19 +202,17 @@ async function createCampaignFromSelection() {
     if (!j.success) throw new Error(j.error || 'Kampanya kişileri hazırlanamadı');
     if (!j.data.length) { toast('Seçilen adayların hiçbirinde telefon numarası yok', 'error'); return; }
 
-    setFocusedCampaign(null);
-    campaign.contacts = j.data.map(c => ({ ...c, status: 'bekliyor', vapiCallId: null, result: null }));
-    campaign.running = false;
-    campaign.paused = false;
-    renderImportSummary(campaign.contacts.length, []);
-    renderCampaignTable();
-    $('btnCampaignStart').disabled = false;
-    savePendingCampaignDraft();
+    // Liste sunucuda 'draft' kampanya olarak kaydedilir (app.js saveListAsDraft) —
+    // tarayıcıda "kaydedilmemiş liste" tutulmaz; Başlat bu taslağı görür.
+    // j.data zaten {name, phone, region, notes, reference, leadId, leadSource} şeklinde.
+    const saved = await saveListAsDraft(j.data);
+    if (!saved) return;
 
     leadsState.selectedIds.clear();
     renderLeadsSelectionBar();
 
     switchTab('campaign');
+    if (typeof loadCampaignCallCounts === 'function') loadCampaignCallCounts();
     toast(`✓ ${campaign.contacts.length} aday Toplu Arama'ya aktarıldı — kampanyayı buradan yapılandırıp başlatın`, 'success');
   } catch (err) {
     toast('✗ ' + err.message, 'error');
@@ -238,11 +236,13 @@ function renderLeadsBoard() {
           <span class="lead-column-count">${items.length}</span>
         </div>
         <div class="lead-column-body" data-stage-body="${stage}">
-          ${items.length ? items.map(leadCardHtml).join('') : '<div class="lead-column-empty">Boş</div>'}
+          ${items.length ? items.map(leadCardHtml).join('') : '<div class="lead-column-empty">Henüz kişi yok' + (stage === 'NEW' ? '<br><button type="button" class="td-btn ghost lead-column-add" style="margin-top:8px;padding:5px 10px;font-size:12px">Kişi ekle</button>' : '') + '</div>'}
         </div>
       </div>
     `;
   }).join('');
+
+  board.querySelectorAll('.lead-column-add').forEach(btn => btn.addEventListener('click', openLeadFormModal));
 
   board.querySelectorAll('.lead-card').forEach(card => {
     card.addEventListener('dragstart', () => {
@@ -299,11 +299,20 @@ async function moveLeadStage(id, stage, extra) {
     const idx = leadsState.leads.findIndex(l => l.id === id);
     if (idx !== -1) leadsState.leads[idx] = j.data;
     renderLeadsView();
-    if (leadsState.openId === id) openLeadDrawer(id);
+    if (leadsState.openId === id) reopenLeadDrawerKeepingInputs(id);
     if (typeof loadToday === 'function') loadToday();
   } catch (err) {
     toast('✗ ' + err.message, 'error');
   }
+}
+
+// Çekmece yeniden çizilirken yazılmakta olan not / WhatsApp mesajı kaybolmasın.
+function reopenLeadDrawerKeepingInputs(id) {
+  const note = $('leadNoteInput') ? $('leadNoteInput').value : '';
+  const msg  = $('leadMsgInput')  ? $('leadMsgInput').value  : '';
+  openLeadDrawer(id);
+  if (note && $('leadNoteInput')) $('leadNoteInput').value = note;
+  if (msg  && $('leadMsgInput'))  $('leadMsgInput').value  = msg;
 }
 
 // ─── KAYIP NEDENİ MODALI ────────────────────────────────────────────────────
@@ -383,7 +392,7 @@ async function saveLeadTags(id, tags) {
     const idx = leadsState.leads.findIndex(l => l.id === id);
     if (idx !== -1) leadsState.leads[idx] = j.data;
     renderLeadsView();
-    if (leadsState.openId === id) openLeadDrawer(id);
+    if (leadsState.openId === id) reopenLeadDrawerKeepingInputs(id);
   } catch (err) {
     toast('✗ ' + err.message, 'error');
   }
@@ -414,7 +423,8 @@ async function openLeadDrawer(id) {
   $('leadDrawerTitle').innerHTML = esc(leadFullName(lead)) + ' ' + dealChip(lead) + ` <span class="lead-stage-tag s-${lead.stage}">${LEAD_STAGE_LABELS[lead.stage] || lead.stage}</span>`;
   $('leadDrawerSub').textContent = [lead.phone, lead.email, leadPropertyLine(lead)].filter(Boolean).join(' · ') || LEAD_SOURCE_LABELS[lead.source];
   const sel = (v, cur) => v === (cur || '') ? ' selected' : '';
-  const wa = lead.phone ? 'https://wa.me/' + lead.phone.replace(/\D/g, '') : '';
+  const waNum = lead.phone ? waDigits(lead.phone) : '';
+  const wa = waNum ? 'https://wa.me/' + waNum : '';
   $('leadDrawerBody').innerHTML = `
     <div class="ld-quick">
       <button class="ld-q" data-q="call" ${lead.phone ? '' : 'disabled'}>📞 Ara</button>
@@ -634,7 +644,7 @@ async function loadLeadTimeline(id) {
       } catch (err) { toast('✗ ' + err.message, 'error'); }
     }));
   } catch (err) {
-    box.innerHTML = `<div class="drawer-error">✗ ${err.message}</div>`;
+    box.innerHTML = `<div class="drawer-error">✗ ${esc(err.message)}</div>`;
   }
 }
 
@@ -711,7 +721,8 @@ async function saveNewLead() {
   const body = {
     firstName,
     lastName: $('leadFormLastName').value.trim() || null,
-    phone: $('leadFormPhone').value.trim() || null,
+    // Telefon kaydedilmeden normalize edilir (+90XXXXXXXXXX) — Toplu Arama ile aynı kural.
+    phone: cleanPhone($('leadFormPhone').value) || null,
     email: $('leadFormEmail').value.trim() || null,
     notes: $('leadFormNotes').value.trim() || null,
     tags: parseTagsInput($('leadFormTags').value),
@@ -835,7 +846,7 @@ async function previewLeadImport(rows, skipped) {
 
     renderLeadImportSummary(skipped);
   } catch (err) {
-    $('leadImportSummary').innerHTML = `<div class="drawer-error">✗ ${err.message}</div>`;
+    $('leadImportSummary').innerHTML = `<div class="drawer-error">✗ ${esc(err.message)}</div>`;
   }
 }
 

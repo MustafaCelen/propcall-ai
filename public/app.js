@@ -25,7 +25,8 @@ const state = {
   charts: {},
   currentFilters: {},
   sseSource: null,
-  historyData: [],        // Geçmiş aramalar son fetched datası (search için)
+  sseReconnectTimer: null,
+  historyData: [],       // Geçmiş aramalar son fetched datası (search için)
   historySearch: '',
 };
 const FILTER_STORAGE_KEY = 'propcall.historyFilters.v1';
@@ -210,7 +211,37 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadHistory();
   loadFollowupBadge();
   if (typeof loadToday === 'function') loadToday();
+  initGlobalKeys();
 });
+
+// ─── KLAVYE ──────────────────────────────────────────────────────────────────
+// Escape: en üstteki açık çekmece/modalı kapatır (kendi ✕ butonuna tıklar — her
+// kapatma yolu ilgili modülün close fonksiyonundan geçer). Müşteri formu
+// girdilerinde Enter: "Aramayı Başlat" etkinse tetikler.
+function initGlobalKeys() {
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      // ui-kit mini modalları (uiConfirm/uiPrompt) kendi Escape'ini dinler.
+      const open = [...document.querySelectorAll('.modal.open, .drawer.open, .appointments-panel.open')]
+        .filter(el => !el.querySelector('[data-mm-close]'));
+      const top = open[open.length - 1];
+      if (top) {
+        const closeBtn = top.querySelector('.modal-close, .drawer-close, .btn-close-apt, [data-closable]');
+        if (closeBtn) { e.preventDefault(); closeBtn.click(); }
+        return;
+      }
+      const rail = document.querySelector('.rail.open');
+      if (rail && typeof setLeftPanel === 'function') setLeftPanel(false);
+      return;
+    }
+    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.isComposing) {
+      const t = e.target;
+      if (!(t instanceof HTMLInputElement)) return;
+      if (!['customerName', 'customerPhone', 'customerRegion', 'customerReference'].includes(t.id)) return;
+      if (DOM.btnStartCall && !DOM.btnStartCall.disabled) { e.preventDefault(); DOM.btnStartCall.click(); }
+    }
+  });
+}
 
 // ─── KREDİLER (Vapi + ElevenLabs) ─────────────────────────────────────────────
 
@@ -360,6 +391,9 @@ function initTabs() {
   DOM.tabBtns.forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
   });
+  // URL'de bilinen bir sekme varsa (#campaign gibi) varsayılan yerine onu aç.
+  const hashTab = (location.hash || '').replace(/^#/, '');
+  if (hashTab && [...DOM.tabBtns].some(b => b.dataset.tab === hashTab)) switchTab(hashTab);
 }
 
 function switchTab(name) {
@@ -380,6 +414,10 @@ function switchTab(name) {
                   (name === 'team'            && c.id === 'tabTeam');
     c.classList.toggle('active', match);
   });
+  // Aktif sekme URL'de kalsın: yenileme/geri tuşunda aynı sekme açılır.
+  if (location.hash !== '#' + name) {
+    try { history.replaceState(null, '', '#' + name); } catch (_) { location.hash = '#' + name; }
+  }
   if (name === 'today' && typeof loadToday === 'function') loadToday();
   if (name === 'funnel' && typeof loadFunnel === 'function') loadFunnel();
   if (name === 'team' && typeof loadTeam === 'function') loadTeam();
@@ -592,8 +630,15 @@ function connectSSE() {
   });
 
   src.onerror = () => {
+    // Tarayıcı CONNECTING durumunda kendi kendine yeniden dener; yalnızca kalıcı
+    // kopuşta (CLOSED) biz devreye gireriz — ve tek bir zamanlayıcı ile.
+    if (src.readyState !== EventSource.CLOSED) return;
+    if (state.sseReconnectTimer) return;
     console.warn('[SSE] Bağlantı koptu, 3s sonra yeniden deneniyor...');
-    setTimeout(connectSSE, 3000);
+    state.sseReconnectTimer = setTimeout(() => {
+      state.sseReconnectTimer = null;
+      connectSSE();
+    }, 3000);
   };
 }
 
@@ -973,7 +1018,7 @@ async function loadHistory() {
     state.historyData = json.data;
     renderTable(filterHistoryData(json.data));
   } catch (err) {
-    DOM.callsTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Hata: ' + err.message + '</td></tr>';
+    DOM.callsTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Hata: ' + esc(err.message) + '</td></tr>';
   }
 }
 
@@ -999,7 +1044,12 @@ function renderTable(calls) {
   const counter = $('historyCounter');
   if (counter) counter.textContent = calls.length + ' kayıt';
   if (!calls.length) {
-    DOM.callsTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Kayıt bulunamadı</td></tr>';
+    const filterActive = Object.keys(state.currentFilters || {}).length > 0 || !!state.historySearch;
+    DOM.callsTableBody.innerHTML = '<tr><td colspan="9" class="table-empty">Kayıt bulunamadı' +
+      (filterActive ? ' <button type="button" class="td-btn ghost" style="margin-left:8px;padding:5px 10px;font-size:12px" id="historyEmptyClear">Filtreyi temizle</button>' : '') +
+      '</td></tr>';
+    const clearBtn = $('historyEmptyClear');
+    if (clearBtn) clearBtn.addEventListener('click', () => DOM.btnClearFilter.click());
     return;
   }
   DOM.callsTableBody.innerHTML = calls.map(c => {
@@ -1007,7 +1057,7 @@ function renderTable(calls) {
     const retStr  = s && s.ret_nedeni    ? esc(s.ret_nedeni)    : '—';
     const noteStr = s && s.geri_donus_notu ? esc(s.geri_donus_notu) : '—';
     const dur     = c.duration ? fmtDuration(c.duration) : '—';
-    const trCount = c.transcript && c.transcript.length;
+    const trCount = (c.transcriptCount != null) ? c.transcriptCount : (c.transcript && c.transcript.length);
     const trIcon  = trCount
       ? '<span class="tc-indicator" title="' + trCount + ' mesaj">💬 ' + trCount + '</span>'
       : '<span class="tc-none" title="Transkript yok">—</span>';
@@ -1078,7 +1128,7 @@ function openDrawer(vapiCallId) {
       renderDrawer(json.data);
     })
     .catch(err => {
-      DOM.drawerBody.innerHTML = '<div class="drawer-error">Hata: ' + err.message + '</div>';
+      DOM.drawerBody.innerHTML = '<div class="drawer-error">Hata: ' + esc(err.message) + '</div>';
     });
 }
 
@@ -1214,6 +1264,9 @@ function renderDrawer(call) {
       const j = await r.json();
       if (!j.success) throw new Error(j.error);
       toast('Kaydedildi', 'success');
+      // Takip listesi/rozeti bu kayıtla değişmiş olabilir — hemen tazele.
+      loadFollowupBadge();
+      loadFollowup();
     } catch (err) {
       toast('Kayıt hatası: ' + err.message, 'error');
     }
@@ -1661,7 +1714,7 @@ async function loadAppointments() {
     if (!json.success) throw new Error(json.error);
     renderAppointments(json.data);
   } catch (err) {
-    DOM.aptList.innerHTML = '<div class="apt-empty">Hata: ' + err.message + '</div>';
+    DOM.aptList.innerHTML = '<div class="apt-empty">Hata: ' + esc(err.message) + '</div>';
   }
 }
 
@@ -1802,19 +1855,8 @@ function renderAppointments(apts) {
 }
 
 // ─── TOAST ───────────────────────────────────────────────────────────────────
-
-function toast(msg, type) {
-  type = type || 'info';
-  const el = document.createElement('div');
-  el.className = 'toast toast-' + type;
-  el.textContent = msg;
-  DOM.toastContainer.appendChild(el);
-  requestAnimationFrame(() => el.classList.add('show'));
-  setTimeout(() => {
-    el.classList.remove('show');
-    setTimeout(() => el.remove(), 300);
-  }, 3500);
-}
+// toast(message, type) ui-kit.js'te tanımlı (sınıf: .toast.success/.error/.info) —
+// burada ikinci bir kopya tutulmuyor.
 
 // ─── UTILS ───────────────────────────────────────────────────────────────────
 
@@ -1889,7 +1931,7 @@ async function loadFollowup() {
     if (!json.success) throw new Error(json.error);
     renderFollowup(json.data);
   } catch (err) {
-    layout.innerHTML = '<div class="followup-loading">Hata: ' + err.message + '</div>';
+    layout.innerHTML = '<div class="followup-loading">Hata: ' + esc(err.message) + '</div>';
   }
 }
 
@@ -2144,7 +2186,8 @@ function renderFollowup(d) {
       const key = btn.dataset.bulkKey;
       const data = renderFollowup._lastData || {};
       const all = data[key] || [];
-      const items = all.filter(c => followupMatchesSearch(c, q));
+      // Sayaçla aynı filtre: arama kutusu + senaryo (kampanya) filtresi.
+      const items = all.filter(c => followupMatchesSearch(c, q) && matchesScenario(c));
       if (!items.length) return;
       bulkLoadToCampaign(items);
     });
@@ -2177,7 +2220,7 @@ function followupCard(c, colorClass, opts) {
   const ilgi = s ? s.ilgi_seviyesi : null;
   const ilgiCls = ilgi === 'yüksek' ? 'heat-hot' : ilgi === 'orta' ? 'heat-warm' : ilgi === 'düşük' ? 'heat-mid' : 'heat-cold';
   const ilgiEmoji = ilgi === 'yüksek' ? '🔥' : ilgi === 'orta' ? '⚡' : ilgi === 'düşük' ? '❄️' : '—';
-  const ilgiLabel = ilgi || 'belirsiz';
+  const ilgiLabel = esc(ilgi || 'belirsiz');
   const note    = s ? s.geri_donus_notu : null;
   const aksiyon = s ? s.tavsiye_edilen_aksiyon : null;
   const mulk    = s ? s.mulk_tipi : null;
@@ -2231,7 +2274,7 @@ function priorityCard(c) {
     ? '<span class="ctag ct-miss" title="Deneme sayısı">' + c.retryCount + 'x</span>' : '';
 
   return '<div class="fu-row fu-oncelik">' +
-    '<div class="fu-row-heat ' + ilgiCls + '" title="İlgi: ' + (ilgi || '—') + '">' + (ilgi ? ilgi.slice(0,3) : '—') + '</div>' +
+    '<div class="fu-row-heat ' + ilgiCls + '" title="İlgi: ' + esc(ilgi || '—') + '">' + (ilgi ? esc(ilgi.slice(0,3)) : '—') + '</div>' +
     '<div class="fu-row-main">' +
       '<div class="fu-row-line1">' +
         '<span class="pr-src-badge ' + srcCls + '">' + esc(c._priorityLabel || '') + '</span>' +
@@ -2296,9 +2339,11 @@ function timeSince(iso) {
 function initCampaign() {
   $('btnUpload').addEventListener('click', () => $('campaignFile').click());
   $('campaignFile').addEventListener('change', onFileSelected);
-  $('btnCampaignStart').addEventListener('click', campaignStart);
-  $('btnCampaignPause').addEventListener('click', campaignPause);
-  $('btnCampaignStop').addEventListener('click', campaignStop);
+  // Tek uçuş: istek sürerken buton kilitli — çift tık iki kez başlatma/durdurma
+  // göndermesin. finally'de syncCampaignButtons gerçek durumu geri yazar.
+  $('btnCampaignStart').addEventListener('click', () => withCampaignButtonLock($('btnCampaignStart'), campaignStart));
+  $('btnCampaignPause').addEventListener('click', () => withCampaignButtonLock($('btnCampaignPause'), campaignPause));
+  $('btnCampaignStop').addEventListener('click', () => withCampaignButtonLock($('btnCampaignStop'), campaignStop));
   $('btnRetryFailed').addEventListener('click', retryFailedContacts);
   $('btnCampaignRerun').addEventListener('click', rerunCampaign);
   $('campaignRerunScope').addEventListener('change', syncCampaignButtons);
@@ -2346,11 +2391,11 @@ function onFileSelected(e) {
   const file = e.target.files[0];
   if (!file) return;
 
-  // Cok buyuk dosya tarayiciyi dondurur; kullaniciya sebebini soyle.
+  // Çok büyük dosya tarayıcıyı dondurur; kullanıcıya sebebini söyle.
   const MAX_MB = 25;
   if (file.size > MAX_MB * 1024 * 1024) {
-    toast('Dosya cok buyuk (' + (file.size / 1024 / 1024).toFixed(1) + ' MB). ' +
-      'En fazla ' + MAX_MB + ' MB yukleyebilirsiniz — listeyi bolerek deneyin.', 'error');
+    toast('Dosya çok büyük (' + (file.size / 1024 / 1024).toFixed(1) + ' MB). ' +
+      'En fazla ' + MAX_MB + ' MB yükleyebilirsiniz — listeyi bölerek deneyin.', 'error');
     e.target.value = '';
     return;
   }
@@ -2359,30 +2404,30 @@ function onFileSelected(e) {
   reader.onload = function(ev) {
     try {
       const wb = XLSX.read(ev.target.result, { type: 'array', codepage: 65001 });
-      // Bos/bozuk dosyada SheetNames bos gelir; ws undefined olur ve
-      // sheet_to_json anlamsiz bir hata firlatirdi.
+      // Boş/bozuk dosyada SheetNames boş gelir; ws undefined olur ve
+      // sheet_to_json anlamsız bir hata fırlatırdı.
       if (!wb.SheetNames || !wb.SheetNames.length) {
-        toast('Dosyada okunabilir bir sayfa yok — Excel/CSV dosyasi bos olabilir.', 'error');
+        toast('Dosyada okunabilir bir sayfa yok — Excel/CSV dosyası boş olabilir.', 'error');
         return;
       }
       const ws = wb.Sheets[wb.SheetNames[0]];
       if (!ws) {
-        toast('Dosyanin ilk sayfasi okunamadi — baska bir dosya deneyin.', 'error');
+        toast('Dosyanın ilk sayfası okunamadı — başka bir dosya deneyin.', 'error');
         return;
       }
       const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
       parseContacts(rows);
     } catch(err) {
-      console.error('[Campaign] Dosya okuma hatasi:', err);
-      toast('Dosya okunamadi: ' + (err && err.message ? err.message : 'bilinmeyen bicim') +
-        '. Dosyanin .xlsx/.xls/.csv oldugundan ve bozuk olmadigindan emin olun.', 'error');
+      console.error('[Campaign] Dosya okuma hatası:', err);
+      toast('Dosya okunamadı: ' + (err && err.message ? err.message : 'bilinmeyen biçim') +
+        '. Dosyanın .xlsx/.xls/.csv olduğundan ve bozuk olmadığından emin olun.', 'error');
     }
   };
-  // Onceden YOKTU: disk/izin hatasinda hicbir sey olmuyor, kullanici
-  // "tikladim ama bir sey olmadi" diyordu.
+  // Önceden YOKTU: disk/izin hatasında hiçbir şey olmuyor, kullanıcı
+  // "tıkladım ama bir şey olmadı" diyordu.
   reader.onerror = function() {
-    console.error('[Campaign] FileReader hatasi:', reader.error);
-    toast('Dosya okunamadi — dosya baska bir programda acik olabilir ya da erisim izni yok.', 'error');
+    console.error('[Campaign] FileReader hatası:', reader.error);
+    toast('Dosya okunamadı — dosya başka bir programda açık olabilir ya da erişim izni yok.', 'error');
   };
   reader.readAsArrayBuffer(file);
   e.target.value = '';
@@ -2414,6 +2459,17 @@ function cleanPhone(raw) {
 function isValidPhone(p) {
   return /^\+\d{10,15}$/.test(p);
 }
+// wa.me bağlantısı için yalnızca rakamlar: baştaki "0" (0532...) → "90532...",
+// 10 haneli (532...) → "90532...". Zaten ülke kodluysa dokunmaz. Boş → ''.
+function waDigits(phone) {
+  const d = String(phone == null ? '' : phone).replace(/\D/g, '');
+  if (!d) return '';
+  if (d.startsWith('0') && d.length === 11) return '90' + d.slice(1);
+  if (d.length === 10) return '90' + d;
+  return d;
+}
+window.cleanPhone = cleanPhone;
+window.waDigits = waDigits;
 
 // Ortak sütun-tespiti + satır ayrıştırma — hem Toplu Arama'nın CSV yüklemesi
 // (parseContacts, aşağıda) hem Adaylar'ın müşteri veritabanı içe aktarımı
@@ -2953,7 +3009,7 @@ function appointmentRowsHtml(list) {
   return list.map(c => {
     const r = c.result || {};
     const not = r.geri_donus_notu || r.ozet || '';
-    const waDigits = String(c.phone || '').replace(/\D/g, '');
+    const waNum = waDigits(c.phone);
     return '<div class="crp-row">' +
       '<span class="crp-name" title="' + esc(c.name || '') + '">' + esc(c.name || '(isimsiz)') + '</span>' +
       '<span class="crp-phone">' + esc(c.phone || '') + '</span>' +
@@ -2961,7 +3017,7 @@ function appointmentRowsHtml(list) {
       '<span class="crp-actions">' +
         '<button type="button" class="crp-call" data-name="' + esc(c.name || '') + '" data-phone="' + esc(c.phone || '') +
           '" data-region="' + esc(c.region || '') + '" data-reference="' + esc(c.reference || '') + '">📞 Ara</button>' +
-        (waDigits ? '<a class="crp-wa" href="https://wa.me/' + waDigits + '" target="_blank" rel="noopener">💬 WhatsApp</a>' : '') +
+        (waNum ? '<a class="crp-wa" href="https://wa.me/' + waNum + '" target="_blank" rel="noopener">💬 WhatsApp</a>' : '') +
       '</span>' +
     '</div>';
   }).join('');
@@ -3001,7 +3057,8 @@ function onAppointmentRowAction(e) {
   if ($('customerReference')) $('customerReference').value = btn.dataset.reference || '';
   closeCampaignDetail();
   switchTab('live');
-  if (window.innerWidth <= 900 && window.setLeftPanel) setLeftPanel(true); // form çekmecede — göster
+  // Form artık Canlı Görüşme sekmesinin içinde — sol menüyü açmak yerine forma kaydır.
+  document.getElementById('customerName')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   toast('Bilgiler canlı arama formuna aktarıldı — "Aramayı Başlat"a basın', 'info');
 }
 
@@ -3197,9 +3254,15 @@ function renderCampaignTable() {
   attachCampaignRowClicks(tbody);
 }
 
+// Tek bir delegeli dinleyici (bir kez bağlanır) — satırlar her render/canlı
+// güncellemede yeniden çizildiği için satır başına dinleyici bağlamak gereksiz.
 function attachCampaignRowClicks(tbody) {
-  tbody.querySelectorAll('.cp-row-click').forEach(row => {
-    row.addEventListener('click', () => openDrawer(row.dataset.callid));
+  if (!tbody || tbody.dataset.rowClicksBound) return;
+  tbody.dataset.rowClicksBound = '1';
+  tbody.addEventListener('click', e => {
+    const row = e.target.closest('.cp-row-click');
+    if (!row || !tbody.contains(row) || !row.dataset.callid) return;
+    openDrawer(row.dataset.callid);
   });
 }
 
@@ -3321,10 +3384,8 @@ function renderCampaignRow(idx) {
   if (!row) return;
   const c = campaign.contacts[idx];
   row.outerHTML = campaignRowHtml(c, idx);
-  const newRow = $('crow-' + idx);
-  if (newRow && newRow.classList.contains('cp-row-click')) {
-    newRow.addEventListener('click', () => openDrawer(newRow.dataset.callid));
-  }
+  // Tıklama, tbody üzerindeki delegeli dinleyiciden gelir (attachCampaignRowClicks) —
+  // yeniden çizilen satıra ayrıca dinleyici bağlamak gerekmez.
 }
 
 function computeCampaignBuckets() {
@@ -3424,6 +3485,18 @@ function updateCampaignProgressFromSummary(sum) {
     : computeCampaignBuckets();
   const done = sum.done ?? (b.appointment + b.talked + b.unreachable + b.error + b.skipped);
   paintCampaignProgress(total, done, b);
+}
+
+async function withCampaignButtonLock(btn, fn) {
+  if (!btn || btn.dataset.busy) return;
+  btn.dataset.busy = '1';
+  btn.disabled = true;
+  try {
+    await fn();
+  } finally {
+    delete btn.dataset.busy;
+    syncCampaignButtons();
+  }
 }
 
 async function campaignStart() {
@@ -3557,6 +3630,7 @@ async function campaignStop() {
     if (!json.success) throw new Error(json.error);
     campaign.running = false;
     campaign.paused  = false;
+    campaign.status  = 'stopped';
     syncCampaignButtons();
     toast(pending
       ? 'Kampanya durduruldu — ' + pending + ' kişi aranmadan kaldı. "Bu Ayarlarla Devam Et" ile sürdürebilirsiniz.'
@@ -3727,7 +3801,7 @@ async function loadCampaignHistory() {
     campaignHistoryRows = json.data || [];
     applyCampaignHistoryView();
   } catch (err) {
-    body.innerHTML = '<tr><td colspan="10" class="table-empty">Hata: ' + err.message + '</td></tr>';
+    body.innerHTML = '<tr><td colspan="10" class="table-empty">Hata: ' + esc(err.message) + '</td></tr>';
   }
 }
 
@@ -3798,7 +3872,7 @@ async function openCampaignDetail(id) {
     const sec = appointmentSectionHtml(c.contacts, { finished: c.status === 'completed' || c.status === 'stopped' });
     if (sec) $('cdBody').insertAdjacentHTML('afterbegin', '<div class="drawer-section cp-result-panel">' + sec + '</div>');
   } catch (err) {
-    $('cdBody').innerHTML = '<div class="drawer-error">Hata: ' + err.message + '</div>';
+    $('cdBody').innerHTML = '<div class="drawer-error">Hata: ' + esc(err.message) + '</div>';
   }
 }
 
@@ -4163,7 +4237,7 @@ async function runScenarioTest(targetTextareaId) {
     if (!j.success) throw new Error(j.error);
     renderScenarioTestResult(j.data.scenarios);
   } catch (err) {
-    $('scenarioTestBody').innerHTML = '<div class="drawer-error">Hata: ' + err.message + '</div>';
+    $('scenarioTestBody').innerHTML = '<div class="drawer-error">Hata: ' + esc(err.message) + '</div>';
   }
 }
 

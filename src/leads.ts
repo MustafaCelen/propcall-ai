@@ -191,6 +191,22 @@ export async function setLeadStage(
     await client.query('BEGIN');
     const { rows: before } = await client.query(`SELECT stage FROM leads WHERE id = $1 AND user_id = $2`, [id, userId]);
     if (!before[0]) { await client.query('ROLLBACK'); return null; }
+    // Aynı aşamaya "taşıma" (Kanban'da aynı sütuna bırakma, çift istek) aktivite
+    // üretmez — zaman çizelgesi "NEW → NEW" satırlarıyla doluyordu. LOST → LOST ise
+    // kayıp nedeni güncellenmiş olabilir: sadece veri yaması, yine aktivite yok.
+    if (normalizeLeadStage(before[0].stage) === stage) {
+      if (stage === 'LOST') {
+        const { rows: same } = await client.query(
+          `UPDATE leads SET data = data || $3::jsonb, updated_at = NOW() WHERE id = $1 AND user_id = $2
+           RETURNING id, stage, data, created_at, updated_at`,
+          [id, userId, JSON.stringify(dataPatch)],
+        );
+        await client.query('COMMIT');
+        return rowToLead(same[0]);
+      }
+      await client.query('ROLLBACK');
+      return getLead(userId, id);
+    }
     const { rows } = await client.query(
       `UPDATE leads SET stage = $3, data = data || $4::jsonb, updated_at = NOW()
        WHERE id = $1 AND user_id = $2
@@ -416,8 +432,15 @@ export type SegmentRule =
 
 export async function querySegment(userId: string, rule: SegmentRule): Promise<Lead[]> {
   if (rule.type === 'STATIC_LIST') {
-    const leads = await Promise.all(rule.leadIds.map(id => getLead(userId, id)));
-    return leads.filter((l): l is Lead => !!l);
+    if (!rule.leadIds?.length) return [];
+    // Tek sorgu — önceden her ID için ayrı SELECT (500 kişilik liste = 500 round-trip).
+    // Sıra, danışmanın listedeki sırası korunsun diye leadIds'e göre yeniden kurulur.
+    const { rows } = await pool.query(
+      `SELECT id, stage, data, created_at, updated_at FROM leads WHERE user_id = $1 AND id = ANY($2::text[])`,
+      [userId, rule.leadIds],
+    );
+    const byId = new Map(rows.map(r => [r.id as string, rowToLead(r)]));
+    return rule.leadIds.map(id => byId.get(id)).filter((l): l is Lead => !!l);
   }
 
   if (rule.type === 'NEVER_CONTACTED') {
@@ -497,7 +520,69 @@ export async function getLeadActivities(userId: string, leadId: string): Promise
 // veya LOST'a çekmez — o karar danışmana ait. "Kişiyle konuşuldu" gerçeği bile en
 // kötü ihtimalle CONTACTED'a taşır, hiçbir zaman NEW'in altına düşürmez.
 const STAGE_RANK: Record<LeadStage, number> = { NEW: 0, CONTACTED: 1, MEETING: 2, AGREEMENT: 3, WON: 4, LOST: -1 };
-const rankOf = (raw: string): number => STAGE_RANK[normalizeLeadStage(raw)] ?? 0;
+
+// Otomasyonun (arama sonucu / WhatsApp analizi) aşama yükseltmesi için TEK kapı.
+// Kurallar:
+//  • Sadece İLERİ taşır (STAGE_RANK), asla geri almaz.
+//  • Aşama değişirse STAGE_CHANGE aktivitesi {from,to,source} AYNI transaction'da yazılır —
+//    önceden otomatik yükseltmeler aktivite bırakmıyordu, zaman çizelgesinde aday bir
+//    anda "Randevu"da beliriyor, kimin/neyin taşıdığı görünmüyordu.
+//  • Aday LOST (Kayıp) ise otomasyon aşamaya DOKUNMAZ — danışmanın bilinçli kararı
+//    bir AI özetiyle ezilmez; bunun yerine ne olduğunu anlatan bir NOT düşülür.
+//  • extraDataPatch (örn. linkedCallId) aşama değişsin değişmesin uygulanır.
+type AutoStageSource = 'ai_call' | 'ai_whatsapp';
+async function autoPromoteStage(
+  userId: string, leadId: string, candidateStage: LeadStage, source: AutoStageSource,
+  outcomeLabel: string, extraDataPatch: Record<string, unknown> = {},
+): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(`SELECT stage FROM leads WHERE id = $1 AND user_id = $2 FOR UPDATE`, [leadId, userId]);
+    if (!rows[0]) { await client.query('ROLLBACK'); return; } // lead silinmiş olabilir
+    const current = normalizeLeadStage(rows[0].stage);
+    const hasPatch = Object.keys(extraDataPatch).length > 0;
+
+    if (current === 'LOST') {
+      if (hasPatch) {
+        await client.query(`UPDATE leads SET data = data || $3::jsonb, updated_at = NOW() WHERE id = $1 AND user_id = $2`,
+          [leadId, userId, JSON.stringify(extraDataPatch)]);
+      }
+      await client.query(
+        `INSERT INTO lead_activities (id, lead_id, user_id, type, data) VALUES ($1, $2, $3, 'NOTE', $4)`,
+        [newActivityId(), leadId, userId, JSON.stringify({
+          note: `${outcomeLabel} (Kayıp aşamasında, değiştirilmedi)`, source, suggestedStage: candidateStage,
+        })],
+      );
+      await client.query('COMMIT');
+      return;
+    }
+
+    if (STAGE_RANK[candidateStage] > STAGE_RANK[current]) {
+      await client.query(
+        `UPDATE leads SET stage = $3, data = data || $4::jsonb, updated_at = NOW() WHERE id = $1 AND user_id = $2`,
+        [leadId, userId, candidateStage, JSON.stringify(extraDataPatch)],
+      );
+      await client.query(
+        `INSERT INTO lead_activities (id, lead_id, user_id, type, data) VALUES ($1, $2, $3, 'STAGE_CHANGE', $4)`,
+        [newActivityId(), leadId, userId, JSON.stringify({ from: current, to: candidateStage, source })],
+      );
+    } else if (hasPatch) {
+      await client.query(`UPDATE leads SET data = data || $3::jsonb, updated_at = NOW() WHERE id = $1 AND user_id = $2`,
+        [leadId, userId, JSON.stringify(extraDataPatch)]);
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+function callOutcomeLabel(randevuAlindi: boolean, ilgiSeviyesi: string): string {
+  return randevuAlindi ? 'Arama sonucu: randevu alındı' : `Arama sonucu: ilgi ${ilgiSeviyesi}`;
+}
 
 // Arama özetindeki mülk tipini ("3+1 daire", "arsa"…) fırsata yazar — SADECE alan
 // boşsa; danışmanın elle girdiği bilgi AI'nın yan bilgisiyle ezilmez.
@@ -548,21 +633,6 @@ export async function upsertLeadFromCallOutcome(
   let leadId: string;
   if (rows[0]) {
     leadId = rows[0].id;
-    const currentRank = rankOf(rows[0].stage);
-    const candidateRank = STAGE_RANK[candidateStage];
-    if (candidateRank > currentRank) {
-      await pool.query(
-        `UPDATE leads SET stage = $3, data = data || jsonb_build_object('linkedCallId', $4::text), updated_at = NOW()
-         WHERE id = $1 AND user_id = $2`,
-        [leadId, userId, candidateStage, vapiCallId],
-      );
-    } else {
-      await pool.query(
-        `UPDATE leads SET data = data || jsonb_build_object('linkedCallId', $3::text), updated_at = NOW()
-         WHERE id = $1 AND user_id = $2`,
-        [leadId, userId, vapiCallId],
-      );
-    }
   } else {
     const parts = customerName.trim().split(/\s+/);
     const created = await createLead(userId, {
@@ -571,13 +641,10 @@ export async function upsertLeadFromCallOutcome(
       phone: phone.trim(),
       source: 'CALL_CAMPAIGN',
     });
-    leadId = created.id;
-    await pool.query(`UPDATE leads SET stage = $2 WHERE id = $1`, [leadId, candidateStage]);
-    await pool.query(
-      `UPDATE leads SET data = data || jsonb_build_object('linkedCallId', $2::text) WHERE id = $1`,
-      [leadId, vapiCallId],
-    );
+    leadId = created.id; // NEW olarak açılır; aşağıdaki yükseltme NEW→hedef geçişini aktivitesiyle yazar
   }
+  await autoPromoteStage(userId, leadId, candidateStage, 'ai_call',
+    callOutcomeLabel(randevuAlindi, ilgiSeviyesi), { linkedCallId: vapiCallId });
   await fillPropertyTypeIfEmpty(leadId, mulkTipi);
 
   await pool.query(
@@ -623,23 +690,11 @@ export async function applyCallOutcomeToLeadById(
   if (!qualifies) return;
 
   const candidateStage: LeadStage = randevuAlindi ? 'MEETING' : 'CONTACTED';
-  const { rows } = await pool.query(`SELECT stage FROM leads WHERE id = $1 AND user_id = $2`, [leadId, userId]);
+  const { rows } = await pool.query(`SELECT 1 FROM leads WHERE id = $1 AND user_id = $2`, [leadId, userId]);
   if (!rows[0]) return; // lead silinmiş olabilir — sessizce atla
 
-  const currentRank = rankOf(rows[0].stage);
-  if (STAGE_RANK[candidateStage] > currentRank) {
-    await pool.query(
-      `UPDATE leads SET stage = $3, data = data || jsonb_build_object('linkedCallId', $4::text), updated_at = NOW()
-       WHERE id = $1 AND user_id = $2`,
-      [leadId, userId, candidateStage, vapiCallId],
-    );
-  } else {
-    await pool.query(
-      `UPDATE leads SET data = data || jsonb_build_object('linkedCallId', $3::text), updated_at = NOW()
-       WHERE id = $1 AND user_id = $2`,
-      [leadId, userId, vapiCallId],
-    );
-  }
+  await autoPromoteStage(userId, leadId, candidateStage, 'ai_call',
+    callOutcomeLabel(randevuAlindi, ilgiSeviyesi), { linkedCallId: vapiCallId });
   await fillPropertyTypeIfEmpty(leadId, mulkTipi);
 
   await pool.query(
@@ -663,16 +718,8 @@ export async function applyWhatsappAnalysisToLead(
   const candidateStage: LeadStage = randevuAlindi ? 'MEETING' : 'CONTACTED';
 
   if (qualifies) {
-    const { rows } = await pool.query(`SELECT stage FROM leads WHERE id = $1 AND user_id = $2`, [leadId, userId]);
-    if (rows[0]) {
-      const currentRank = rankOf(rows[0].stage);
-      if (STAGE_RANK[candidateStage] > currentRank) {
-        await pool.query(
-          `UPDATE leads SET stage = $3, updated_at = NOW() WHERE id = $1 AND user_id = $2`,
-          [leadId, userId, candidateStage],
-        );
-      }
-    }
+    await autoPromoteStage(userId, leadId, candidateStage, 'ai_whatsapp',
+      randevuAlindi ? 'WhatsApp analizi: randevu alındı' : `WhatsApp analizi: ilgi ${ilgiSeviyesi}`);
   }
 
   // qualifies=false olsa bile HER ZAMAN loglanır — bu kayıt aynı zamanda "en son ne zaman

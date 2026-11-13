@@ -91,6 +91,12 @@ export interface CampaignContact {
 
 export type CampaignStatus = 'draft' | 'running' | 'paused' | 'completed' | 'stopped';
 
+// Kampanya NEDEN duraklatıldı (sadece status='paused' iken anlamlı):
+// 'user'   — danışman "Duraklat"a bastı
+// 'credit' — kredi/bakiye tükendi (motor kendisi duraklattı)
+// 'plan'   — Akıllı Plan saat penceresi kapandı (pencere açılınca plan kendisi açar)
+export type PauseReason = 'user' | 'credit' | 'plan';
+
 export interface CampaignRecord {
   id: string;
   userId: string;
@@ -98,6 +104,7 @@ export interface CampaignRecord {
   scenarioId?: string;
   scenarioName?: string;
   status: CampaignStatus;
+  pauseReason?: PauseReason;
   maxConcurrent: number;
   startFromIndex: number;
   callLimit: number;
@@ -143,6 +150,7 @@ function rowToRecord(r: any): CampaignRecord {
     scenarioId: r.scenario_id || undefined,
     scenarioName: r.scenario_name || undefined,
     status: r.status,
+    pauseReason: r.pause_reason || undefined,
     maxConcurrent: r.max_concurrent,
     startFromIndex: r.start_from_index,
     callLimit: r.call_limit,
@@ -231,12 +239,17 @@ export async function setCampaignStatus(
   userId: string,
   id: string,
   status: CampaignStatus,
-  opts?: { markStarted?: boolean; markCompleted?: boolean },
+  opts?: { markStarted?: boolean; markCompleted?: boolean; pauseReason?: PauseReason },
 ): Promise<void> {
   const sets: string[] = ['status = $3', 'updated_at = NOW()'];
+  const vals: unknown[] = [id, userId, status];
   if (opts?.markStarted)   sets.push('started_at = COALESCE(started_at, NOW())');
   if (opts?.markCompleted) sets.push('completed_at = NOW()');
-  await pool.query(`UPDATE campaigns SET ${sets.join(', ')} WHERE id = $1 AND user_id = $2`, [id, userId, status]);
+  // pause_reason sadece 'paused' ile anlamlı — başka her duruma geçişte temizlenir,
+  // aksi halde eski "credit" sebebi bir sonraki duraklatmaya yanlış taşınırdı.
+  if (status === 'paused' && opts?.pauseReason) { vals.push(opts.pauseReason); sets.push(`pause_reason = $${vals.length}`); }
+  else if (status !== 'paused') sets.push('pause_reason = NULL');
+  await pool.query(`UPDATE campaigns SET ${sets.join(', ')} WHERE id = $1 AND user_id = $2`, vals);
 }
 
 // Var olan bir kampanyayı "belirli bir satırdan devam et" gibi ayarlarla güncellemek
