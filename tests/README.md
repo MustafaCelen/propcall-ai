@@ -48,6 +48,20 @@ durur. Akıllı Plan testleri, oluşturduğu planı **hemen `paused` durumuna ç
 (scheduler sadece `status='active'` planları tetikler) — bu, planın gün/saat
 ayarından bağımsız olarak otomatik tetiklenme riskini sıfırlar.
 
+## Arayüz (tarayıcı) testleri — `ui-*.spec.ts`
+
+API testlerinden farklı olarak bunlar gerçek tarayıcıyı sürer: dosya seçer, form
+doldurur, sekme değiştirir, mobil ekranda menüyü açar, giriş/çıkış yapar. Her
+ekranda yakalanmamış JS hatası ve `console.error` de sayılır (`trackPageErrors`).
+
+- Yardımcılar `tests/helpers/ui.ts`: `openApp` (session yanıtı + Bugün ekranı dolana
+  kadar bekler — `switchTab` fonksiyonunun varlığı kurulumun bittiğini GÖSTERMEZ),
+  `waitCampaignLoaded`, `writeTempCsv`.
+- `ui-auth.spec.ts` ortak oturumu bozmamak için kendi bağlamında ayrıca giriş yapar.
+- Yalnızca arayüz testleri:
+  `npx playwright test -c tests/playwright.config.ts tests/e2e/ui-*.spec.ts`
+- Lansman planı ve otomasyonun kapsamadığı manuel kontroller: `docs/URUNLESME_TEST_PLANI.md`.
+
 ## Yeni bir özellik test etmek istediğinizde
 
 1. `tests/e2e/` altına yeni bir `*.spec.ts` dosyası ekleyin (ya da mevcut bir

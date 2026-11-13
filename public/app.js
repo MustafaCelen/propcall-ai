@@ -43,7 +43,16 @@ const ALL_APP_STORAGE_KEYS = [
   FOLLOWUP_TAB_STORAGE_KEY,
 ];
 function clearAllAppStorage() {
-  try { ALL_APP_STORAGE_KEYS.forEach(k => localStorage.removeItem(k)); } catch (_) {}
+  try {
+    ALL_APP_STORAGE_KEYS.forEach(k => localStorage.removeItem(k));
+    // Listede olmayan ama "propcall." önekli her veri anahtarı da gider — eski
+    // sürümlerden kalan (örn. propcall.pendingCampaignDraft.v1) ya da gelecekte
+    // eklenip listeye yazılması unutulan anahtarlar bir sonraki kullanıcıya kalmasın.
+    // "propcall_tour_*" (tur görüldü işareti) veri taşımaz, tarayıcıya aittir, kalır.
+    Object.keys(localStorage)
+      .filter(k => k.startsWith('propcall.'))
+      .forEach(k => localStorage.removeItem(k));
+  } catch (_) {}
 }
 
 // Çıkışın "temiz" olmadığı durumlara (tarayıcı çökmesi, oturumun elle silinmesi,
@@ -2767,6 +2776,11 @@ async function loadCampaignState(attempt = 1) {
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       json = await resp.json();
     }
+
+    // Yarış koruması: bu istek yoldayken danışman başka bir kampanyaya geçtiyse
+    // (örn. SSE "connected" tetiklemesi sürerken yeni Excel yükledi) gecikmiş yanıt
+    // ekrandaki yeni listeyi eski kampanyayla EZMEMELİ. Odak değiştiyse yanıt çöpe.
+    if (campaign.id !== focusedId) return;
 
     if (!json.success || !json.data || !json.data.id) {
       setFocusedCampaign(null);
