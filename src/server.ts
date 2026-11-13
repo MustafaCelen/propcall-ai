@@ -1982,7 +1982,10 @@ app.get('/api/leads/:id/timeline', requireUserAuth, async (req: Request, res: Re
 });
 
 app.get('/api/leads/:id/activities', requireUserAuth, async (req: Request, res: Response) => {
-  try { return res.json({ success: true, data: await getLeadActivities(req.userId!, req.params.id) }); }
+  try {
+    if (!(await getLead(req.userId!, req.params.id))) return res.status(404).json({ success: false, error: 'Aday bulunamadı' });
+    return res.json({ success: true, data: await getLeadActivities(req.userId!, req.params.id) });
+  }
   catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
@@ -2189,7 +2192,10 @@ app.post('/api/whatsapp/templates/:id/submit', requireUserAuth, async (req: Requ
 });
 
 app.get('/api/leads/:id/messages', requireUserAuth, async (req: Request, res: Response) => {
-  try { return res.json({ success: true, data: await getMessagesForLead(req.userId!, req.params.id) }); }
+  try {
+    if (!(await getLead(req.userId!, req.params.id))) return res.status(404).json({ success: false, error: 'Aday bulunamadı' });
+    return res.json({ success: true, data: await getMessagesForLead(req.userId!, req.params.id) });
+  }
   catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
 });
 
@@ -2825,6 +2831,7 @@ app.post('/api/campaign/retry-failed', requireUserAuth, async (req: Request, res
   try {
     const campaignId = requireCampaignId(req, res);
     if (!campaignId) return;
+    if (!(await getCampaign(req.userId!, campaignId))) return res.status(404).json({ success: false, error: 'Kampanya bulunamadı' });
     const result = await campaignRetryFailed(req.userId!, campaignId);
     return res.json({ success: true, ...result });
   } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
@@ -2834,6 +2841,7 @@ app.post('/api/campaign/pause', requireUserAuth, async (req: Request, res: Respo
   try {
     const campaignId = requireCampaignId(req, res);
     if (!campaignId) return;
+    if (!(await getCampaign(req.userId!, campaignId))) return res.status(404).json({ success: false, error: 'Kampanya bulunamadı' });
     const result = await campaignTogglePause(req.userId!, campaignId);
     return res.json({ success: true, ...result });
   } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }
@@ -2843,6 +2851,7 @@ app.post('/api/campaign/stop', requireUserAuth, async (req: Request, res: Respon
   try {
     const campaignId = requireCampaignId(req, res);
     if (!campaignId) return;
+    if (!(await getCampaign(req.userId!, campaignId))) return res.status(404).json({ success: false, error: 'Kampanya bulunamadı' });
     await campaignStop(req.userId!, campaignId);
     return res.json({ success: true });
   } catch (err) { return res.status(500).json({ success: false, error: toClientError(err) }); }

@@ -92,6 +92,100 @@ test.describe('Tenant izolasyonu ve rol kapıları', () => {
     expect(agentList.some(l => l.id === adminLeadId)).toBeFalsy();
   });
 
+  test('(a2) yüklenen kişi listesi (taslak kampanya) başka tenant\'ta görünmez ve yönetilemez', async () => {
+    // Admin bir Excel listesi yüklemiş gibi taslak kampanya açar (başlatılmaz → arama yok).
+    const marker = 'E2E Izolasyon Liste ' + Date.now();
+    const loadRes = await admin.post('/api/campaign/load', {
+      data: {
+        name: marker,
+        contacts: [
+          { name: 'Izolasyon Kisi 1', phone: '+905550000001' },
+          { name: 'Izolasyon Kisi 2', phone: '+905550000002' },
+        ],
+        maxConcurrent: 1,
+      },
+    });
+    expect(loadRes.ok(), 'admin taslak kampanya yükleyemedi').toBeTruthy();
+    const adminCampaignId = (await loadRes.json()).data.campaignId as string;
+    expect(adminCampaignId).toBeTruthy();
+
+    try {
+      // Agent'ın kampanya geçmişinde ve aktif kampanya durumunda admin listesi yok.
+      const agentList = (await (await agent.get('/api/campaigns')).json()).data as Array<{ id: string; name: string }>;
+      expect(agentList.some(c => c.id === adminCampaignId || c.name === marker)).toBeFalsy();
+
+      const state = (await (await agent.get(`/api/campaign?campaignId=${adminCampaignId}`)).json()).data;
+      expect(state?.id ?? null).not.toBe(adminCampaignId);
+      expect(JSON.stringify(state ?? {})).not.toContain('905550000001');
+
+      const detail = await agent.get(`/api/campaigns/${adminCampaignId}`);
+      expect(detail.status()).toBe(404);
+
+      // Yönetim uçları: ID bilinse bile başkasının kampanyasına dokunulamaz.
+      for (const path of ['/api/campaign/pause', '/api/campaign/stop', '/api/campaign/retry-failed', '/api/campaign/resume']) {
+        const r = await agent.post(path, { data: { campaignId: adminCampaignId } });
+        expect(r.ok(), `${path} başkasının kampanyasında başarılı döndü`).toBeFalsy();
+        expect([400, 404]).toContain(r.status());
+      }
+      const rerun = await agent.post('/api/campaign/rerun', { data: { campaignId: adminCampaignId, scope: 'all' } });
+      expect(rerun.ok()).toBeFalsy();
+      const del = await agent.delete(`/api/campaigns/${adminCampaignId}`);
+      expect(del.status()).toBe(404);
+
+      // Admin tarafında taslak hâlâ sağlam.
+      const adminState = (await (await admin.get(`/api/campaign?campaignId=${adminCampaignId}`)).json()).data;
+      expect(adminState.id).toBe(adminCampaignId);
+      expect(adminState.status).toBe('draft');
+      expect(adminState.contacts?.length ?? 0).toBe(2);
+    } finally {
+      await admin.delete(`/api/campaigns/${adminCampaignId}`).catch(() => {});
+    }
+  });
+
+  test('(a3) görev, senaryo ve WhatsApp mesajları tenant dışına sızmaz', async () => {
+    // Görev: admin adayına bağlı görev → agent ID ile kapatamaz/silemez, kendi listesinde görmez.
+    const taskRes = await admin.post('/api/tasks', { data: { leadId: adminLeadId, title: 'E2E Izolasyon Görev ' + Date.now() } });
+    expect(taskRes.status()).toBe(201);
+    const taskId = (await taskRes.json()).data.id as string;
+
+    // Senaryo: admin oluşturur → agent değiştiremez/silemez.
+    const scenarioRes = await admin.post('/api/scenarios', {
+      data: { name: 'E2E Izolasyon Senaryo ' + Date.now(), description: 'izolasyon testi', scriptBody: 'Merhaba, test.' },
+    });
+    const scenarioId = scenarioRes.ok() ? ((await scenarioRes.json()).data?.id as string | undefined) : undefined;
+
+    try {
+      const agentTasks = (await (await agent.get('/api/tasks?scope=open')).json()).data as Array<{ id: string }>;
+      expect(agentTasks.some(t => t.id === taskId)).toBeFalsy();
+      expect((await agent.patch(`/api/tasks/${taskId}`, { data: { done: true } })).ok()).toBeFalsy();
+      expect((await agent.delete(`/api/tasks/${taskId}`)).ok()).toBeFalsy();
+      // Agent başkasının adayına görev de açamaz.
+      const crossTask = await agent.post('/api/tasks', { data: { leadId: adminLeadId, title: 'IDOR görev' } });
+      expect(crossTask.status()).toBe(404);
+
+      if (scenarioId) {
+        const agentScenarios = (await (await agent.get('/api/scenarios')).json()).data as Array<{ id: string }>;
+        expect(agentScenarios.some(s => s.id === scenarioId)).toBeFalsy();
+        expect((await agent.put(`/api/scenarios/${scenarioId}`, { data: { name: 'IDOR' } })).ok()).toBeFalsy();
+        expect((await agent.delete(`/api/scenarios/${scenarioId}`)).ok()).toBeFalsy();
+      }
+
+      // Zaman çizelgesi / mesajlar / aktiviteler: başkasının adayı için 404.
+      for (const path of [`/api/leads/${adminLeadId}/timeline`, `/api/leads/${adminLeadId}/activities`, `/api/leads/${adminLeadId}/messages`]) {
+        const r = await agent.get(path);
+        expect([403, 404], `${path} başkasının adayı için açık`).toContain(r.status());
+      }
+      expect((await agent.post(`/api/leads/${adminLeadId}/notes`, { data: { note: 'IDOR not' } })).ok()).toBeFalsy();
+
+      // Admin tarafında görev açık, dokunulmamış.
+      const adminTasks = (await (await admin.get('/api/tasks?scope=open')).json()).data as Array<{ id: string }>;
+      expect(adminTasks.some(t => t.id === taskId)).toBeTruthy();
+    } finally {
+      await admin.delete(`/api/tasks/${taskId}`).catch(() => {});
+      if (scenarioId) await admin.delete(`/api/scenarios/${scenarioId}`).catch(() => {});
+    }
+  });
+
   test('(b) agent yönetici/admin uçlarına giremez', async () => {
     const team = await agent.get('/api/team/overview');
     expect(team.status()).toBe(403);
