@@ -1,7 +1,7 @@
 # PropCall AI — Ürünleşme Hazırlık ve Test Planı
 
 Tarih: 2026-11-13 · Sahip: Mustafa Celen · Prod sürümü: 0eeca7b (deploy 2ab20f91)
-Durum: **Taslak → uygulanıyor.** Bu belge "kullanıcıya açmadan önce nelerden emin olmalıyız"
+Durum: **Onaylandı (Mustafa, 2026-11-13), uygulanıyor.** Bu belge "kullanıcıya açmadan önce nelerden emin olmalıyız"
 sorusunun cevabıdır. Her katmanın geçme kriteri ve sorumlusu yazılıdır; Go/No-Go kararı
 bölüm 6'daki kriterlere göre verilir.
 
@@ -37,8 +37,9 @@ Lansman (ilk gerçek danışmanlara açılış) için **hepsi** sağlanmalı:
 - Postgres RLS: yapısal öneri, lansman şartı değil.
 - Ertelenen teknik borç: campaign_contacts tablosu, billing_jobs kuyruğu, node-pg-migrate, pino/Sentry.
 
-**Açık iş kararı**
-- Dakika ücreti: kodda 10 TL/dk (`CALL_MINUTE_RATE_TRY`), notlarda 20 TL. Lansmandan önce netleşmeli.
+**İş kararları**
+- Dakika ücreti: **10 TL/dk** (karar 2026-11-13). Kod varsayılanı 10 (`CALL_MINUTE_RATE_TRY`, src/users.ts),
+  prod ortamında üzerine yazan değişken yok, Kullanım Koşulları metninde tutar geçmiyor → çelişki yok.
 
 ---
 
@@ -91,7 +92,7 @@ Yöntem: Her senaryo için 1 kampanya (1–3 kişi), senaryo script'i Ek A'da. H
 - [ ] Ödeme sayfasını kapatıp 1 saat bekle → bekleyen kayıt iptal notuyla kapanır, bakiye değişmez.
 - [ ] Aynı webhook'u iki kez gönder (Fonzip "yeniden gönder") → tek kredi.
 - [ ] Bakiye 1 dakikalık ücretin altındayken arama → reddedilir, kampanya `pause_reason=credit` ile durur, bakiye yüklenince devam eder.
-- [ ] Dakika ücreti kararı (10 vs 20 TL) uygulanmış ve Kullanım Koşulları'ndaki tutarla aynı.
+- [x] Dakika ücreti kararı: 10 TL, kodla aynı (2026-11-13).
 
 ### 3.5 K5 — Dayanıklılık ve operasyon (staging)
 - [ ] 3 kişilik kampanya çalışırken `railway up` → yeni sürüm açılınca kampanya DB'den geri yüklenir, kalan kişiler aranır, aranmış kişi tekrar aranmaz.
@@ -160,7 +161,7 @@ Her senaryo "✓ / ✗ + not" ile işaretlenir.
 
 | Gün | İş | Çıktı |
 |---|---|---|
-| G1 (bugün) | K2 arayüz testleri yazıldı, staging'de yeşil; plan onayı | Bu belge, 19 test |
+| G1 (13 Kasım) ✓ | K2 arayüz testleri yazıldı, 95/95 yeşil; plan onaylandı; ücret 10 TL kesinleşti | Bu belge, 19 test |
 | G2 | Bölüm 4 manuel liste, 3 cihaz; bulgular S1–S3 sınıflandırılır | Bulgu listesi |
 | G3–G4 | K3 gerçek arama UAT (Ek A, 12 senaryo) | Ek A doldurulmuş |
 | G5 | K4 ödeme (prod, 10 TL) + K5 dayanıklılık provaları | Kontrol listeleri |
@@ -185,7 +186,7 @@ Kayıt: `docs/BULGULAR_LANSMAN.md` (tarih, sınıf, ekran, adımlar, beklenen/ge
 
 ## 7. Lansman öncesi prod operasyon listesi
 
-- [ ] `CALL_MINUTE_RATE_TRY` iş kararıyla aynı; Kullanım Koşulları metni aynı tutarı söylüyor.
+- [x] `CALL_MINUTE_RATE_TRY` iş kararıyla aynı (10 TL, doğrulandı 2026-11-13); Kullanım Koşulları tutar içermiyor, çelişki yok.
 - [ ] Test hesapları ve "E2E" artıkları prod'da yok (2026-11-12 temizliği doğrulanır).
 - [ ] Railway: prod Postgres otomatik yedek açık, son yedek tarihi görülür; healthcheck + ON_FAILURE restart aktif.
 - [ ] Özel alan adı + SSL (şu an railway.app alt alanı; danışmanlara verilecek adres netleşsin).
