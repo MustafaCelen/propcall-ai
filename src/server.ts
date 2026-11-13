@@ -2267,13 +2267,20 @@ async function verifyTwilioSignature(req: Request, userId: string): Promise<bool
   if (!config?.authToken) return false; // yapılandırılmamış kullanıcı için webhook kabul edilmez
   const header = req.get('X-Twilio-Signature') || '';
   if (!header) return false;
-  const base = process.env.APP_URL?.replace(/\/+$/, '') || `https://${req.get('host')}`;
-  const fullUrl = `${base}${req.originalUrl}`;
+  // Twilio imzayı KENDİ kayıtlı URL'iyle üretir; o URL APP_URL de olabilir, Railway
+  // alan adı da (host başlığı). İkisini de deneriz — biri tutarsa gerçek Twilio'dur.
+  const bases = new Set<string>();
+  if (process.env.APP_URL) bases.add(process.env.APP_URL.replace(/\/+$/, ''));
+  if (req.get('host')) bases.add(`https://${req.get('host')}`);
   const body = (req.body && typeof req.body === 'object') ? req.body as Record<string, unknown> : {};
-  const payload = fullUrl + Object.keys(body).sort().map(k => k + String(body[k] ?? '')).join('');
-  const expected = Buffer.from(crypto.createHmac('sha1', config.authToken).update(payload, 'utf8').digest('base64'), 'utf8');
+  const bodyPart = Object.keys(body).sort().map(k => k + String(body[k] ?? '')).join('');
   const given = Buffer.from(header, 'utf8');
-  return expected.length === given.length && crypto.timingSafeEqual(expected, given);
+  for (const base of bases) {
+    const payload = `${base}${req.originalUrl}` + bodyPart;
+    const expected = Buffer.from(crypto.createHmac('sha1', config.authToken).update(payload, 'utf8').digest('base64'), 'utf8');
+    if (expected.length === given.length && crypto.timingSafeEqual(expected, given)) return true;
+  }
+  return false;
 }
 
 app.post('/webhook/whatsapp/:userId', async (req: Request, res: Response) => {
