@@ -1145,7 +1145,10 @@ async function handleWebhook(payload: VapiWebhookPayload, routeUserId: string): 
 
     case 'end-of-call-report': {
       if (!vapiCallId) break;
-      const endedAt   = msg.call?.endedAt || new Date().toISOString();
+      // Vapi end-of-call-report'ta startedAt/endedAt/durationSeconds raporun KENDİ üst
+      // alanlarıdır; msg.call içindeki kopya webhook'ta çoğu zaman boş gelir (UAT bulgu 7:
+      // çalma süresi faturalanıyordu). Önce üst alanlar, sonra call, sonra bizim kayıt.
+      const endedAt   = msg.endedAt || msg.call?.endedAt || new Date().toISOString();
       const endReason = msg.endedReason || msg.call?.endedReason;
       const recording = msg.recordingUrl || msg.artifact?.recordingUrl;
       const newCosts  = parseCosts(msg.costs, msg.cost);
@@ -1172,10 +1175,17 @@ async function handleWebhook(payload: VapiWebhookPayload, routeUserId: string): 
       // bu yüzden güvenilir olması kritik. Vapi'nin startedAt'i (gerçek bağlantı anı)
       // bizim kayıt anımızdan (startTime = REST isteği) daha doğru — çalma süresi
       // ücretlendirilmesin.
-      let duration = msg.call?.duration;
-      const startRef = msg.call?.startedAt || existing?.startTime;
-      if (!duration && startRef) {
+      let duration: number | undefined =
+        (msg.durationSeconds != null && Number.isFinite(Number(msg.durationSeconds)))
+          ? Math.max(0, Math.round(Number(msg.durationSeconds)))
+          : msg.call?.duration;
+      const startRef = msg.startedAt || msg.call?.startedAt || existing?.startTime;
+      const durationSource = duration != null ? 'durationSeconds' : (msg.startedAt || msg.call?.startedAt) ? 'startedAt' : 'startTime(fallback)';
+      if (duration == null && startRef) {
         duration = Math.max(0, Math.round((new Date(endedAt).getTime() - new Date(startRef).getTime()) / 1000));
+      }
+      if (durationSource === 'startTime(fallback)') {
+        console.warn(`[Webhook] ${vapiCallId} süre kaynağı: istek anı (startedAt yok) — çalma süresi dahil olabilir`);
       }
 
       // hasUserSpeech: artifact.messages'ta veya streaming transcript'te user rolünde mesaj var mı?

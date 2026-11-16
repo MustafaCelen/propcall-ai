@@ -138,6 +138,11 @@ export interface VapiWebhookPayload {
   message: {
     type: string;
     endedReason?: string;          // end-of-call-report ve call-ended'da mesaj düzeyinde gelir
+    // end-of-call-report'un kendi üst alanları — gerçek bağlantı anı ve konuşma süresi
+    // (call.startedAt webhook'ta çoğu zaman boş gelir, bunlar dolu gelir).
+    startedAt?: string;
+    endedAt?: string;
+    durationSeconds?: number;
     call?: {
       id: string;
       status?: string;
