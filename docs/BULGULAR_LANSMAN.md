@@ -9,6 +9,7 @@ Go/No-Go şartı: S1 = 0, S2 = 0, S3 ≤ 5 ve belgelenmiş.
 | 2 | 2026-11-13 | S3 | K2 | Çıkış | Eski sürümden kalan `propcall.` anahtarıyla çıkış | Tüm veri anahtarları silinir | Listede olmayan anahtar kaldı | Kapalı | d182372 (önek bazlı temizlik) |
 | 3 | 2026-11-16 | S3 | K1 | Test altyapısı | izolasyon testi her koşuda geçici kullanıcı açar | Test artığı kalmaz | Her koşu şirket Vapi hesabında gerçek bir "E2E Gecici Agent Asistanı" bırakıyor (6 tane birikmişti, elle silindi) | Açık | Öneri: test sonunda kullanıcı pasifleştirilirken asistan da Vapi'den silinsin ya da test ortamında provisioning atlansın |
 | 5 | 2026-11-16 | S3 | K5 | Staging logları | Staging'e `/webhook/fonzip` istekleri geliyor | Staging Fonzip'ten bildirim almamalı | Fonzip hesabında staging URL'sine kayıtlı eski bir webhook var gibi; her olayda "FONZIP_CLIENT_ID tanımlı değil" hatası loga düşüyor (zararsız, gürültü) | Açık | Fonzip panelinden staging webhook'unu sil; prod etkilenmez |
+| 6 | 2026-11-16 | S2 | K3 | Toplu Arama | Tek kişilik kampanya; kişi meşgul çıkıp 2 saat sonraya planlanınca | Panel "tekrar aranacak" der, bekler | Sarı "Hat kapasitesi dolu" uyarısı çıktı (başka hat kullanan yokken). Neden: aranacak kimse kalmayınca hat paylaşımı talep 0 → pay 0 veriyor, bu "kapasite dolu" sanılıyordu. Çağrı akışı etkilenmiyor, yalnızca yanıltıcı uyarı | Düzeltildi | src/campaign.ts fillQueue: slot sayısı şu an aranabilir kişiyle sınırlandı, talep yoksa kapasite kontrolüne girilmiyor |
 | 4 | 2026-11-16 | S3 | K3 | Staging ortamı | Ayarlar > ses önizleme | Çalışır | Staging'de DEFAULT_ELEVENLABS_API_KEY yok; aramalar Vapi'nin kendi ElevenLabs entegrasyonuyla çalışır, yalnızca önizleme/maliyet gösterimi staging'de boş | Bilgi | Prod'da anahtar var, lansmanı etkilemez |
 
 ## UAT ortamı (K3) — 2026-11-16
@@ -23,7 +24,7 @@ Go/No-Go şartı: S1 = 0, S2 = 0, S3 ≤ 5 ve belgelenmiş.
 
 | Senaryo | Tarih | Hesap | Call ID | Süre | Ücret (TL) | 1 Geçmiş | 2 Transcript | 3 AI özeti | 4 Faturalama | 5 CRM | 6 Rapor | Not |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 Cevapsız | | | | | | | | | | | | |
+| 1 Cevapsız | 2026-11-16 07:58Z | uat | 01a1e35d | 41 sn çalma | 0 | ✓ (Vapi "customer-busy" döndü → sistemde "meşgul"; operatör cevapsızı meşgul olarak bildiriyor) | ✓ boş | – | ✓ ücret 0, bakiye 300 | ✓ kampanya: "120 dk sonra tekrar denenecek (1/2)", kişi "tekrar-planlandı" | bekliyor | Kampanya "Kampanya 16.11.2026"; tekrar arama varsayılan 2 deneme/120 dk ile başlatılmış |
 | 2 Meşgul | 2026-11-16 07:53Z | uat | 01a1e359 | 16 sn (çalma) | 0 | ✓ busy / customer-busy | ✓ boş (konuşma yok) | – (konuşma yok) | ✓ ücret 0, bakiye 300 | – Canlı Görüşme'den tekil arama, kampanya değil → retry kuralı bu turda test edilmedi | ✓ | Müşteri adı "Test's opportunity" olarak girilmiş; Vapi cost 0 ile tutarlı |
 | 3 Açıp kapatır | | | | | | | | | | | | |
 | 4 Net ret | | | | | | | | | | | | |
@@ -34,4 +35,4 @@ Go/No-Go şartı: S1 = 0, S2 = 0, S3 ≤ 5 ve belgelenmiş.
 | 9 Bakiye bitişi | | | | | | | | | | | | |
 | 10 Saat dışı | | | | | | | | | | | | |
 | 11 3 eşzamanlı | | | | | | | | | | | | |
-| 12 Deploy ortası | | | | | | | | | | | | |
+| 12 Deploy ortası | 2026-11-16 09:1xZ (kısmi) | uat | – | – | – | – | – | – | – | ✓ staging deploy'u sırasında "Kampanya 16.11.2026" running + tekrar planı (09:59Z) kaybolmadan geri yüklendi, "4/4 aktif kampanya yüklendi" | – | Aktif arama sırasında deploy henüz denenmedi (K5 ile tamamlanacak) |

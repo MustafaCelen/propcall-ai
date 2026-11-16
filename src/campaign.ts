@@ -1368,6 +1368,13 @@ async function fillQueueInner(entry: CampaignEngineEntry): Promise<void> {
 
   let slots = entry.maxConcurrent - active;
 
+  // Şu an gerçekten aranabilir kişi sayısından fazla slot istenmez. Aksi halde
+  // sırada yalnızca ileri tarihe planlanmış tekrar aramalar varken hat paylaşımı
+  // (talep 0 → pay 0) "hat kapasitesi dolu" diye yanlış bir uyarı gösteriyordu
+  // (UAT bulgu 6, 2026-11-16). Talep yoksa kapasite kontrolüne hiç girilmez.
+  const runnableNow = engineDemand(entry, Date.now()) - active;
+  slots = Math.min(slots, Math.max(0, runnableNow));
+
   if (entry.answeredLimit && entry.answeredLimit > 0) {
     const remaining = entry.answeredLimit - answered - active;
     slots = Math.min(slots, remaining);
