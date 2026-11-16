@@ -8,6 +8,7 @@ Go/No-Go şartı: S1 = 0, S2 = 0, S3 ≤ 5 ve belgelenmiş.
 | 1 | 2026-11-13 | S3 | K2 | Toplu Arama | Sekmeye geç, hemen dosya yükle | Yeni liste ekranda kalır | Gecikmiş "en son kampanya" yanıtı listeyi ezdi | Kapalı | d182372 (odak değiştiyse yanıt atılır) |
 | 2 | 2026-11-13 | S3 | K2 | Çıkış | Eski sürümden kalan `propcall.` anahtarıyla çıkış | Tüm veri anahtarları silinir | Listede olmayan anahtar kaldı | Kapalı | d182372 (önek bazlı temizlik) |
 | 3 | 2026-11-16 | S3 | K1 | Test altyapısı | izolasyon testi her koşuda geçici kullanıcı açar | Test artığı kalmaz | Her koşu şirket Vapi hesabında gerçek bir "E2E Gecici Agent Asistanı" bırakıyor (6 tane birikmişti, elle silindi) | Açık | Öneri: test sonunda kullanıcı pasifleştirilirken asistan da Vapi'den silinsin ya da test ortamında provisioning atlansın |
+| 5 | 2026-11-16 | S3 | K5 | Staging logları | Staging'e `/webhook/fonzip` istekleri geliyor | Staging Fonzip'ten bildirim almamalı | Fonzip hesabında staging URL'sine kayıtlı eski bir webhook var gibi; her olayda "FONZIP_CLIENT_ID tanımlı değil" hatası loga düşüyor (zararsız, gürültü) | Açık | Fonzip panelinden staging webhook'unu sil; prod etkilenmez |
 | 4 | 2026-11-16 | S3 | K3 | Staging ortamı | Ayarlar > ses önizleme | Çalışır | Staging'de DEFAULT_ELEVENLABS_API_KEY yok; aramalar Vapi'nin kendi ElevenLabs entegrasyonuyla çalışır, yalnızca önizleme/maliyet gösterimi staging'de boş | Bilgi | Prod'da anahtar var, lansmanı etkilemez |
 
 ## UAT ortamı (K3) — 2026-11-16
@@ -23,7 +24,7 @@ Go/No-Go şartı: S1 = 0, S2 = 0, S3 ≤ 5 ve belgelenmiş.
 | Senaryo | Tarih | Hesap | Call ID | Süre | Ücret (TL) | 1 Geçmiş | 2 Transcript | 3 AI özeti | 4 Faturalama | 5 CRM | 6 Rapor | Not |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 1 Cevapsız | | | | | | | | | | | | |
-| 2 Meşgul | | | | | | | | | | | | |
+| 2 Meşgul | 2026-11-16 07:53Z | uat | 01a1e359 | 16 sn (çalma) | 0 | ✓ busy / customer-busy | ✓ boş (konuşma yok) | – (konuşma yok) | ✓ ücret 0, bakiye 300 | – Canlı Görüşme'den tekil arama, kampanya değil → retry kuralı bu turda test edilmedi | ✓ | Müşteri adı "Test's opportunity" olarak girilmiş; Vapi cost 0 ile tutarlı |
 | 3 Açıp kapatır | | | | | | | | | | | | |
 | 4 Net ret | | | | | | | | | | | | |
 | 5 Randevu | | | | | | | | | | | | |
